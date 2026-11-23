@@ -1,6 +1,6 @@
-import type {DisplayParityAccumulation, DisplayParityTarget} from './displayParityDiagnostics.js';
+import type {DisplayParityAccumulation, DisplayParityGPUAccumulation, DisplayParityTarget} from './displayParityDiagnostics.js';
 import {hdrResolveWGSL, TONE_MAPPING_MODES} from './wgsl/compose.frag.wgsl.js';
-import {oidnAuxiliaryDefine} from './wgsl/oidnAuxiliary.wgsl.js';
+import {getOIDNGuidePasses} from './WGPUOIDNGuides.js';
 import {displayAovKind, DEFAULT_AOV_DISPLAY, type AovDisplayOptions} from './aovDisplay.js';
 import {WGPUAov} from './WGPUAov.js';
 import {aovMask, COMPACT_AOV_KINDS, DISPLAY_AOV_SAMPLE_CAP} from './aov.js';
@@ -46,52 +46,6 @@ import WGPUHDRPeakMeter from './WGPUHDRPeakMeter.js';
 import { type JNLMDenoiser } from './jnlm.js';
 import type { DenoiserHandle, OIDNWeb, OIDNWebGPUData, OIDNWebGPUOutputData } from './denoiser.js';
 import type { WGPUJNLMDenoisePass } from './WGPUJNLMDenoiser.js';
-
-export const oidnAlbedoSrgbEncodeMain = /* wgsl */ `
-if (globalId.x >= u32(imageSize.x) || globalId.y >= u32(imageSize.y)) { return; }
-let index = globalId.x + globalId.y * u32(imageSize.x);
-let raw = textureLoad(in_albedo, vec2u(globalId.xy), 0);
-let encoded = oidnEncodeAlbedo(raw.rgb);
-out_albedo[index] = vec4f(encoded, raw.a);
-`;
-
-export const oidnAlbedoSrgbDecodeMain = /* wgsl */ `
-if (globalId.x >= u32(imageSize.x) || globalId.y >= u32(imageSize.y)) { return; }
-let index = globalId.x + globalId.y * u32(imageSize.x);
-let filtered = in_albedo[index];
-let linear = oidnDecodeAlbedo(filtered.rgb);
-var result = linear;
-let surfaceCoverage = textureLoad(in_rawAlbedo, vec2i(globalId.xy), 0).a;
-if (preserveSurfaceTexture != 0u) {
-  // Primary albedo retains the accumulated surface texture. Do not ask the
-  // auxiliary network to reconstruct its high-frequency texture.
-  // Retain its filtered result across normal/coverage discontinuities.
-  let pixel = vec2i(globalId.xy);
-  let center = textureLoad(in_rawNormal, pixel, 0);
-  let n = normalize(center.rgb * 2.0 - 1.0 + vec3f(1e-8));
-  var discontinuity = 0.0;
-  for (var y = -1; y <= 1; y++) {
-    for (var x = -1; x <= 1; x++) {
-      let neighbor = textureLoad(in_rawNormal,
-        clamp(pixel + vec2i(x, y), vec2i(0), imageSize - 1), 0);
-      let nn = normalize(neighbor.rgb * 2.0 - 1.0 + vec3f(1e-8));
-      discontinuity = max(discontinuity,
-        max(1.0 - dot(n, nn), abs(center.a - neighbor.a)));
-    }
-  }
-  let edgeWeight = smoothstep(0.02, 0.1, discontinuity);
-  let raw = clamp(textureLoad(in_rawAlbedo, pixel, 0).rgb,
-    vec3f(0.0), vec3f(1.0));
-  result = mix(raw, linear, edgeWeight);
-}
-out_albedo[index] = vec4f(result, surfaceCoverage);
-`;
-
-export const oidnNormalSanitizeMain = /* wgsl */ `
-if (globalId.x >= u32(imageSize.x) || globalId.y >= u32(imageSize.y)) { return; }
-let index = globalId.x + globalId.y * u32(imageSize.x);
-out_normal[index] = vec4f(oidnSanitizeNormal(in_normal[index].rgb), 1.0);
-`;
 
 export interface WGPURenderingPipelineOptions {
   presentationFormat?: GPUTextureFormat;
@@ -464,44 +418,11 @@ output.color = color;
       data: new Int32Array([1, 1])
     }
   ];
-  const oidnAlbedoEncodePass = scratch.get('oidnAlbedoEncodePass', () => new WGPUComputePass<'albedo', 'albedo'>(
-    'OIDN albedo sRGB encode',
-    device,
-    {
-      inputs: ['albedo'],
-      outputs: ['albedo'],
-      uniforms: auxiliaryPassUniforms,
-      csDefine: oidnAuxiliaryDefine,
-      csMain: oidnAlbedoSrgbEncodeMain
-    }
-  ));
-  const oidnAlbedoDecodePass = scratch.get('oidnAlbedoDecodePass', () => new WGPUComputePass<'albedo' | 'rawAlbedo' | 'rawNormal', 'albedo'>(
-    'OIDN albedo sRGB decode',
-    device,
-    {
-      inputs: ['albedo', 'rawAlbedo', 'rawNormal'],
-      outputs: ['albedo'],
-      uniforms: [...auxiliaryPassUniforms, {
-        label: 'preserveSurfaceTexture', type: 'u32', data: 0
-      }],
-      csDefine: oidnAuxiliaryDefine,
-      csMain: oidnAlbedoSrgbDecodeMain
-    }
-  ));
-  const oidnNormalSanitizePass = scratch.get('oidnNormalSanitizePass', () => new WGPUComputePass<'normal', 'normal'>(
-    'OIDN normal sanitize',
-    device,
-    {
-      inputs: ['normal'],
-      outputs: ['normal'],
-      uniforms: auxiliaryPassUniforms,
-      csDefine: oidnAuxiliaryDefine,
-      csMain: oidnNormalSanitizeMain
-    }
-  ));
-  oidnAlbedoEncodePass.setOutputParams({ albedo: { channels: 4 } });
-  oidnAlbedoDecodePass.setOutputParams({ albedo: { channels: 4 } });
-  oidnNormalSanitizePass.setOutputParams({ normal: { channels: 4 } });
+  const {
+    albedoEncode: oidnAlbedoEncodePass,
+    albedoDecode: oidnAlbedoDecodePass,
+    normalSanitize: oidnNormalSanitizePass
+  } = getOIDNGuidePasses(scratch, device);
   const outputPass = scratch.get('outputPass', () => new WGPUFullQuadPass('output', device, {
     fsMain: /* wgsl */ `
 let colorUv = min(
@@ -1308,6 +1229,115 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     return task;
   }
 
+  async function captureTemporalInput(
+    requestedAovs: readonly import('./aov.js').AovKind[],
+    capture: (input: import('../Render.js').DenoiseInput) => Promise<void>
+  ) {
+    if (disposed || !presentationTexture) throw new Error('Temporal capture requires a complete render.');
+    if (requestedAovs.length && (aov.width !== renderWidth || aov.height !== renderHeight)) {
+      throw new Error('Temporal capture requires AOVs at the render resolution.');
+    }
+    const color = copyGuide('Temporal HDR input', getFrameInput('color'), true);
+    const albedo = copyGuide('Temporal albedo input', getFrameInput('albedo'), true);
+    const normal = copyGuide('Temporal normal input', getFrameInput('normal'), true);
+    const output = scratch.get('Temporal capture output', () => new WGPUScratchBuffer(device)).get(renderWidth * renderHeight * 16, true);
+    const aovs = requestedAovs.length ? aov.snapshot(requestedAovs) : undefined;
+    try {
+      await capture({device, width: renderWidth, height: renderHeight, color, albedo, normal, output, aovs});
+    } finally {
+      if (aovs) void device.queue.onSubmittedWorkDone().catch(() => undefined).then(() => aov.releaseSnapshot(aovs));
+    }
+  }
+
+  function composeExternalDenoiseInput(input: {width: number; height: number; samples: number; color: GPUBuffer; albedo: GPUBuffer; normal: GPUBuffer}) {
+    if (disposed) throw new Error('Render target is disposed.');
+    const buffers = prepareParityInput(input.width, input.height);
+    const encoder = device.createCommandEncoder({label: 'External HDR composition input'});
+    const bytes = input.width * input.height * 16;
+    for (const key of ['color', 'albedo', 'normal'] as const) encoder.copyBufferToBuffer(input[key], 0, buffers[key], 0, bytes);
+    encoder.clearBuffer(buffers.shadowCatcher);
+    finishParityInput(encoder, buffers, input.samples, false);
+    drawPostProcess(device.createCommandEncoder(), false, true);
+    const snapshot = device.createCommandEncoder({label: 'External HDR denoise input'});
+    const color = snapshotInput(snapshot, 'Temporal composed color', composePass.getOutput('denoiseColor'), true);
+    device.queue.submit([snapshot.finish()]);
+    return {color, albedo: copyGuide('Temporal composed albedo', composePass.getOutput('denoiseAlbedo'), true),
+      normal: copyGuide('Temporal composed normal', getFrameInput('normal'), true)};
+  }
+
+  let temporalDecodePipeline: GPUComputePipeline | undefined;
+  let temporalAdjustPipeline: GPUComputePipeline | undefined;
+  let temporalFilteredBuffer: GPUBuffer | undefined;
+  function setExternalDenoisedOutput(input: GPUBuffer, displayLinear: boolean, encodedCodes: boolean, capturedBaseline?: GPUBuffer) {
+    if (disposed) throw new Error('Render target is disposed.');
+    let currentBaseline: GPUBuffer | undefined;
+    if (displayLinear && capturedBaseline) {
+      // Temporal OIDN output already contains the capture-time display
+      // composition. Apply only the change to current display effects so an
+      // unchanged presentation stays byte-identical to the spatial result.
+      displayTrace?.push('CapturedCompose:DisplayLinear');
+      denoiseValid=false;
+      drawPostProcess(device.createCommandEncoder(),false);
+      currentBaseline=copyGuide('Temporal current presentation baseline',composePass.getOutput('denoiseColor'),true);
+    }
+    const encoder = device.createCommandEncoder({label: 'Temporal denoiser-slot output'});
+    let filteredBuffer=denoisedBuffer;
+    if (currentBaseline) {
+      if (!temporalFilteredBuffer || temporalFilteredBuffer.size!==renderWidth*renderHeight*16) {
+        temporalFilteredBuffer?.destroy(); temporalFilteredBuffer=device.createBuffer({label:'Temporal filtered presentation input',
+          size:renderWidth*renderHeight*16,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_SRC|GPUBufferUsage.COPY_DST});
+      }
+      filteredBuffer=temporalFilteredBuffer;
+    }
+    if (!encodedCodes) {
+      filteredBuffer = copyDenoisedOutput(encoder, {data: input, width: renderWidth, height: renderHeight}, filteredBuffer);
+      if (!currentBaseline) denoisedBuffer=filteredBuffer;
+    } else {
+      if (!filteredBuffer || filteredBuffer.size !== renderWidth * renderHeight * 16) {
+        filteredBuffer?.destroy();
+        filteredBuffer = device.createBuffer({label:'Persistent temporal output',size:renderWidth*renderHeight*16,
+          usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_SRC|GPUBufferUsage.COPY_DST});
+        if (currentBaseline) temporalFilteredBuffer=filteredBuffer; else denoisedBuffer=filteredBuffer;
+      }
+      temporalDecodePipeline ??= device.createComputePipeline({layout:'auto',compute:{module:device.createShaderModule({label:'Temporal display-code decode',code:`
+        @group(0) @binding(0) var<storage,read> source:array<vec4f>;
+        @group(0) @binding(1) var<storage,read_write> destination:array<vec4f>;
+        @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id:vec3u) {
+          if (id.x >= ${renderWidth * renderHeight}u) { return; }
+          let encoded=clamp(source[id.x].rgb/255.0,vec3f(0),vec3f(1));
+          let linear=select(pow((encoded+0.055)/1.055,vec3f(2.4)),encoded/12.92,encoded<=vec3f(0.04045));
+          destination[id.x]=vec4f(linear,1);
+        }`}),entryPoint:'main'}});
+      const group=device.createBindGroup({layout:temporalDecodePipeline.getBindGroupLayout(0),entries:[
+        {binding:0,resource:{buffer:input}},{binding:1,resource:{buffer:filteredBuffer}}]});
+      const pass=encoder.beginComputePass();pass.setPipeline(temporalDecodePipeline);pass.setBindGroup(0,group);
+      pass.dispatchWorkgroups(Math.ceil(renderWidth*renderHeight/64));pass.end();
+    }
+    if (currentBaseline && capturedBaseline) {
+      if (!denoisedBuffer || denoisedBuffer.size!==renderWidth*renderHeight*16) {
+        denoisedBuffer?.destroy(); denoisedBuffer=device.createBuffer({label:'Temporal adjusted display-linear output',size:renderWidth*renderHeight*16,
+          usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_SRC|GPUBufferUsage.COPY_DST});
+      }
+      temporalAdjustPipeline ??= device.createComputePipeline({layout:'auto',compute:{module:device.createShaderModule({label:'Temporal presentation effects',code:`
+        @group(0) @binding(0) var<storage,read> filtered:array<vec4f>;
+        @group(0) @binding(1) var<storage,read> captured:array<vec4f>;
+        @group(0) @binding(2) var<storage,read> current:array<vec4f>;
+        @group(0) @binding(3) var<storage,read_write> output:array<vec4f>;
+        @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id:vec3u) {
+          if(id.x>=${renderWidth*renderHeight}u){return;}
+          output[id.x]=vec4f(max(filtered[id.x].rgb+current[id.x].rgb-captured[id.x].rgb,vec3f(0)),filtered[id.x].a);
+        }`}),entryPoint:'main'}});
+      const group=device.createBindGroup({layout:temporalAdjustPipeline.getBindGroupLayout(0),entries:[
+        {binding:0,resource:{buffer:filteredBuffer!}},{binding:1,resource:{buffer:capturedBaseline}},
+        {binding:2,resource:{buffer:currentBaseline}},{binding:3,resource:{buffer:denoisedBuffer}}]});
+      const pass=encoder.beginComputePass();pass.setPipeline(temporalAdjustPipeline);pass.setBindGroup(0,group);
+      pass.dispatchWorkgroups(Math.ceil(renderWidth*renderHeight/64));pass.end();
+    }
+    denoisedDisplayLinear=displayLinear; denoisedHDR=!displayLinear; denoiseValid=true;
+    displayTrace?.push(displayLinear?'TemporalDenoise:DisplayLinear':'TemporalDenoise:SceneLinear');
+    drawPostProcess(encoder,false);
+  }
+
   function performDenoise(
     attachedDenoiser: DenoiserHandle,
     alphaDenoiser: OIDNWeb | undefined,
@@ -1568,6 +1598,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       rayTracePass.releaseTarget(targetKey);
       aov.dispose();
       denoisedBuffer?.destroy();
+      temporalFilteredBuffer?.destroy();
       presentationTexture?.destroy();
       displayPostProcess.dispose();
       rayTraceOutputPass.dispose();
@@ -1594,7 +1625,28 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     }
   }
 
+  function prepareParityInput(width: number, height: number) {
+    cancelDenoise(); clearDenoisedOutput();
+    setSize(width, height);
+    rayTracePass.useTarget(targetKey);
+    rayTracePass.setSize(renderWidth, renderHeight, screenWidth / screenHeight);
+    return sampledOutput = rayTracePass.getOutputBuffer();
+  }
+
+  function finishParityInput(encoder: GPUCommandEncoder, buffers: ReturnType<typeof prepareParityInput>, samples: number, catcher: boolean) {
+    sampleCount = resolvedSamples = samples;
+    resolvedHasShadowCatcher = catcher;
+    isFirstFrame = false; postProcessPending = false; bloomSamples = 0;
+    rayTraceOutputPass.setSampleCount(sampleCount);
+    rayTraceOutputPass.setSampleTileGrid(1, 1);
+    rayTraceOutputPass.createPass(encoder, buffers, resolvedHasShadowCatcher);
+    device.queue.submit([encoder.finish()]);
+  }
+
   return {
+    captureTemporalInput,
+    composeExternalDenoiseInput,
+    setExternalDenoisedOutput,
     invalidateTiming: invalidateTilePrediction,
     invalidateDenoisedOutput() { cancelDenoise(); denoiseValid = false; preserveDenoisedOutput = false; },
     configure(settings: TraceSettings) {
@@ -1809,11 +1861,7 @@ width: renderWidth, height: renderHeight,
       return {
         record(trace?: string[]) { displayTrace = trace; },
         load(input: DisplayParityAccumulation) {
-          cancelDenoise(); clearDenoisedOutput();
-          setSize(input.width, input.height);
-          rayTracePass.useTarget(targetKey);
-          rayTracePass.setSize(renderWidth, renderHeight, screenWidth / screenHeight);
-          const buffers = sampledOutput = rayTracePass.getOutputBuffer();
+          const buffers = prepareParityInput(input.width, input.height);
           const shadow = new Float32Array(input.width * input.height * 12);
           for (let i = 0; i < input.width * input.height; i++) {
             shadow.set(input.shadow.subarray(i * 8, i * 8 + 8), i * 12);
@@ -1821,14 +1869,28 @@ width: renderWidth, height: renderHeight,
           }
           for (const [buffer, data] of [[buffers.color, input.color], [buffers.albedo, input.albedo],
             [buffers.normal, input.normal], [buffers.shadowCatcher, shadow]] as const) device.queue.writeBuffer(buffer, 0, data);
-          sampleCount = resolvedSamples = input.samples;
-          resolvedHasShadowCatcher = input.catcher;
-          isFirstFrame = false; postProcessPending = false; bloomSamples = 0;
-          rayTraceOutputPass.setSampleCount(sampleCount);
-          rayTraceOutputPass.setSampleTileGrid(1, 1);
+          finishParityInput(device.createCommandEncoder(), buffers, input.samples, input.catcher);
+        },
+        loadGPU(input: DisplayParityGPUAccumulation) {
+          const buffers = prepareParityInput(input.width, input.height);
           const encoder = device.createCommandEncoder();
-          rayTraceOutputPass.createPass(encoder, buffers, resolvedHasShadowCatcher);
+          const bytes = input.width * input.height * 16;
+          for (const key of ['color', 'albedo', 'normal'] as const) {
+            encoder.copyBufferToBuffer(input[key], 0, buffers[key], 0, bytes);
+          }
+          encoder.clearBuffer(buffers.shadowCatcher);
+          finishParityInput(encoder, buffers, input.samples, false);
+        },
+        oidnInputs() {
+          flushPostProcess();
+          const encoder = device.createCommandEncoder();
+          const color = snapshotInput(encoder, 'Parity OIDN color', composePass.getOutput('denoiseColor'), true);
           device.queue.submit([encoder.finish()]);
+          return {color,
+            albedo: copyGuide('Parity OIDN albedo', composePass.getOutput('denoiseAlbedo'), true),
+            normal: copyGuide('Parity OIDN normal', getFrameInput('normal'), true)};
+
+
         }
       };
     },
@@ -1918,8 +1980,9 @@ export function makeWGPURenderTargets(canvas: HTMLCanvasElement | OffscreenCanva
       .then(() => device.queue.onSubmittedWorkDone()).catch(() => {}).then(work);
   });
   const surface = scratch.get('canvas', () => new WGPUCanvasSurface(canvas, device, options.presentationFormat ?? navigator.gpu.getPreferredCanvasFormat()));
-  return makeRenderPipeline(rayTracePass, () => {
+  const renderPipeline = makeRenderPipeline(rayTracePass, () => {
     const target = makeWGPUAccumulationTarget(canvas, device, rayTracePass, surface, scratch, customJobs, traceQueue);
     return target;
   }, false, scratch);
+  return {...renderPipeline, getOIDNBufferGuides: () => getOIDNGuidePasses(scratch, device, true)};
 }

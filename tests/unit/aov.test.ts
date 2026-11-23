@@ -42,6 +42,13 @@ describe('AOV contract', () => {
       expect(prefix.words.length).toBe(full.words[17]);
       expect(prefix.words).toEqual(full.words.slice(0, prefix.words.length));
       expect(prefix.frame).toEqual(full.frame);
+      if (frame === 1) {
+        const packedFloats = new Float32Array(full.words.buffer);
+        expect(packedFloats.slice(44, 47)).toEqual(new Float32Array([0, 0, 0]));
+        expect(Math.abs(packedFloats[48])).toBe(0);
+        expect(Math.abs(packedFloats[49])).toBe(0);
+        expect(packedFloats[50]).toBe(-1);
+      }
       const joined = new Uint32Array(prefix.words.length + primitives.length);
       joined.set(prefix.words); joined.set(primitives, prefix.words.length);
       expect(joined).toEqual(full.words);
@@ -80,19 +87,44 @@ describe('AOV contract', () => {
       }
     }
   });
-  it('owns history snapshots and matches rigid motion by stable identity', () => {
-    const history = new AovHistory();
-    const frame: AovFrameSnapshot = {width: 32, height: 16, projection: 'p', viewProjection: new Float32Array(16),
-      instances: [{object: 9, instance: 0, topology: 1, vertices: 1, transform: new Float32Array(16)}]};
+  it('retains history across projection changes and invalidates on resize or identity changes', () => {
+    const history = new AovHistory(true);
+    const frame: AovFrameSnapshot = {width: 32, height: 16, viewProjection: new Float32Array(16),
+      instances: [{object: 9, instance: 0, topology: 1, vertices: 1, geometry: 4, transform: new Float32Array(16)}],
+      geometryPositions: new Map([[4,new Float32Array([1,2,3])]]), geometryVersions: new Map([[4,1]])};
     expect(history.previous(frame)).toBeUndefined();
     history.accept(frame);
     frame.instances[0].transform[12] = 3;
     expect(history.match(frame, frame.instances[0])?.transform[12]).toBe(0);
     expect(history.match(frame, {...frame.instances[0], object: 10})).toBeUndefined();
-    expect(history.match(frame, {...frame.instances[0], vertices: 2})).toBeUndefined();
+    expect(history.match(frame, {...frame.instances[0], vertices: 2})).toBeDefined();
     expect(history.match(frame, {...frame.instances[0], topology: 2})).toBeUndefined();
-    for (const changed of [{width: 33}, {height: 17}, {projection: 'o'}]) expect(history.previous({...frame, ...changed})).toBeUndefined();
+    expect(history.previous({...frame, viewProjection: new Float32Array(16).fill(2)})).toBeDefined();
+    expect(history.positions(frame,4)).toEqual(new Float32Array([1,2,3]));
+    for (const changed of [{width: 33}, {height: 17}]) expect(history.previous({...frame, ...changed})).toBeUndefined();
     history.clear();
     expect(history.previous(frame)).toBeUndefined();
+  });
+  it('retains immutable vertex snapshots only when motion capture is enabled', () => {
+    const makeFrame = (version: number, positions: Float32Array): AovFrameSnapshot => ({width: 8, height: 4,
+      viewProjection: new Float32Array(16), instances: [], geometryPositions: new Map([[4,positions]]), geometryVersions: new Map([[4,version]])});
+    const disabled = new AovHistory();
+    disabled.accept(makeFrame(1,new Float32Array([1,2,3])));
+    expect(disabled.positions(makeFrame(1,new Float32Array([1,2,3])),4)).toBeUndefined();
+    const history = new AovHistory(true), firstPositions = new Float32Array([1,2,3]);
+    const first = makeFrame(1,firstPositions); history.accept(first);
+    const captured = history.positions(first,4)!;
+    firstPositions[0] = 9;
+    expect(captured[0]).toBe(1);
+    const sameVersion = makeFrame(1,new Float32Array([9,2,3])); history.accept(sameVersion);
+    expect(history.positions(sameVersion,4)).toBe(captured);
+    const changedPositions = new Float32Array([4,5,6]), changed = makeFrame(2,changedPositions);
+    expect(history.positions(changed,4)).toBe(captured);
+    history.accept(changed);
+    const nextCaptured = history.positions(changed,4)!;
+    expect(nextCaptured).not.toBe(changedPositions);
+    expect(nextCaptured).toEqual(changedPositions);
+    changedPositions[0] = 0;
+    expect(nextCaptured[0]).toBe(4);
   });
 });

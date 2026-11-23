@@ -52,6 +52,11 @@
       "import": "./lib/oidn.js",
       "default": "./lib/oidn.js"
     },
+    "./temporal": {
+      "types": "./lib/temporal.d.ts",
+      "import": "./lib/temporal.js",
+      "default": "./lib/temporal.js"
+    },
     "./oidn/weights/*": "./oidn/weights/*",
     "./package.json": "./package.json"
   },

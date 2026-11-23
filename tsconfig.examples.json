@@ -10,7 +10,8 @@
       "@meimu/mutracer": ["src/main.ts"],
       "@meimu/mutracer/materialx": ["src/materialx.ts"],
       "@meimu/mutracer/three": ["src/three.ts"],
-      "@meimu/mutracer/oidn": ["src/oidn.ts"]
+      "@meimu/mutracer/oidn": ["src/oidn.ts"],
+      "@meimu/mutracer/temporal": ["src/temporal.ts"]
     },
     "types": ["@webgpu/types", "vite/client", "node"]
   },

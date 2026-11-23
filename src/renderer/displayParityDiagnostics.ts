@@ -6,11 +6,18 @@ export interface DisplayParityAccumulation {
   shadow: Float32Array; moments: Float32Array;
 }
 
+export interface DisplayParityGPUAccumulation {
+  width: number; height: number; samples: number;
+  color: GPUBuffer; albedo: GPUBuffer; normal: GPUBuffer;
+}
+
 /** @internal Test-only access on concrete backend targets, never public diagnostics. */
 export interface DisplayParityTarget {
   /** @internal */
   _displayParity(): {
     record(trace?: string[]): void;
     load(input: DisplayParityAccumulation): void;
+    loadGPU?(input: DisplayParityGPUAccumulation): void;
+    oidnInputs?(): {color: GPUBuffer; albedo: GPUBuffer; normal: GPUBuffer};
   };
 }

@@ -1569,6 +1569,7 @@ class WGPURayTracePass {
   renderAovs(state: WGPUAov, camera: Camera, samples: number, cap: number, kinds: readonly AovKind[], resolution?: {width: number; height: number}) {
     const groups = this._rayTraceBindGroups;
     if (!groups || !this._tlas || !this._preparedMeshData || !kinds.length) return false;
+    state.history.captureDeformation = kinds.includes('motion');
     const compact = !!resolution && kinds.every(kind => COMPACT_AOV_KINDS.includes(kind));
     const pipelines = this._prepareAovPipelines(kinds, compact);
     if (!pipelines?.accumulation || !pipelines.center) return false;

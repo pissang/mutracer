@@ -952,6 +952,9 @@ ${getBVHTraverseCode(glsl`
 
   if (isHit) {
     si.instanceIndex = hitInsIdx;
+#ifdef AOV_TRACE
+    si.barycentrics = hitBarycentric.xy;
+#endif
     si.materialIndex = int(unpackMaterialIndex(floatBitsToInt(fetchIns(hitInsIdx * ${INSTANCE_VEC4_STRIDE}).z)).x);
     // fetchAttributes before transform to world space.
     fetchAttributes(si, hitTri, hitBarycentric, hitIndex);

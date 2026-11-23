@@ -12,7 +12,7 @@ import type { SamplingPattern } from './renderer/sampling.js';
 import type { RenderTarget, TraceSettings } from './renderer/renderPipeline.js';
 import type {DenoiserHandle} from './renderer/denoiser.js';
 import type {OwnedDenoiser} from './renderer/ownedDenoiser.js';
-import type { OIDNModel, OIDNEngine, OIDNPrecision, OIDNHDRTransfer, OIDNDynamicTileSetting, OIDNAuxiliaryModelUrls } from './oidn.js';
+import {OIDN_OPTION_KEYS, oidnDenoiserKey, snapshotOIDNOptions, validateOIDNOptions, type OIDNFilterOptions} from './oidnOptions.js';
 import { DEFAULT_JNLM_OPTIONS, createJNLMDenoiser, type JNLMOptions } from './renderer/jnlm.js';
 import type { OfflineAdaptiveSamplingOptions, OfflineVarianceHistory } from './renderer/OfflineAdaptiveSampling.js';
 import { nextPreviewScale } from './renderer/util.js';
@@ -60,32 +60,11 @@ export interface JNLMDenoiserOptions extends JNLMOptions {
   /** Required implementation selector. */ type: 'jnlm';
   /** When to filter complete samples. Default converged. */ schedule?: DenoiseSchedule;
 }
-/** Loading and execution options shared by both OIDN network sources. */
-interface OIDNSettings {
+/** OIDN configuration on WebGPU: choose a packaged model or an explicit network URL. */
+export type OIDNDenoiserOptions = OIDNFilterOptions & {
   /** Required implementation selector. */ type: 'oidn';
   /** When to filter complete samples. Default converged. */ schedule?: DenoiseSchedule;
-  /** Override albedo and normal prefilter networks. Default packaged filters for cleanAuxLarge, otherwise undefined. */ auxiliaryModelUrls?: OIDNAuxiliaryModelUrls;
-  /** Execution backend. Default auto (native WGSL unless WebNN is selected). */ engine?: OIDNEngine;
-  /** WGSL precision. Default auto (fp16 when shader-f16 is available). */ precision?: OIDNPrecision;
-  /** Adaptive tile controller. Default enabled with minTileSize 256, initialTileSize 432, targetTileTimeMs 16, adjustmentStep 16. */ dynamicTile?: OIDNDynamicTileSetting;
-  /** Maximum OIDN output tile edge in pixels. Default `512`. */ maxTileSize?: number;
-  /** Abort weight downloads. Default undefined; does not distinguish cached networks. */ signal?: AbortSignal;
-}
-/** OIDN configuration on WebGPU: choose a packaged model or an explicit network URL. */
-export type OIDNDenoiserOptions = OIDNSettings & (
-  | {
-    /** Packaged network. Default standard. */ model?: OIDNModel;
-    /** Weight directory override. Default bundled standard/small assets and CDN large weights. */ weightsBaseUrl?: string | URL;
-    weightsUrl?: never; aux?: never; hdr?: never; hdrTransfer?: never;
-  }
-  | {
-    /** Custom network file. Required in this branch; failures never fall back to CDN. */ weightsUrl: string | URL;
-    /** Custom model consumes albedo and normal. Default true. */ aux?: boolean;
-    /** Custom model consumes HDR color. Default true. */ hdr?: boolean;
-    /** Custom model HDR encoding. Default pu. */ hdrTransfer?: OIDNHDRTransfer;
-    model?: never; weightsBaseUrl?: never;
-  }
-);
+};
 /** Assign a complete configuration, or null to disable denoising. The type selector is required. */
 export type DenoiserOptions = JNLMDenoiserOptions | OIDNDenoiserOptions | CustomDenoiserOptions;
 
@@ -170,7 +149,7 @@ function validateDenoiserOptions(options: DenoiserOptions) {
   const allowed = options.type === 'jnlm'
     ? ['type', 'schedule', ...Object.keys(DEFAULT_JNLM_OPTIONS)]
     : options.type === 'custom' ? ['type', 'schedule', 'denoiser', 'aovs']
-    : ['type', 'schedule', 'model', 'weightsBaseUrl', 'weightsUrl', 'aux', 'hdr', 'hdrTransfer', 'auxiliaryModelUrls', 'engine', 'precision', 'dynamicTile', 'maxTileSize', 'signal'];
+    : ['type', 'schedule', ...OIDN_OPTION_KEYS];
   for (const key of Object.keys(options)) if (!allowed.includes(key)) throw new Error(`Denoiser field ${key} does not belong to ${options.type}.`);
   if (options.schedule !== undefined && !['converged', 'progressive', 'every-sample'].includes(options.schedule)) throw new Error('Unknown denoise schedule.');
   if (options.type === 'jnlm') createJNLMDenoiser(options);
@@ -178,56 +157,21 @@ function validateDenoiserOptions(options: DenoiserOptions) {
     aovMask(options.aovs ?? []);
     if (!options.denoiser || typeof options.denoiser !== 'object' || typeof options.denoiser.denoise !== 'function' || (options.denoiser.prepare !== undefined && typeof options.denoiser.prepare !== 'function')) throw new Error('Custom denoiser must implement denoise and optional prepare.');
   } else {
-    if (options.weightsUrl !== undefined) {
-      if (options.model !== undefined || options.weightsBaseUrl !== undefined) throw new Error('weightsUrl is mutually exclusive with model and weightsBaseUrl.');
-    } else if (options.aux !== undefined || options.hdr !== undefined || options.hdrTransfer !== undefined) throw new Error('aux, hdr and hdrTransfer require weightsUrl.');
-    for (const key of ['weightsUrl', 'weightsBaseUrl'] as const) if (options[key] !== undefined && !isURL(options[key])) throw new Error(`${key} must be a nonempty string or URL.`);
-    if (options.auxiliaryModelUrls !== undefined) {
-      const urls = options.auxiliaryModelUrls;
-      if (!urls || !isURL(urls.albedo) || !isURL(urls.normal) || Object.keys(urls).some(key => !['albedo', 'normal'].includes(key))) throw new Error('auxiliaryModelUrls requires only albedo and normal URLs.');
-    }
-    for (const [key, values] of [['engine', ['auto', 'wgsl', 'webnn']], ['precision', ['auto', 'fp32', 'fp16']], ['hdrTransfer', ['pu', 'log']]] as const) {
-      if (options[key] !== undefined && !(values as readonly string[]).includes(options[key]!)) throw new Error(`Unknown OIDN ${key}.`);
-    }
-    for (const key of ['aux', 'hdr'] as const) if (options[key] !== undefined && typeof options[key] !== 'boolean') throw new Error(`${key} must be boolean.`);
-    if (options.dynamicTile !== undefined && typeof options.dynamicTile !== 'boolean') {
-      if (!options.dynamicTile || typeof options.dynamicTile !== 'object') throw new Error('dynamicTile must be boolean or tile settings.');
-      for (const [key, value] of Object.entries(options.dynamicTile)) {
-        if (!['minTileSize', 'initialTileSize', 'targetTileTimeMs', 'adjustmentStep'].includes(key) || (value !== undefined && (typeof value !== 'number' || !Number.isFinite(value) || value <= 0))) throw new Error(`Invalid dynamicTile ${key}.`);
-      }
-    }
-    if (options.model !== undefined && !['standard', 'small', 'cleanAuxLarge'].includes(options.model)) throw new Error('Unknown OIDN model.');
-    if (options.maxTileSize !== undefined && (!Number.isInteger(options.maxTileSize) || options.maxTileSize < 1)) throw new Error('maxTileSize must be a positive integer.');
+    validateOIDNOptions(options);
   }
 }
-
-function isURL(value: unknown): value is string | URL { return (typeof value === 'string' && value.length > 0) || value instanceof URL; }
 
 // Snapshot nested values too, so application edits cannot silently change a cache key.
 function snapshotDenoiserOptions(options: DenoiserOptions): Readonly<DenoiserOptions> {
   if (options.type === 'custom') return Object.freeze({...options,aovs:Object.freeze([...(options.aovs ?? [])])});
   if (options.type !== 'oidn') return Object.freeze({...options});
-  const next: OIDNDenoiserOptions = {...options};
-  if (options.weightsBaseUrl !== undefined) next.weightsBaseUrl = String(options.weightsBaseUrl);
-  if (options.weightsUrl !== undefined) next.weightsUrl = String(options.weightsUrl);
-  if (options.auxiliaryModelUrls !== undefined) next.auxiliaryModelUrls = Object.freeze({albedo: String(options.auxiliaryModelUrls.albedo), normal: String(options.auxiliaryModelUrls.normal)});
-  if (typeof options.dynamicTile === 'object') next.dynamicTile = Object.freeze({...options.dynamicTile});
-  return Object.freeze(next);
+  return snapshotOIDNOptions(options);
 }
 
 function denoiserKey(options: Readonly<DenoiserOptions>): string | Denoiser {
   if (options.type === 'custom') return options.denoiser;
   if (options.type === 'jnlm') return JSON.stringify({type: 'jnlm', ...Object.fromEntries(Object.entries(DEFAULT_JNLM_OPTIONS).map(([key, value]) => [key, options[key as keyof JNLMOptions] ?? value]))});
-  const tile = options.dynamicTile;
-  return JSON.stringify({type: 'oidn',
-    ...(options.weightsUrl === undefined ? {model: options.model ?? 'standard', weightsBaseUrl: options.weightsBaseUrl?.toString()} : {weightsUrl: String(options.weightsUrl), aux: options.aux ?? true, hdr: options.hdr ?? true, hdrTransfer: options.hdrTransfer ?? 'pu'}),
-    auxiliaryModelUrls: options.auxiliaryModelUrls && {albedo: String(options.auxiliaryModelUrls.albedo), normal: String(options.auxiliaryModelUrls.normal)},
-    maxTileSize: options.maxTileSize, engine: options.engine ?? 'auto', precision: options.precision ?? 'auto',
-    dynamicTile: tile === false ? false : {minTileSize: typeof tile === 'object' ? tile.minTileSize ?? 256 : 256,
-      initialTileSize: typeof tile === 'object' ? tile.initialTileSize ?? 432 : 432,
-      targetTileTimeMs: typeof tile === 'object' ? tile.targetTileTimeMs ?? 16 : 16,
-      adjustmentStep: typeof tile === 'object' ? tile.adjustmentStep ?? 16 : 16}
-  });
+  return oidnDenoiserKey(options);
 }
 
 /** One independently configured image and its accumulation, owned by an engine. */
@@ -333,6 +277,10 @@ export default class Render {
   private _denoiseController?: AbortController;
   private _filterRevision = 0;
   private _filterPending?: Promise<void>;
+  private _temporalAovs?: readonly AovKind[];
+  private _lastConvergeCamera?: Camera;
+  private _lastSequenceOffset?: number;
+  private _temporalFrameSequence = 0;
   private _denoiseRevision = 0;
   private _denoisePending?: Promise<void>;
   private _denoisedSamples = 0;
@@ -370,6 +318,40 @@ export default class Render {
   /** @internal */ get _presentable() { return this._complete && (!this._denoisePending || this._denoisedSamples > 0 || (this._schedule() === 'converged' && this.maxSamples > 1)); }
   /** @internal Fixed export crop, applied before display passes. */ get _exportCrop() { return this._fixed; }
   /** @internal */ get _output() { if (this._disposed) throw new Error('Render is disposed.'); return this._target; }
+  /** @internal Capture converged GPU inputs for the optional temporal sub-path. */
+  async _captureTemporal(capture: (input: DenoiseInput) => Promise<void>) {
+    if (this._disposed) throw new Error('Render is disposed.');
+    if (!this.converged || !this._target?.captureTemporalInput) throw new Error('Temporal push requires a converged WebGPU render.');
+    this._target.activate(); this._engine.display._configure(this); this._target.drawPostProcess();
+    await this._target.captureTemporalInput(this._temporalAovs ?? [], capture);
+  }
+  /** @internal Compose caller-owned HDR and guides through this render's captured display settings. */
+  _composeExternalDenoiseInput(input: {width: number; height: number; samples: number; color: GPUBuffer; albedo: GPUBuffer; normal: GPUBuffer}) {
+    if (!this._target?.composeExternalDenoiseInput) throw new Error('External HDR composition requires WebGPU.');
+    this._target.activate(); this._engine.display._configure(this);
+    return this._target.composeExternalDenoiseInput(input);
+  }
+  /** @internal Install a temporal result at the renderer's denoiser slot. */
+  _setExternalDenoisedOutput(input: GPUBuffer, displayLinear: boolean, encodedCodes: boolean, capturedBaseline?: GPUBuffer) {
+    if (!this._target?.setExternalDenoisedOutput) throw new Error('External denoised output requires WebGPU.');
+    this._target.setExternalDenoisedOutput(input, displayLinear, encodedCodes, capturedBaseline);
+  }
+  /** @internal Register hidden AOV inputs without changing Render.aovs. */
+  _attachTemporal(aovs: readonly AovKind[]) {
+    if (this._temporalAovs) throw new Error('This render is already attached to a temporal denoiser.');
+    const request = this._temporalAovs = Object.freeze([...aovs]);
+    this.restart();
+    return () => { if (this._temporalAovs !== request) return; this._temporalAovs = undefined; this.restart(); };
+  }
+  /** @internal */ get _temporalMetadata() {
+    const memory = this._target?.getMemory();
+    const camera = this._lastConvergeCamera;
+    return {camera, targetCamera: camera && this._targetCamera(camera),
+      captureWidth: memory?.width, captureHeight: memory?.height,
+      sampleSequenceOffset: this._lastSequenceOffset, samples: this.samples,
+      frameSequence: this._temporalFrameSequence, scene: this._engine.scene, cameraSource: this._engine.camera,
+      sceneRevision: this._engine._temporalRevision};
+  }
   /** @deprecated Use refineUntil for custom frame loops; this will be removed in a later release. Latest WebGPU full beauty sample estimate in milliseconds, extrapolated from tile GPU time when tiled. Default undefined; also undefined for stale inputs, during converge or without GPU timestamps. */
   get gpuSampleTimeMs(): number | undefined { return this._gpuSampleTimeMs; }
   /** @internal Latest WebGPU full beauty sample estimate in milliseconds; with tiling, extrapolated from tile GPU time. Default undefined; also undefined for stale inputs, during converge or without GPU timestamps. */
@@ -487,7 +469,7 @@ export default class Render {
       if (!this._warnedAovResolution) {this._warnedAovResolution = true; console.warn('Display-resolution AOVs require WebGPU; using render resolution.');}
     }
     settings.batchSamples = this._refineOptions?.batchSamples ?? settings.batchSamples;
-    if(this._denoiserOptions?.type==='custom') settings.aovs=[...new Set([...this.aovs,...(this._denoiserOptions.aovs ?? [])])];
+    settings.aovs=[...new Set([...this.aovs,...(this._denoiserOptions?.type==='custom' ? this._denoiserOptions.aovs ?? [] : []),...(this._temporalAovs ?? [])])];
     return settings;
   }
   private _synchronize(sampleCap = this.maxSamples, offline = false) {
@@ -754,7 +736,15 @@ export default class Render {
     const revision = ++this._denoiseRevision, samples = this.samples, frameStart = this._frameStart;
     const controller = this._denoiseController = new AbortController();
     // One shared scratch lease across all renders; queued stale jobs do no GPU work.
-    const task = this._engine._enqueueDenoise(async () => {
+    const engine = this._engine;
+    const attached: DenoiserHandle = filter.kind === 'custom' ? {
+      ...filter,
+      denoiser: {
+        denoise: (input, context) => engine._withCustomDenoiseLease(context.signal,
+          () => filter.denoiser.denoise(input, context))
+      }
+    } : filter;
+    const task = engine._enqueueDenoise(async () => {
       if (revision !== this._denoiseRevision || this._disposed) return;
       target.activate(); this._engine.display._configure(this);
       if (revision !== this._denoiseRevision || this._disposed) return;
@@ -763,7 +753,7 @@ export default class Render {
         await this._engine._prepareCustomDenoiser(filter.denoiser, this.width, this.height);
         if (controller.signal.aborted || revision !== this._denoiseRevision || this._disposed) return;
       }
-      const complete = await target.performDenoise?.(filter, undefined, this._schedule(), controller.signal);
+      const complete = await target.performDenoise?.(attached, undefined, this._schedule(), controller.signal);
       if (revision !== this._denoiseRevision || this._disposed) return;
       if (complete) {
         target.activate(); target.drawPostProcess(); this._denoisedSamples = samples; this._lastDenoiseTime = performance.now();
@@ -899,6 +889,9 @@ export default class Render {
         options.onProgress?.({stage: 'denoising', samples: result.samples, targetSamples: result.samples});
         this._status = 'denoising'; this._maybeDenoise(true); await this._engine._awaitDevice(Promise.resolve(this._denoisePending)); check();
       }
+      this._lastConvergeCamera = camera;
+      this._lastSequenceOffset = sequenceOffset;
+      this._temporalFrameSequence++;
       this._status = 'finished'; return result;
     } catch (error) { if (this._engine._deviceGeneration === deviceGeneration) this._status = 'error'; throw error; }
     finally {

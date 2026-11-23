@@ -26,6 +26,7 @@
 - Three.js: use `new THREESync(engine, {scene?, camera?, controls?})` with RenderLoop; use GLTFLoader for glTF. [Three.js](docs/threejs.md).
 - Preview: explicit `new Render(engine, {resolutionScale:.5, adaptiveResolution:{targetFrameMs:20,minScale:.25},bounces:2,bevel:false,dispersionWavelengths:1,directLightCandidates:2})`. Give the final render `fallback: preview`; [fallback rules](docs/progressive-rendering.md#caveats).
 - Denoising: required `type`, frozen `render.denoiser` getter; `await render.setDenoiser({type:'jnlm'})` (both backends) or `{type:'oidn',model:'standard'}` (WebGPU, ignored with a warning on WebGL). Schedules: converged (default), progressive, every-sample; [denoising](docs/denoising.md).
+- Use the WebGPU-only `TemporalDenoiser` from `@meimu/mutracer/temporal` with offline lookahead or interactive past history. [Usage and memory](docs/temporal-denoising.md).
 - Sampling: `render.samplingPattern` is sobol (default), zsobol or random; [sampling](docs/sampling.md).
 - GPU output/overlays: `render.getOutputTexture('hdr'|'display')` and `display.addPostProcess(pass)` are WebGPU-only; present/export run display passes, raw readbacks do not. [Formats and lifetime](docs/post-processing.md).
 - Export: `await final.converge({samples:64,sampleSequenceOffset:0,camera?})`, `await final.readPixels('hdr')`, `await engine.display.toBlob(final)`. Fixed width/height are constructor-only; Blob uses render dimensions and leaves canvas unchanged.
@@ -45,7 +46,7 @@
 - `createPlaneGeometry()` is 2×2 in XZ; `createSphereGeometry()` and `createCubeGeometry()` span -1..1. Scale with `transform`.
 - Rect lights are one-sided; rotate them to face the scene.
 - Custom denoisers: `{type:'custom',denoiser}` on WebGPU; caller owns disposal; tightly packed native HDR RGBA32F input/output before display composition, linear albedo and 0–1 normal guides; [lifecycle and buffers](docs/denoising.md#custom-denoisers).
-- OIDN: packaged `model` or custom `weightsUrl` through `render.setDenoiser()`; `/oidn` only exports weight constants/URL helpers. OIDN and HDR output require WebGPU; [options](docs/denoising.md#custom-oidn-networks).
+- OIDN (WebGPU): choose packaged `model` or custom `weightsUrl` with `render.setDenoiser()` or `createOIDNFilter(engine, options)` from `@meimu/mutracer/oidn` for [caller-owned GPU buffers](docs/denoising.md#oidn-on-gpu-buffers).
 - Call `engine.display.setSize` with drawing-buffer pixels ; camera aspect is automatic unless explicitly set.
 - Changing `bvhBuilder`, `bvhLayout` or `bvhSpatialSplits` automatically rebuilds existing static BVHs on the next engine.update().
 - In Vite development, add `optimizeDeps: { exclude: ['@meimu/mutracer'] }` so bundled assets load.

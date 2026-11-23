@@ -12,14 +12,14 @@ export class WGPUAov {
   readonly history = new AovHistory();
   width = 0; height = 0; samples = 0; centerReady = false; compact = false; primary = false;
   private revision = 0;
+  private scenePrimitives?: Uint32Array;
+  private scenePrimitiveOffset = 0;
   private readonly borrowed = new Map<AovKind, {image: GPUTexture; pipeline: GPUComputePipeline | GPURenderPipeline; samples: number; revision: number}>();
   accumulation?: GPUBuffer; center?: GPUBuffer; previousCenter?: GPUBuffer; scene?: GPUBuffer;
   frame?: AovFrameSnapshot;
   private displayPipeline?: GPUComputePipeline;
   private displayTexture?: GPUTexture;
   private readonly resolvePipelines = new Map<string, GPUComputePipeline>();
-  private scenePrimitives?: Uint32Array;
-  private scenePrimitiveOffset = 0;
   private snapshotGeneration = 0;
   private readonly snapshotPool = new Map<AovKind, GPUBuffer>();
   private readonly snapshotLeases = new WeakMap<GPUBuffer, {kind: AovKind; generation: number}>();
@@ -58,7 +58,8 @@ export class WGPUAov {
     this.center = this.device.createBuffer({label: 'AOV center', size: compact ? 32 : width * height * (AOV_LAYOUT.centerBytes + (primary ? AOV_LAYOUT.primaryBytes : 0)), usage});
   }
   setScene(words: Uint32Array, primitiveIds?: Uint32Array) {
-    const bytes = words.byteLength + (primitiveIds?.byteLength ?? 0);
+    const primitiveOffset = words[17] * Uint32Array.BYTES_PER_ELEMENT;
+    const bytes = Math.max(words.byteLength, primitiveOffset + (primitiveIds?.byteLength ?? 0));
     if (bytes > this.device.limits.maxStorageBufferBindingSize) throw new RangeError('AOV scene metadata exceeds device storage binding limit');
     let replaced = false;
     if (!this.scene || this.scene.size < bytes) {
@@ -66,14 +67,13 @@ export class WGPUAov {
       this.scene = this.device.createBuffer({label: 'AOV identities/history', size: Math.max(16, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST});
       replaced = true;
     }
-    this.device.queue.writeBuffer(this.scene, 0, words);
-    // Primitive-cache arrays are immutable. Camera, material and rigid edits
-    // update only the prefix; topology/storage replacements change the tail's
-    // identity, and instance/material counts can move its byte offset.
-    if (primitiveIds && (replaced || this.scenePrimitives !== primitiveIds || this.scenePrimitiveOffset !== words.byteLength)) {
-      this.device.queue.writeBuffer(this.scene, words.byteLength, primitiveIds);
+    this.device.queue.writeBuffer(this.scene, 0, words.subarray(0, primitiveOffset / 4));
+    if (primitiveIds && (replaced || this.scenePrimitives !== primitiveIds || this.scenePrimitiveOffset !== primitiveOffset)) {
+      this.device.queue.writeBuffer(this.scene, primitiveOffset, primitiveIds);
     }
-    this.scenePrimitives = primitiveIds; this.scenePrimitiveOffset = words.byteLength;
+    const snapshotOffset = primitiveOffset + (primitiveIds?.byteLength ?? 0);
+    if (words.byteLength > snapshotOffset) this.device.queue.writeBuffer(this.scene, snapshotOffset, words.subarray(snapshotOffset / 4));
+    this.scenePrimitives = primitiveIds; this.scenePrimitiveOffset = primitiveOffset;
   }
   get bytes() { return (this.accumulation?.size ?? 0) + (this.center?.size ?? 0) + (this.previousCenter?.size ?? 0) + (this.scene?.size ?? 0) + (this.displayTexture ? this.width*this.height*8 : 0) + [...this.borrowed.values()].reduce((bytes, entry) => bytes + textureBytes(entry.image), 0) + [...this.snapshotBuffers].reduce((bytes, buffer) => bytes + buffer.size, 0); }
   snapshot(kinds: readonly AovKind[]): Partial<Record<AovKind,GPUBuffer>> {
@@ -224,7 +224,7 @@ export class WGPUAov {
         // Tracing uses OpenGL camera coordinates; API images are top row first.
         const pixel = ((this.height-1-y)*this.width+x), o = pixel * (center ? 8 : 16);
         if (kind === 'id') data.set(u.subarray(o, o+4), target);
-        else if (kind === 'motion') data.set([f[o+4],f[o+5],0,f[o+7]], target);
+        else if (kind === 'motion') data.set([f[o+4],f[o+5],f[o+7],f[o+7]!==0?3:0], target);
         else if (center) {
           const tail = o + this.width*this.height*8, alpha = f[tail+7];
           if (kind === 'centerDepth') data.set([f[tail+3],0,0,alpha], target);
@@ -247,12 +247,12 @@ export class WGPUAov {
   dispose() {
     const borrowed = [...this.borrowed.values()];this.borrowed.clear();
     const texture=this.displayTexture;this.displayTexture=undefined;
-    this.scenePrimitives = undefined; this.scenePrimitiveOffset = 0;
     this.snapshotGeneration++;
     const pooled = [...this.snapshotPool.values()]; this.snapshotPool.clear();
     pooled.forEach(buffer => this.snapshotBuffers.delete(buffer));
     const buffers=[this.accumulation,this.center,this.scene,this.previousCenter,...pooled];
     this.accumulation=this.center=this.scene=this.previousCenter=undefined;
+    this.scenePrimitives=undefined;this.scenePrimitiveOffset=0;
     void this.device.queue.onSubmittedWorkDone().catch(()=>undefined).then(()=>{borrowed.forEach(entry=>entry.image.destroy());texture?.destroy();buffers.forEach(buffer=>buffer?.destroy());});
   }
 }

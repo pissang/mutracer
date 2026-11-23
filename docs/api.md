@@ -2,6 +2,7 @@
 
 Import the core API, including `MaterialGraph`, from `@meimu/mutracer`.
 The Three.js adapter uses `@meimu/mutracer/three` and OIDN weight helpers use `@meimu/mutracer/oidn`.
+The [temporal denoiser](./temporal-denoising.md) uses `@meimu/mutracer/temporal`.
 To read a `.mtlx` document, import `parseMaterialX` from `@meimu/mutracer/materialx`. See [MaterialX parsing](materialx.md).
 See [progressive rendering](./progressive-rendering.md) for complete examples.
 
@@ -390,7 +391,7 @@ Custom denoiser AOV inputs require `'render'` resolution.
 | `diffuseColor` | Diffuse texture color: base weight × base color × (1 − metalness), tinted by coat color; valid coverage |
 | `specularColor` | Specular texture color: metal base color plus dielectric specular color × F0, tinted by coat color; valid coverage |
 | `id` | Object, local instance (0 for ordinary meshes), material, source triangle index; background is `0xFFFFFFFF` in all channels |
-| `motion` | Previous position minus current position in pixels, x right and y down; z = 0, alpha = 3 for valid history or 0 otherwise |
+| `motion` | Previous position minus current position in pixels, x right and y down; z = the same point's previous-frame camera-forward depth in scene units, or 0 when invalid; alpha = 3 for valid history or 0 otherwise |
 
 Depth, position, roughness, reflectance and color average independent jittered primary
 rays, including depth of field. RGB values use hit-count normalization; alpha is hit coverage over all AOV samples. Reflectance
@@ -416,11 +417,14 @@ triangle order. A ray exactly on a shared edge can select either adjacent
 triangle; host/GPU rounding can choose different IDs at that boundary.
 
 Motion history belongs to each render and advances when it produces an AOV
-frame. Camera pose and rigid object transforms can reproject across updates.
-The first frame, changed dimensions or projection, missing identities, changed
-topology or vertex positions, and failed visibility correspondence invalidate
-motion. Device recovery also clears history. Deformed vertices have no motion
-estimate; validity 0 must not be treated as a stationary surface.
+frame. Camera pose, projection changes, rigid object transforms and geometry
+vertex updates with unchanged topology can reproject across frames; report
+vertex-only edits with `Geometry.markVerticesUpdated()`. The first frame,
+changed dimensions, missing identities, topology changes, and failed visibility
+correspondence invalidate motion. Device recovery also clears history. Motion
+validity 0 must not be treated as a stationary surface. Requesting motion keeps
+a previous CPU copy of each geometry's positions (about 12 bytes per vertex);
+deformed geometry adds about 12 GPU bytes per vertex to that frame's scene data.
 
 Reflectance outputs are separate from the existing OIDN `albedo` guide.
 On WebGPU and WebGL, opaque isotropic clearcoat attenuates the base reflectance
@@ -640,7 +644,11 @@ for environments and backgrounds, not material texture slots.
 `DEFAULT_OIDN_WEIGHTS_PACKAGE_BASE_URL`) and `resolveOIDNModelUrl` /
 `resolveOIDNAuxiliaryModelUrls`. Configure packaged/custom OIDN networks,
 execution engines, precision and dynamic tiles through `render.setDenoiser()`;
-see [denoising](./denoising.md#custom-oidn-networks). The main entry exports
+see [denoising](./denoising.md#custom-oidn-networks). The subpath also exports
+`createOIDNFilter(engine, options?) → Promise<OIDNFilter>`. Use
+`filter.denoise(input, {signal}?) → Promise<void>` and `filter.dispose()` with
+[caller-owned GPU buffers](./denoising.md#oidn-on-gpu-buffers).
+The main entry exports
 `OIDNEngine`, `OIDNPrecision`, `OIDNHDRTransfer`, `OIDNDynamicTileOptions`,
 `OIDNDynamicTileSetting` and `OIDNAuxiliaryModelUrls` as types.
 
