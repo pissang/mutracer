@@ -191,3 +191,26 @@ fn sampling_henyey_greenstein_phase(cosine: f32, anisotropy: f32) -> f32 {
         / (denominator * sqrt(denominator));
 }
 `;
+
+// Batched native dispatches advance the camera sequence independently per pixel.
+export const haltonWgsl = /* wgsl */ `
+fn halton(indexIn: u32, base: u32) -> f32 {
+  var index = indexIn;
+  var factor = 1.0;
+  var result = 0.0;
+  while (index > 0u) {
+    factor /= f32(base);
+    result += factor * f32(index % base);
+    index /= base;
+  }
+  return result;
+}
+`;
+
+export function cameraJitterWgsl(size: string, indexedRandom: boolean, uniformJitter = false): string {
+  return /* wgsl */ `  if (${uniformJitter ? 'false' : 'SAMPLING_PATTERN == 0 || SAMPLING_PATTERN == 1'}) {
+    jitter = (sample2D(CAMERA_PIXEL) - 0.5) / ${size};
+  }${indexedRandom ? ` else if (SAMPLING_PATTERN == 2) {
+    jitter = (vec2f(halton(pixelSampleIndex, 2u), halton(pixelSampleIndex, 3u)) - 0.5) / ${size};
+  }` : ''}`;
+}
