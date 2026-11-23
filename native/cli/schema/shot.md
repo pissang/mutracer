@@ -6,13 +6,13 @@ seconds in a right-handed, Y-up world. Cameras and lights point along local
 −Z. Color triples use linear RGB and can exceed 1.
 
 See the [JSON Schema](mutracer-shot-v1.json) for fields and individual ranges.
-The [material sweep](../examples/material-sweep.json) uses procedural geometry.
-The [turntable](../examples/turntable.json) frames a glTF asset.
+The [CLI guide](../guide.md#authoring) shows how to author procedural shots and
+turntables.
 
 ## Output and animation
 
 Output defaults are 1280 × 720, 24 fps, 32 samples per pixel, fixed seed
-12345, OIDN, the hardware tracer and AgX at 0 EV. Frames are numbered from 0.
+12345, OIDN, the hardware tracer and AgX with a linear exposure of 1. Frames are numbered from 0.
 Frame `i` evaluates the shot at `i / fps` seconds, and
 `ceil(duration × fps)` frames are produced. Duration excludes its endpoint.
 
@@ -32,9 +32,9 @@ integer. To keep the sampling ranges used by another renderer, match its
 frame index, seed, sample count and offset.
 
 Set `output.display.toneMapping` and `toneMappingExposure` to use the browser
-tone-mapping name and a nonnegative linear exposure multiplier. Existing
-`tonemap` and `exposure` fields also work. The latter is in stops.
-Supply one tone-mapping field and one exposure field at most.
+tone-mapping name and a nonnegative linear exposure multiplier. A multiplier
+of 2 doubles the exposure. The schema marks compatible older spellings as
+deprecated, and `validate` reports the replacement for each one.
 
 Use `denoise: "none"` for raw frames and `"oidn"` for the bundled Standard
 model. To use `"cleanAuxLarge"`, put `rt_hdr_calb_cnrm_large.tza`,
@@ -106,8 +106,7 @@ render using it records its attribution in `credits.txt` alongside the frames.
 Use OpenPBR property names such as `baseColor`, `specularRoughness` and
 `transmissionScatter`. Numeric values are animatable. Set a texture slot
 such as `map`, `normalMap` or `fuzzColorMap` to the name of an image asset.
-Existing names such as `color`, `roughness` and `coat`, and the `maps`
-table, still work. Supply each property once. See the
+Supply each property once. See the
 [material schema](mutracer-shot-v1.json#/$defs/material) for all properties and
 [OpenPBR material options](../../../docs/materials.md) for their
 effects.
@@ -117,7 +116,7 @@ OpenPBR, Standard Surface, glTF PBR and USD Preview Surface inputs supported
 by the [material graph](../../../docs/materialx.md). Use `graph/input` to
 disambiguate a named input. Validation reports unsupported nodes and inputs
 with their material and XML locations. Use a shot `displacementMap` for
-displacement. See the [patina growth example](../examples/materialx-growth.json).
+displacement.
 
 Inline positions, normals and UVs are arrays of triples or pairs. Indices
 are a flat list of zero-based triangle indices. Use inline geometry for up

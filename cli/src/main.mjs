@@ -41,6 +41,28 @@ function args() {
   return {command, file: resolve(file), values};
 }
 
+function canonicalDisplay(input, warn) {
+  if (!input) return input;
+  const display = {...input};
+  if (display.tonemap !== undefined && display.toneMapping === undefined) {
+    display.toneMapping = display.tonemap === 'none' ? 'linear' : display.tonemap;
+    delete display.tonemap;
+    if (warn) console.error('Warning /output/display/tonemap: Deprecated field. Use toneMapping.');
+  }
+  if (display.exposure !== undefined && display.toneMappingExposure === undefined) {
+    if (warn) console.error('Warning /output/display/exposure: Deprecated field. Use toneMappingExposure in linear units.');
+    // A legacy track interpolates in stops. The native worker must evaluate it.
+    if (typeof display.exposure === 'number') {
+      const linear = Math.fround(2 ** Math.fround(display.exposure));
+      if (Number.isFinite(linear) && linear > 0) {
+        display.toneMappingExposure = linear;
+        delete display.exposure;
+      }
+    }
+  }
+  return display;
+}
+
 function options(input, command, values) {
   if (!input || !Number.isFinite(input.duration) || input.duration <= 0) throw new Error('Export output.duration as a positive number of seconds.');
   const preview = command === 'preview';
@@ -90,7 +112,7 @@ function options(input, command, values) {
   }
   return {duration, fps, first, last, time, stride: preview ? 2 : 1,
     settings: {size:[w,h], spp, seed, denoise, seedValue, sampleSequenceOffset:offset, tracer,
-      sampleSequence, display, format,
+      sampleSequence, display: canonicalDisplay(display, command === 'validate'), format,
       render: values.bounces === undefined ? render : {...render, bounces:number(values.bounces, 'Bounces', 1, 20)}}};
 }
 

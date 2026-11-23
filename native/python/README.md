@@ -11,8 +11,8 @@ shot = Shot(
     Output(duration=1, fps=24, render={"bounces": 6},
            display={"toneMappingExposure": 1.2}, sample_sequence="frame"),
     [Mesh("subject", shape="sphere", material={
-        "metalness": 0.9,
-        "roughness": Keys(((0, 0.15), (1, 0.55)), ease="inOutSine"),
+        "baseMetalness": 0.9,
+        "specularRoughness": Keys(((0, 0.15), (1, 0.55)), ease="inOutSine"),
     })],
     Camera.orbit("subject", azimuth=25, elevation=10, f_stop=4, focus_distance="subject"),
     lights=[Light("rect", [2, 2, 2], "subject", size=[1, 1], intensity=12)],
@@ -29,7 +29,7 @@ to the shot. Install the optional `numpy` extra to write mesh and instance
 arrays through `Mesh.from_numpy` and `Instances.from_numpy`. These methods
 write little-endian binary sidecars. Use the camelCase
 [shot fields](../cli/schema/shot.md) in material, render and display
-dictionaries. The `Camera` constructor and `Camera.orbit()` also accept
+dictionaries. `toneMappingExposure` is a linear multiplier. The `Camera` constructor and `Camera.orbit()` also accept
 `sensor_height` in millimetres. Lens scalars accept `Keys`.
 
 Pass `progress=callback` to receive each decoded JSON progress event. A failed

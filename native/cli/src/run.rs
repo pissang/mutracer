@@ -348,6 +348,9 @@ pub fn validate(file: &Path) -> Result<()> {
         false,
     )?;
     warn_sampling(settings);
+    for (pointer, replacement) in &input.shot.deprecated_fields {
+        eprintln!("Warning {pointer}: Deprecated field. {replacement}");
+    }
     let frames = shot::frame_count(input.shot.output.duration, settings.fps)?;
     progress(
         json!({"event":"validated","shot":file,"assets":input.assets.fingerprints().count(),"cost":input.estimate(settings,frames)}),

@@ -16,6 +16,12 @@ struct Property {
     supported: bool,
     #[serde(default)]
     values: Vec<String>,
+    #[serde(default, rename = "shotAliases")]
+    aliases: Vec<String>,
+    #[serde(rename = "shotName")]
+    shot_name: Option<String>,
+    #[serde(default, rename = "shotMapAliases")]
+    map_aliases: Vec<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Deserialize)]
@@ -37,38 +43,59 @@ fn properties() -> &'static [Property] {
     })
 }
 
+impl Property {
+    fn shot_name(&self) -> &str {
+        self.shot_name.as_deref().unwrap_or(&self.key)
+    }
+
+    fn shot_aliases(&self) -> impl Iterator<Item = &str> {
+        let storage_alias = self.shot_name.as_ref().map(|_| self.key.as_str());
+        storage_alias
+            .into_iter()
+            .chain(self.aliases.iter().map(String::as_str))
+    }
+}
+
 fn property(key: &str, in_maps: bool) -> Option<&'static Property> {
-    let key = if in_maps {
-        match key {
-            "color" => "map",
-            "opacity" => "alphaMap",
-            "normal" => "normalMap",
-            "emission" => "emissiveMap",
-            "roughness" => "roughnessMap",
-            "metalness" => "metalnessMap",
-            "transmission" => "transmissionMap",
-            _ => key,
-        }
-    } else {
-        match key {
-            "color" => "baseColor",
-            "roughness" => "specularRoughness",
-            "metalness" => "baseMetalness",
-            "transmission" => "transmissionWeight",
-            "ior" => "specularIor",
-            "coat" => "coatWeight",
-            "diffuseRoughness" => "baseDiffuseRoughness",
-            "emissionStrength" => "emissionLuminance",
-            "anisotropy" | "specularRoughnessAnisotropy" => "specularAnisotropy",
-            "coatRoughnessAnisotropy" => "coatAnisotropy",
-            "subsurfaceScatterAnisotropy" => "subsurfaceAnisotropy",
-            "geometryOpacity" => "opacity",
-            "geometryThinWalled" => "thinWalled",
-            "dispersion" => "transmissionDispersionScale",
-            _ => key,
-        }
+    properties().iter().find(|p| {
+        p.supported
+            && if in_maps {
+                p.kind == Kind::Texture
+                    && (p.key == key || p.map_aliases.iter().any(|alias| alias == key))
+            } else {
+                p.shot_name() == key || p.shot_aliases().any(|alias| alias == key)
+            }
+    })
+}
+
+pub fn deprecated_fields(material: &Value, pointer: &str, warnings: &mut Vec<(String, String)>) {
+    let Some(fields) = material.as_object() else {
+        return;
     };
-    properties().iter().find(|p| p.supported && p.key == key)
+    for key in fields.keys() {
+        if let Some(p) = property(key, false).filter(|p| p.shot_name() != key) {
+            warnings.push((
+                format!("{pointer}/{}", escape(key)),
+                format!("Use {}.", p.shot_name()),
+            ));
+        }
+    }
+    if let Some(maps) = fields.get("maps").and_then(Value::as_object) {
+        if maps.is_empty() {
+            warnings.push((
+                format!("{pointer}/maps"),
+                "Set texture slots directly on the material.".into(),
+            ));
+        }
+        for key in maps.keys() {
+            if let Some(p) = property(key, true) {
+                warnings.push((
+                    format!("{pointer}/maps/{}", escape(key)),
+                    format!("Use {} directly on the material.", p.key),
+                ));
+            }
+        }
+    }
 }
 
 pub fn numeric_property(key: &str) -> Option<(u32, &'static str)> {
@@ -159,7 +186,7 @@ impl Material {
                     return Err(Error::validation(
                         &path,
                         format!("The same property was already supplied at {previous}"),
-                        format!("Set {} once.", p.key),
+                        format!("Set {} once.", p.shot_name()),
                     ));
                 }
                 let wrong_type = || {
@@ -258,13 +285,14 @@ mod tests {
             "transmissionScatter": [0.3, 0.2, 0.1],
             "subsurfaceScatterAnisotropy": -0.6,
             "geometryThinWalled": true,
-            "maps": {"fuzzColorMap": "cloth"}
+            "maps": {"fuzzColorMap": "cloth", "opacity": "mask"}
         }))
         .unwrap();
         m.check(1., "/material").unwrap();
         assert!(matches!(m.settings[&13], Setting::Color(_)));
         assert!(matches!(m.settings[&21], Setting::Float(_)));
         assert_eq!(m.textures[&66].1, "cloth");
+        assert_eq!(m.textures[&40].1, "mask");
         let mut out = OpenPbrMaterial::default();
         m.apply(&mut out, 0.5);
         assert_eq!(out.values.color, [0.1, 0.2, 0.3]);

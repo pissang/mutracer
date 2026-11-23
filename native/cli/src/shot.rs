@@ -609,11 +609,14 @@ pub struct Shot {
     #[serde(default)]
     pub lights: Vec<Light>,
     pub camera: Camera,
+    #[serde(skip)]
+    pub deprecated_fields: Vec<(String, String)>,
 }
 
 pub fn parse(bytes: &[u8]) -> Result<Shot> {
-    if let Ok(value) = serde_json::from_slice(bytes) {
-        reject_null(&value, "")?;
+    let raw = serde_json::from_slice(bytes).ok();
+    if let Some(value) = &raw {
+        reject_null(value, "")?;
     }
     let mut decoder = serde_json::Deserializer::from_slice(bytes);
     let mut shot: Shot =
@@ -622,6 +625,35 @@ pub fn parse(bytes: &[u8]) -> Result<Shot> {
         .end()
         .map_err(|e| Error::validation("", e.to_string(), "Supply one JSON object."))?;
     shot.check()?;
+    if let Some(value) = raw {
+        let display = &value["output"]["display"];
+        if let Some(tonemap) = display.get("tonemap") {
+            let replacement = if tonemap == "none" {
+                "linear"
+            } else {
+                tonemap.as_str().expect("validated tone mapping name")
+            };
+            shot.deprecated_fields.push((
+                "/output/display/tonemap".into(),
+                format!("Use toneMapping: {replacement:?}."),
+            ));
+        }
+        if display.get("exposure").is_some() {
+            shot.deprecated_fields.push((
+                "/output/display/exposure".into(),
+                "Use toneMappingExposure. For a constant, set it to 2 raised to the exposure in stops. For a track, evaluate the stops before converting to linear.".into(),
+            ));
+        }
+        if let Some(objects) = value["objects"].as_array() {
+            for (index, object) in objects.iter().enumerate() {
+                crate::material::deprecated_fields(
+                    &object["material"],
+                    &format!("/objects/{index}/material"),
+                    &mut shot.deprecated_fields,
+                );
+            }
+        }
+    }
     Ok(shot)
 }
 

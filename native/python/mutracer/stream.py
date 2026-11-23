@@ -10,6 +10,7 @@ import struct
 import subprocess
 import tempfile
 
+from ._display import canonical_settings
 from .runner import RenderError, binary
 
 MAX_HEADER = 1024 * 1024
@@ -123,12 +124,12 @@ class Session:
 
     def check(self, frame: int, t: float, *, settings=None, progress=None):
         """Validate effective render settings without rendering or creating a GPU device."""
-        fields = {"settings": settings} if settings is not None else {}
+        fields = {"settings": canonical_settings(settings)} if settings is not None else {}
         header, _ = self._request("check", frame=frame, t=t, progress=progress, **fields)
         return header
 
     def render(self, frame: int, t: float, *, settings=None, progress=None):
-        fields = {"settings": settings} if settings is not None else {}
+        fields = {"settings": canonical_settings(settings)} if settings is not None else {}
         return self._request("render", frame=frame, t=t, progress=progress, **fields)
 
 

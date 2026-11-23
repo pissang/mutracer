@@ -10,8 +10,10 @@ or procedural geometry. Keep geometry and textures in external assets.
 1. Write a shot with distinct object names, a camera, light sources and an
    explicit duration. Use named targets and camera orbit for turntables.
    Set `camera.fStop` and `focusDistance` for depth of field. Set
-   `output.render` for bounce depth or caustics and `output.display` for
-   exposure and tone mapping.
+   `output.render` for bounce depth or caustics. Use `toneMapping` and
+   `toneMappingExposure` in `output.display` for tone mapping and linear
+   exposure. Use OpenPBR names such as `baseColor`, `specularRoughness` and
+   `coatWeight`. Name texture slots directly on the material.
 2. Run `mutracer validate shot.json`. Fix the reported locations before
    rendering. Check pixel samples and frame count before choosing a budget.
 3. Run `mutracer still shot.json --t TIME -o still.png`. Inspect composition

@@ -1,7 +1,7 @@
 # MuTracer video CLI
 
 Render a [shot](schema/shot.md) on the native GPU and encode the result to MP4.
-Start with the [CLI guide](guide.md) or the [example shots](examples/). See [video output](video-output.md) for EXR frames,
+Start with the [CLI guide](guide.md). See [video output](video-output.md) for EXR frames,
 temporal filtering and captioned cuts.
 Use `mutracer schema` to inspect or export the JSON Schema, and `mutracer guide`
 to print the command-line guide. Author procedural scenes with
@@ -14,7 +14,7 @@ to print the command-line guide. Author procedural scenes with
 
 ```sh
 cargo build --release --locked --manifest-path native/cli/Cargo.toml
-native/cli/target/release/mutracer validate native/cli/examples/material-sweep.json
+native/cli/target/release/mutracer guide
 ```
 
 On Windows the binary is `mutracer.exe`. Rendering uses the GPU driver and

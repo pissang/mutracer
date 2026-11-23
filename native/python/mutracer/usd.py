@@ -1,6 +1,8 @@
 """Optional OpenUSD to shot-v1 importer."""
 from __future__ import annotations
 
+from ._material_names import MATERIAL_ALIASES
+
 import argparse
 from array import array
 from hashlib import sha256
@@ -193,8 +195,8 @@ class Importer:
             raise Located(material.GetPath(), "Expected OpenPBR, UsdPreviewSurface or a MaterialX sourceAsset.")
         result = {}
         properties = {
-            "diffuseColor": "color", "roughness": "roughness", "metallic": "metalness",
-            "ior": "ior", "opacity": "opacity", "clearcoat": "coat",
+            "diffuseColor": "baseColor", "roughness": "specularRoughness", "metallic": "baseMetalness",
+            "ior": "specularIor", "opacity": "geometryOpacity", "clearcoat": "coatWeight",
             "clearcoatRoughness": "coatRoughness", "emissiveColor": "emissionColor",
             "opacityThreshold": "alphaCutoff",
         }
@@ -210,7 +212,7 @@ class Importer:
                 return list(sampled) if key in ("diffuseColor", "emissiveColor") else sampled
             result[target] = self.channel(self.times([attr]), value)
         if "emissionColor" in result:
-            result["emissionStrength"] = 1
+            result["emissionLuminance"] = 1
         if shader.GetInput("useSpecularWorkflow") and shader.GetInput("useSpecularWorkflow").Get(self.first):
             raise Located(shader.GetPath(), "PreviewSurface specular workflow is unsupported.")
         return result
@@ -240,7 +242,7 @@ class Importer:
             value = self.channel(self.times([attr]), sample)
             if isinstance(value, dict) and isinstance(value["keys"][0][1], bool):
                 raise Located(attr.GetPath(), "Time-varying OpenPBR booleans require separate shots.")
-            result[field] = value
+            result[MATERIAL_ALIASES.get(field, field)] = value
         return result
 
     def mesh(self, prim, index):

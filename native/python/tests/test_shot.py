@@ -35,6 +35,25 @@ class ShotTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             Keys(((0.1, 3), (0.1, 4)))
 
+    def test_builder_writes_canonical_material_and_display_fields(self):
+        scene = shot(Mesh("tri", shape="box", material={
+            "color": [0.2, 0.3, 0.4],
+            "roughness": Keys(((0, 0.2), (0.25, 0.5))),
+            "opacity": 0.9,
+            "maps": {"normal": "detail"},
+        }))
+        scene.output.display = {"tonemap": "none", "exposure": -1}
+        raw = scene.to_dict()
+        self.assertEqual(raw["output"]["display"], {"toneMapping": "linear", "toneMappingExposure": 0.5})
+        self.assertEqual(raw["objects"][0]["material"], {
+            "baseColor": [0.2, 0.3, 0.4],
+            "specularRoughness": {"keys": [[0, 0.2], [0.25, 0.5]], "ease": "linear"},
+            "geometryOpacity": 0.9,
+            "normalMap": "detail",
+        })
+        scene.output.display["exposure"] = Keys(((0, -1), (0.25, 1)))
+        self.assertIn("exposure", scene.to_dict()["output"]["display"])
+
     def test_numpy_sidecars_roundtrip(self):
         try:
             import numpy as np

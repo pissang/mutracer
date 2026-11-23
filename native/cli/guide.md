@@ -22,7 +22,7 @@ and CLI defaults. Run `mutracer schema` for shot defaults and field limits.
   `fit: {"height":1}` and animate the camera's orbit azimuth. Set camera target
   to the object name, then adjust orbit distance. A value of 1 fits the bounds.
 - Material sweep. Add a sphere and floor and keyframe a material control such
-  as `"roughness":{"keys":[[0,0.12],[1,0.6]],"ease":"inOutSine"}`.
+  as `"specularRoughness":{"keys":[[0,0.12],[1,0.6]],"ease":"inOutSine"}`.
 - Studio lights. Use a large rect above and to the side for the key, a larger
   disk with lower intensity for fill, and a narrow cylinder behind the object
   for a rim. Aim lights with object-name targets.
@@ -32,10 +32,12 @@ and CLI defaults. Run `mutracer schema` for shot defaults and field limits.
   `animation.time` in seconds. See `gltf-animation.json` for a procedural
   asset that ships in the CLI.
 - MaterialX growth. Use a MaterialX asset and keyframe a connected numeric
-  interface through `material.inputs`. See `materialx-growth.json`.
+  interface through `material.inputs`.
+- Display. Set `output.display` to a value such as
+  `{"toneMapping":"agx","toneMappingExposure":1.2}`.
 
-Start with the `turntable.json` and `material-sweep.json` examples. Use
-glTF/GLB or binary sidecars for meshes that exceed the inline geometry limits.
+Use glTF/GLB or binary sidecars for meshes that exceed the inline geometry
+limits.
 
 For a procedural scene, use the [Node frontend](../../cli/README.md) or the
 [Python API](../python/README.md). They accept the same render and display
@@ -77,6 +79,6 @@ For HDR, render with `--format exr`. Add `--aovs` to capture surface guides
 for `mutracer temporal`. Use `mutracer assemble` to join PNG sequences with
 optional captions.
 
-Progress is JSON lines on stdout. Errors go to stderr. Exit codes are 0 for
+Progress is JSON lines on stdout. Warnings and errors go to stderr. Exit codes are 0 for
 success, 2 for invalid input, 3 for asset or output failure, 4 for a budget
 limit and 5 for a resumable GPU or worker failure.
