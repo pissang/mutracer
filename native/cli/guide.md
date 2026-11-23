@@ -84,3 +84,20 @@ Some warnings also appear as readable text on stderr.
 Errors go to stderr.
 Exit codes are 0 for success, 2 for invalid input, 3 for asset or output
 failure, 4 for a budget limit and 5 for a resumable GPU or worker failure.
+
+### Render a temporally denoised clip
+
+```sh
+mutracer render native/cli/examples/temporal-orbit.json -o orbit.mp4
+```
+
+The first frames arrive after the look-ahead window fills. Rerun the same
+command after interruption to reuse finished images. The worker rebuilds
+the history around missing frames, which costs additional render time.
+The [shot options](schema/shot.md#output-and-animation) describe GPU memory
+budgets, cut points and the choice of OIDN weights.
+
+For an open worker, iterate over `Worker.temporalFrames(inputs, settings)` in
+Node or `Session.temporal_frames(inputs, settings=settings)` in Python. Node
+yields objects with `frame` and `bytes`. Python yields `(index, bytes)` pairs.
+Both iterators flush the final frames when the input ends.

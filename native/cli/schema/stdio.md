@@ -3,7 +3,7 @@
 Launch `mutracer serve --stdio` with binary pipes. Requests go to stdin,
 replies to stdout, and diagnostic logs to stderr. A client sends `hello` first
 and waits for its reply. Send one request at a time, then read all progress
-messages and its final `ok`, `frame` or `error` reply before sending another.
+messages and its final `ok`, `frame`, `frames` or `error` reply before sending another.
 
 A header is one UTF-8 JSON object terminated by LF. It contains `type`, a client
 `id` (unsigned 32-bit integer) and the fields for that message. Replies echo
@@ -24,7 +24,9 @@ there is no length prefix or payload. Read from one buffered stream throughout.
 | `decode` | `format: "image" \| "hdr" \| "exr"`, `bytes` | `ok` with dimensions and an image payload |
 | `edit` | `changes`, an array of replacements with `path` (JSON pointer) and `value`; paths identify existing animatable properties in a shot JSON scene | `ok`; validates and applies the whole batch |
 | `check` | Same fields as `render` | `ok` with `denoiserWeights` hashes for external weights. Validates without GPU work |
-| `render` | `frame` (zero-based), optional `t` (seconds), optional `settings` | `frame` with `frame`, `format`, `width`, `height`, `elapsedMs` and image `bytes` |
+| `cut` | No additional fields | `ok`. Starts a new history segment before the next frame. |
+| `flush` | No additional fields | `frames`. Repeat until `done` is true. |
+| `render` | `frame` (zero-based), optional `t` (seconds), optional `settings` | `frame` with `frame`, `format`, `width`, `height`, `elapsedMs` and image `bytes`, or a temporal `frames` batch |
 
 `decode` returns row-major RGBA8 for `image` and little-endian RGBA float32
 for `hdr` and `exr`.
@@ -40,12 +42,20 @@ Omit `t` to use the shot's frame time. Supply explicit time and settings for
 descriptor input.
 
 `settings` accepts `size`, `spp`, `denoise`, `seed`, `seedValue`,
-`sampleSequence`, `sampleSequenceOffset`, `render`, `display`, `format`
+`sampleSequence`, `sampleSequenceOffset`, `temporal`, `render`, `display`, `format`
 and `tracer`. The render and display objects use the
 [shot output fields](shot.md#output-and-animation). A supplied object
 replaces its corresponding shot setting as a group. When omitted, the
 group comes from the shot or uses the v1 defaults for a descriptor.
 For descriptor input, display tracks are evaluated at the supplied `t`.
+
+With the `temporal-offline` capability, select `denoise: "temporal"` and
+`sampleSequence: "frame"`. Submit consecutive frame indices with the same
+render settings. A `frames` reply has a `frames` array and the effective
+`latency`. Each array entry has `frame`, `format`, `offset` and `bytes`
+into the reply payload. An empty batch has no binary prefix. Consume each
+reply before sending the next request. Flush to completion before replacing
+a shot or changing the render settings.
 
 Check for `render-settings`, `display-settings`, `frame-sample-sequence`,
 `oidn-clean-aux-large` and `check-settings` in `hello.capabilities` before

@@ -42,6 +42,7 @@
 
 ## Denoising
 
+- Offline animation: enable `output.denoise: "temporal"` and `sampleSequence: "frame"` for a sequence, or use the [Rust streaming interface](docs/denoising.md#offline-animation).
 - OIDN schedules on renders, custom filters, standalone `mutracer-denoise.h`, runtime lookup (`MUTRACER_OIDN_LIBRARY`): [denoising](docs/denoising.md).
 
 ## Low-level context
