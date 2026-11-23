@@ -202,8 +202,7 @@ fn mtFrameSurface(si: SurfaceInteraction, material: OpenPbrResolvedMaterial, ray
   var flags = 1u;
   var guideNormal = oriented;
   var guideRoughness = material.specularRoughness;
-  let unsupportedAnisotropy = material.specularAnisotropy > 0.0 &&
-    (material.transmissionWeight > 0.0 || material.coatWeight > 0.0);
+  let unsupportedAnisotropy = material.specularAnisotropy > 0.0 && material.transmissionWeight > 0.0;
   // Surface data can be inspected even when complete temporal/RR inputs have
   // not been validated. Do not silently reinterpret these material layers.
   if ((material.materialType != STANDARD) | (material.alpha < 1.0) |
