@@ -133,7 +133,12 @@ void main() {
   float depth=max(dot(si.position-viewInv[3].xyz,-normalize(viewInv[2].xyz)),0.0);
   bool unsupportedCoat = material.coatWeight > 0.0 && (material.coatAnisotropy > 0.0 || material.transmissionWeight > 0.0);
   bool unsupportedAnisotropy = material.specularAnisotropy > 0.0 && (material.transmissionWeight > 0.0 || material.coatWeight > 0.0);
-  bool unsupported=material.materialType!=STANDARD || material.alpha<1.0 || unsupportedCoat || material.fuzzWeight>0.0 || unsupportedAnisotropy || material.subsurfaceWeight>0.0 || dot(material.mediumScattering,material.mediumScattering)>0.0 || material.bevel>0.0 || material.thinFilmWeight>0.0 || material.transmissionDispersionScale>0.0;
+#ifdef AOV_FUZZ_REFLECTANCE
+  bool unsupportedFuzz = material.fuzzWeight > 0.0 && (material.coatWeight > 0.0 || material.transmissionWeight > 0.0);
+#else
+  bool unsupportedFuzz = material.fuzzWeight > 0.0;
+#endif
+  bool unsupported=material.materialType!=STANDARD || material.alpha<1.0 || unsupportedCoat || unsupportedFuzz || unsupportedAnisotropy || material.subsurfaceWeight>0.0 || dot(material.mediumScattering,material.mediumScattering)>0.0 || material.bevel>0.0 || material.thinFilmWeight>0.0 || material.transmissionDispersionScale>0.0;
   out_geometry+=vec4(depth,material.specularRoughness,material.baseMetalness,unsupported?1.0:0.0);
   #ifdef AOV_REFLECTANCE
   if((aovMask&24)!=0 && !unsupported){

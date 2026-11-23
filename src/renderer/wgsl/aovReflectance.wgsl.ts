@@ -5,8 +5,10 @@ import proposals from './aovReflectanceSamples.wgsl.js';
 // integrate the substrate and the narrower coat with their own proposals.
 export const unsupportedCoatReflectanceWgsl =
   'material.coatWeight > 0.0 && (material.coatAnisotropy > 0.0 || material.transmissionWeight > 0.0)';
+export const unsupportedFuzzReflectanceWgsl =
+  'material.fuzzWeight > 0.0 && (material.coatWeight > 0.0 || material.transmissionWeight > 0.0)';
 
-export function createAovReflectanceWgsl(layered = false, hasCoatNormals = false) {
+export function createAovReflectanceWgsl(layered = false, hasCoatNormals = false, fuzzReflectance = false) {
   return proposals + /* wgsl */ `
 struct MtReflectance {
   diffuse: vec3f,
@@ -124,6 +126,14 @@ ${layered ? /* wgsl */ `    var substrateScale = vec3f(1.0);
   }
 ${layered ? /* wgsl */ `  if (wantSpecular && prepared.weights[OPENPBR_LOBE_COAT] > 0.0) {
     result.coat = mtCoatReflectance(prepared, count / 2u);
+  }
+` : ''}${fuzzReflectance ? /* wgsl */ `  if (HAS_FUZZ && prepared.weights[OPENPBR_LOBE_FUZZ] > 0.0) {
+    // The production fuzz BSDF is constant over the light hemisphere.
+    // Its fitted directional albedo gives the exact cosine integral here.
+    let fuzz = prepared.weights[OPENPBR_LOBE_FUZZ] * openpbr_fuzz_directional_albedo(view.z, material.fuzzRoughness);
+    let substrate = max(0.0, 1.0 - fuzz);
+    if (wantDiffuse) { result.diffuse = result.diffuse * substrate + material.fuzzColor * fuzz; }
+    if (wantSpecular) { result.specular *= substrate; }
   }
 ` : ''}  return result;
 }

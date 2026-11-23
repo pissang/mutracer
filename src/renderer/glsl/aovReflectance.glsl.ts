@@ -127,5 +127,13 @@ void aovReflectance(OpenPbrPreparedBsdf prepared, bool wantDiffuse, bool wantSpe
   if (wantSpecular && prepared.weights[OPENPBR_LOBE_COAT] > 0.0) {
     coat = aovCoatReflectance(prepared);
   }
+#ifdef AOV_FUZZ_REFLECTANCE
+  if (prepared.weights[OPENPBR_LOBE_FUZZ] > 0.0) {
+    float fuzz = prepared.weights[OPENPBR_LOBE_FUZZ] * openpbr_fuzz_directional_albedo(view.z, material.fuzzRoughness);
+    float substrate = max(0.0, 1.0 - fuzz);
+    if (wantDiffuse) { diffuse = diffuse * substrate + material.fuzzColor * fuzz; }
+    if (wantSpecular) { specular *= substrate; }
+  }
+#endif
 }
 `;

@@ -727,6 +727,7 @@ class WebGLRayTracePass {
 
   private _updateMaterialConstants(materials: OpenPBRMaterial[], materialData: MaterialTable, mergedGeometry: Geometry) {
     materials = materialData.capabilityMaterials ?? materials;
+    this._aovPass.setDefines({AOV_FUZZ_REFLECTANCE: materials.some(material => material.fuzzWeight > 0)});
     // Avoid too much shader compilation
     const STACK_SIZE = 50;
     const hasShadowCatcher = materials.some((m) => m.shadowCatcher);

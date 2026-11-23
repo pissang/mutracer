@@ -428,10 +428,12 @@ deformed geometry adds about 12 GPU bytes per vertex to that frame's scene data.
 
 Reflectance outputs are separate from the existing OIDN `albedo` guide.
 On WebGPU and WebGL, opaque isotropic clearcoat attenuates the base reflectance
-and adds to `specularAlbedo` using its own shading normal. Clearcoat combined
-with transmission or anisotropy has zero reflectance validity and contributes
-to `roughness.b`. The same applies to fuzz, subsurface or volume scattering,
-bevel, thin film, dispersion, partial alpha and nonstandard materials.
+and adds to `specularAlbedo` using its own shading normal. Opaque fuzz without
+clearcoat adds to `diffuseAlbedo` and attenuates the base reflectance. Reflectance
+validity is zero for clearcoat combined with transmission or anisotropy, fuzz
+combined with clearcoat or transmission, subsurface or volume scattering,
+bevel, thin film, dispersion, partial alpha and nonstandard materials. These
+materials contribute to `roughness.b`.
 Reflectance tracing can be expensive.
 
 `diffuseColor` and `specularColor` read resolved material inputs without

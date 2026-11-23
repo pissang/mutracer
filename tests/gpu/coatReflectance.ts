@@ -46,9 +46,13 @@ async function run() {
   const neutralColor = [1, 1, 1] as const;
   const rows: Result[] = [];
 
-  const frame = async (samples: number) => {
+  const frame = async (samples: number, name: string) => {
     render.restart();
-    await render.converge({samples, sampleSequenceOffset: sequenceOffset, timeoutMs: 90_000});
+    try {
+      await render.converge({samples, sampleSequenceOffset: sequenceOffset, timeoutMs: 150_000});
+    } catch (error) {
+      throw new Error(`${name} (${samples} spp): ${String(error)}`, {cause: error});
+    }
     if (engine.lastError) throw engine.lastError;
     const data = (await render.readPixels('hdr')).data as Float32Array;
     check(data.length === size * size * 4 && data.every(Number.isFinite), 'Invalid HDR framebuffer');
@@ -83,6 +87,9 @@ async function run() {
       {name: 'anisotropic dielectric', coat: 0, roughness: 0, metal: 0, cosine: .4, anisotropy: .7},
       {name: 'independent coat tilts toward viewer', coat: 1, roughness: .2, metal: 0, cosine: .55, coatNormal: coatToward},
       {name: 'independent coat tilts away from viewer', coat: 1, roughness: .2, metal: 0, cosine: .55, coatNormal: coatAway},
+      {name: 'grazing fuzz only', coat: 0, roughness: .1, metal: 0, cosine, fuzz: .8, fuzzOnly: true},
+      {name: 'fuzz over rough dielectric', coat: 0, roughness: .1, metal: 0, cosine, fuzz: .8},
+      {name: 'rough dielectric without fuzz', coat: 0, roughness: .1, metal: 0, cosine},
     ];
 
     for (const fixture of cases) {
@@ -98,15 +105,18 @@ async function run() {
       material.baseMetalness = fixture.metal;
       material.specularAnisotropy = fixture.anisotropy ?? 0;
       material.specularAnisotropyRotation = fixture.rotation ?? 0;
-      material.baseWeight = fixture.coatOnly ? 0 : 1;
-      material.specularWeight = fixture.coatOnly ? 0 : 1;
+      material.baseWeight = fixture.coatOnly || fixture.fuzzOnly ? 0 : 1;
+      material.specularWeight = fixture.coatOnly || fixture.fuzzOnly ? 0 : 1;
+      material.fuzzWeight = fixture.fuzz ?? 0;
+      material.fuzzRoughness = .5;
+      material.fuzzColor = [.17, .62, .31];
       engine.update();
       render.aovs = [];
-      const raw = fixture.name === 'coated wood' || fixture.coatNormal ? await frame(4) : undefined;
+      const raw = fixture.name === 'coated wood' || fixture.coatNormal || fixture.fuzz ? await frame(4, fixture.name) : undefined;
       render.aovs = [...aovs];
-      if (raw) check((await frame(4)).every((value, i) => Object.is(value, raw[i])),
+      if (raw) check((await frame(4, fixture.name)).every((value, i) => Object.is(value, raw[i])),
         'Enabling layered guides changed fixed-seed beauty');
-      const hdr = await frame(fixtureSamples);
+      const hdr = await frame(fixtureSamples, fixture.name);
       const albedos = await Promise.all(aovs.map(async kind => {
         const data = (await render.readPixels(kind)).data as Float32Array;
         check(data.length === hdr.length && data.every(Number.isFinite), `${fixture.name}: invalid ${kind} framebuffer`);
@@ -118,6 +128,10 @@ async function run() {
       const error = channelError(reference, diffuse.map((value, c) => value + specular[c]));
       check(error <= .03, `${fixture.name}: white-furnace error ${error} (HDR ${reference}, diffuse ${diffuse}, specular ${specular})`);
       if (fixture.metal === 1 || fixture.coatOnly) check(diffuse.every(value => value === 0), `${fixture.name}: unexpected diffuse energy`);
+      if (fixture.fuzzOnly) {
+        check(specular.every(value => value === 0) && diffuse[1] > .2 && Math.abs(diffuse[1] - 2 * diffuse[2]) < .00001,
+          'Fuzz-only reflectance belongs to the diffuse output and retains the lobe color');
+      }
       if (fixture.coatOnly) {
         const eta = 1 / 1.5;
         const ct = Math.sqrt(1 - eta ** 2 * (1 - cosine ** 2));
@@ -137,6 +151,8 @@ async function run() {
       'The independent coat normal must affect specular reflectance');
     check(channelError(rows[9].diffuse, rows[10].diffuse) > .015,
       'The independent coat normal must affect substrate attenuation');
+    check(rows[12].specular.every((value, c) => value < rows[13].specular[c]),
+      'Fuzz must attenuate the substrate specular reflection');
     return {backend, adapter: info.adapterName, samples: fixtureSamples, sequenceOffset, passed: true, rows};
   } finally {
     render.dispose();
