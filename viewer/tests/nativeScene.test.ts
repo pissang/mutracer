@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { NativeSceneEncoder, cameraWords, descriptorDelta, descriptorDeltaParts } from '../src/engine/nativeScene';
-import { Camera, Geometry, Mesh, InstancedMesh, OpenPBRMaterial, Texture, MaterialGraph, RectLight, EnvironmentLight, SphereLight, SpotLight, DiskLight, CylinderLight } from '../../src/main';
+import { Camera, Geometry, Mesh, InstancedMesh, OpenPBRMaterial, Texture, MaterialGraph, RectLight, EnvironmentLight, AmbientLight, SphereLight, SpotLight, DiskLight, CylinderLight } from '../../src/main';
 import { HEADER as H, MATERIAL as M, GEOMETRY as G, TEXTURE as T, LIGHT as L } from '../../native/src/layout';
 import { decodeMaterial, decodeGeometry, decodeTexture } from '../../native/src/scene-records';
 import { Attribute } from '../../src/scene/Geometry';
@@ -26,6 +26,67 @@ function save(name: string, words: Uint32Array) { const dir = process.env.MUTRAC
     writeFileSync(join(dir, name + '.bin'), new Uint8Array(words.buffer));
 } }
 describe('native scene v8 boundary', () => {
+    it('omits absent and zero-contribution environments while preserving independent backgrounds', async () => {
+        const camera = new Camera({ projection: 'perspective' });
+        const noEnvironment = { meshes: [], lights: [] };
+        const absent = await encoder().encode(noEnvironment, camera, [32, 32]);
+        expect(absent[H.ENVIRONMENT_TEXTURE]).toBe(0);
+        expect(absent[H.BACKGROUND_TEXTURE]).toBe(0);
+        expect(absent[H.TEXTURE_COUNT]).toBe(0);
+
+        noEnvironment.lights = [new AmbientLight({ color: [0, 0, 0] })];
+        const zeroEnvironment = await encoder().encode(noEnvironment, camera, [32, 32]);
+        expect(zeroEnvironment[H.ENVIRONMENT_TEXTURE]).toBe(0);
+        expect(zeroEnvironment[H.TEXTURE_COUNT]).toBe(0);
+
+        noEnvironment.background = [0.25, 0.5, 0.75, 1];
+        const colorBackground = await encoder().encode(noEnvironment, camera, [32, 32]);
+        expect(colorBackground[H.BACKGROUND_TEXTURE]).toBe(0);
+        expect(Array.from(new Float32Array(colorBackground.buffer).slice(H.BACKGROUND_COLOR, H.BACKGROUND_COLOR + 4))).toEqual([0.25, 0.5, 0.75, 1]);
+
+        const backgroundMap = new Texture({ width: 1, height: 1, data: new Uint8Array([20, 40, 60, 255]) });
+        noEnvironment.background = backgroundMap;
+        const textureBackground = await encoder().encode(noEnvironment, camera, [32, 32]);
+        expect(textureBackground[H.ENVIRONMENT_TEXTURE]).toBe(0);
+        expect(textureBackground[H.BACKGROUND_TEXTURE]).toBe(1);
+        expect(textureBackground[H.TEXTURE_COUNT]).toBe(1);
+    });
+    it('keeps nonzero environment lighting in the descriptor', async () => {
+        const scene = { meshes: [], lights: [new AmbientLight({ color: [0.2, 0.4, 0.6] })] };
+        const words = await encoder().encode(scene, new Camera({ projection: 'perspective' }), [32, 32]);
+        expect(words[H.ENVIRONMENT_TEXTURE]).toBe(1);
+        expect(words[H.BACKGROUND_TEXTURE]).toBe(1);
+        expect(words[H.TEXTURE_COUNT]).toBe(1);
+    });
+    it('sends a full descriptor when environment contribution crosses zero and keeps object IDs stable', async () => {
+        const { scene, camera } = fixture();
+        const ambient = new AmbientLight({ color: [0, 0, 0] });
+        scene.lights = [ambient];
+        const enc = encoder(), detector = new SceneChangeDetector();
+        const prepare = async () => enc.prepare(scene, camera, [32, 32], detector.detect(scene));
+        const initial = await prepare();
+        expect(new Uint32Array(initial.parts[0].buffer, initial.parts[0].byteOffset)[1]).toBe(1);
+        initial.accept(); detector.commit();
+        const meshIds = [42];
+        const materialIds = [73];
+
+        ambient.color = [1, 1, 1];
+        const enabled = await prepare();
+        expect(new Uint32Array(enabled.parts[0].buffer, enabled.parts[0].byteOffset)[1]).toBe(1);
+        const enabledWords = await enc.encode(scene, camera, [32, 32]);
+        expect(enabledWords[H.ENVIRONMENT_TEXTURE]).toBeGreaterThan(0);
+        expect(Array.from(enabledWords.subarray(enabledWords[H.MESH_AOV_IDS], enabledWords[H.MESH_AOV_IDS] + 1))).toEqual(meshIds);
+        expect(Array.from(enabledWords.subarray(enabledWords[H.MATERIAL_AOV_IDS], enabledWords[H.MATERIAL_AOV_IDS] + 1))).toEqual(materialIds);
+        enabled.accept(); detector.commit();
+
+        ambient.color = [0, 0, 0];
+        const disabled = await prepare();
+        expect(new Uint32Array(disabled.parts[0].buffer, disabled.parts[0].byteOffset)[1]).toBe(1);
+        const disabledWords = await enc.encode(scene, camera, [32, 32]);
+        expect(disabledWords[H.ENVIRONMENT_TEXTURE]).toBe(0);
+        expect(Array.from(disabledWords.subarray(disabledWords[H.MESH_AOV_IDS], disabledWords[H.MESH_AOV_IDS] + 1))).toEqual(meshIds);
+        expect(Array.from(disabledWords.subarray(disabledWords[H.MATERIAL_AOV_IDS], disabledWords[H.MATERIAL_AOV_IDS] + 1))).toEqual(materialIds);
+    });
     it('round trips geometry, every material property, shared color/data images and IDs through native decoders', async () => {
         const { scene, camera, geometry, material } = fixture(), words = await encoder().encode(scene, camera, [320, 192]), floats = new Float32Array(words.buffer), bytes = new Uint8Array(words.buffer);
         const textures = Array.from({ length: words[H.TEXTURE_COUNT] }, (_, i) => decodeTexture(bytes, words, floats, words[H.TEXTURE_OFFSET] + i * T.WORDS));

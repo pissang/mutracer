@@ -254,10 +254,13 @@ export class NativeSceneEncoder {
             return pending;
         };
         const env = !changes?.lights && previous?.environment ? previous.environment : await resolve(generateEnvMapFromSceneComponents(scene.lights.filter(l => l.type === 'AmbientLight'), scene.lights.filter(l => l.type === 'EnvironmentLight')));
-        w.environment = env;
+        const hasEnvironmentContribution = env.data.some((value, index) => index % 4 !== 3 && value !== 0);
+        const environment = hasEnvironmentContribution ? env : undefined;
+        w.environment = environment;
         const background = scene.background;
-        const envTexture = new Texture(env), envId = textures.length;
-        textures.push({ texture: envTexture, pixels: env.data instanceof Float32Array ? env.data : Float32Array.from(env.data) });
+        const envId = environment ? textures.length : -1;
+        if (environment)
+            textures.push({ texture: new Texture(environment), pixels: environment.data instanceof Float32Array ? environment.data : Float32Array.from(environment.data) });
         let backgroundId = envId;
         if (background && !Array.isArray(background)) {
             const source = generateBackgroundMapFromSceneBackground(background);
