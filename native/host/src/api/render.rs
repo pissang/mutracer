@@ -3247,7 +3247,7 @@ impl Render {
             }
             update_aovs(r)?;
             let aov=r.aov.as_ref().ok_or_else(||error(Status::InvalidState,"Missing temporal surface outputs"))?;
-            let shots=context_result(aov.ordered_snapshot(TemporalDenoiser::AOVS,true))?;
+            let shots=context_result(aov.ordered_snapshot((TemporalDenoiser::AOVS & 127) | ((TemporalDenoiser::AOVS >> 2) & !127),true))?;
             let get=|kind| shots.iter().find(|a|a.kind==kind).unwrap().buffer.clone();
             let (raw,size,_)=context_result(context::denoise_buffers(r.context))?;
             let [color,albedo,normal]=raw;
