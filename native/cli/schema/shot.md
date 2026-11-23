@@ -20,8 +20,9 @@ Set `output.render` for bounce depth, caustics, clamping, sampling pattern,
 direct-light candidates, dispersion, bevel and alpha blending. An omitted
 `bounces` retains the video CLI default of 6. Set `bounces: 3` to match the
 browser's default. See the [JSON Schema](mutracer-shot-v1.json) for values,
-defaults and ranges. On Metal, `random` can render some transmissive scenes
-much darker than the browser at the same sample count.
+defaults and ranges. Native `random` sampling can produce frames that are
+substantially darker than WebGPU at the same sample count. Use `sobol` for
+comparable brightness.
 
 `seed: "frame"` uses `seedValue + i` modulo 2³². With
 `sampleSequence: "frame"`, frame `i` uses `sampleSequenceOffset + i × spp`

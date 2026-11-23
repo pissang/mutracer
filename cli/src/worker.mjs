@@ -70,6 +70,7 @@ export function binary() {
 
 export class Worker {
   #next = 0;
+  #warnings = new Set();
   #queue = Promise.resolve();
 
   static async open() {
@@ -131,7 +132,13 @@ export class Worker {
       for (;;) {
         const response = JSON.parse((await this.reader.line()).toString());
         if (response.id !== id) throw new NativeError('Worker response ID differs from the request.');
-        if (response.type === 'progress') continue;
+        if (response.type === 'progress') {
+          if (response.warning && !this.#warnings.has(response.warning)) {
+            this.#warnings.add(response.warning);
+            console.error(`Warning: ${response.warning}`);
+          }
+          continue;
+        }
         if (response.type === 'error') {
           throw new NativeError(`${response.pointer ?? ''} ${response.message}`, response.code);
         }

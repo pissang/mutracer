@@ -528,6 +528,14 @@ impl Session {
                         Ok(display.at(t))
                     })
                     .transpose()?;
+                if let Some(warning) = settings.render.sampling_warning() {
+                    reply(
+                        writer,
+                        json!({"type":"progress","id":id,"frame":frame,"samples":0,
+                            "targetSamples":settings.spp,"warning":warning}),
+                        None,
+                    )?;
+                }
                 if check_only {
                     let weights =
                         render_settings::denoiser_identity(settings.denoise, "/settings/denoise")?;

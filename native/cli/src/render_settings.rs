@@ -47,6 +47,12 @@ enum AlphaBlend {
 }
 
 impl RenderOptions {
+    pub fn sampling_warning(self) -> Option<&'static str> {
+        (self.sampling_pattern == Some(Sampling::Random)).then_some(
+            "Native random sampling can render substantially darker than WebGPU. Use samplingPattern: \"sobol\" for comparable brightness.",
+        )
+    }
+
     pub fn apply(self, mut sdk: api::RenderSettings) -> api::RenderSettings {
         sdk.bounces = self.bounces.unwrap_or(LEGACY_BOUNCES);
         if let Some(c) = self.caustics {

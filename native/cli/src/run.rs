@@ -322,6 +322,12 @@ impl Input {
     }
 }
 
+fn warn_sampling(settings: Settings) {
+    if let Some(message) = settings.render.sampling_warning() {
+        eprintln!("Warning /output/render/samplingPattern: {message}");
+    }
+}
+
 pub fn validate(file: &Path) -> Result<()> {
     let input = Input::load(file)?;
     let settings = Settings::resolve(
@@ -341,6 +347,7 @@ pub fn validate(file: &Path) -> Result<()> {
         None,
         false,
     )?;
+    warn_sampling(settings);
     let frames = shot::frame_count(input.shot.output.duration, settings.fps)?;
     progress(
         json!({"event":"validated","shot":file,"assets":input.assets.fingerprints().count(),"cost":input.estimate(settings,frames)}),
@@ -513,6 +520,7 @@ pub fn still(args: Still, worker: bool) -> Result<()> {
             "Match the file extension to --format.",
         ));
     }
+    warn_sampling(settings);
     let mut renderer = Renderer::new(settings)?;
     let image = renderer.shot_frame(&mut input, settings, frame, args.t)?;
     let guide = settings
@@ -671,6 +679,9 @@ pub fn sequence(args: Sequence, preview: bool, worker: bool) -> Result<()> {
     let indices: Vec<u32> = (first..=last).step_by(settings.stride as usize).collect();
     let files: Vec<_> = indices.iter().map(|&i| frame_path(&directory, i)).collect();
     let manifest = input.manifest(settings)?;
+    if !worker {
+        warn_sampling(settings);
+    }
 
     if worker {
         // A replaced supervisor can start before the previous worker has

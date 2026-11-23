@@ -30,7 +30,9 @@ there is no length prefix or payload. Read from one buffered stream throughout.
 for `hdr` and `exr`.
 
 A render can emit `progress` with `frame`, `samples` and `targetSamples`
-before its final reply. A `frame` payload is an encoded PNG or EXR image.
+before its final reply. A `check` or `render` can emit a `progress` message
+with an additional nonfatal `warning` string. A `frame` payload is an encoded
+PNG or EXR image.
 Omit `t` to use the shot's frame time. Supply explicit time and settings for
 descriptor input.
 
