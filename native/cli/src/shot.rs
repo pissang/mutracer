@@ -578,9 +578,19 @@ pub enum Target {
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(untagged)]
+pub enum FocusDistance {
+    Name(String),
+    Distance(Channel<f32>),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Camera {
     pub fov: Option<Channel<f32>>,
+    pub f_stop: Option<Channel<f32>>,
+    pub focus_distance: Option<FocusDistance>,
+    pub sensor_height: Option<Channel<f32>>,
     pub target: Target,
     pub position: Option<Channel<[f32; 3]>>,
     pub orbit: Option<Orbit>,
@@ -813,6 +823,34 @@ impl Shot {
         let color = |v: [f32; 3]| v.into_iter().all(nonnegative);
         self.output.display.check(duration, "/output/display")?;
         channel!(&self.camera.fov, "/camera/fov", "degrees in (0, 180)", fov);
+        channel!(
+            &self.camera.f_stop,
+            "/camera/fStop",
+            "a nonnegative f-number",
+            nonnegative
+        );
+        channel!(
+            &self.camera.sensor_height,
+            "/camera/sensorHeight",
+            "a positive height in millimetres",
+            positive
+        );
+        match &self.camera.focus_distance {
+            Some(FocusDistance::Distance(c)) => c.check(
+                "/camera/focusDistance",
+                duration,
+                "a positive distance in metres",
+                positive,
+            )?,
+            Some(FocusDistance::Name(name)) if !names.contains(name.as_str()) => {
+                return Err(Error::validation(
+                    "/camera/focusDistance",
+                    format!("Unknown focus object {name:?}"),
+                    "Use the name of an object in the shot or a positive distance in metres.",
+                ));
+            }
+            _ => {}
+        }
         match (&self.camera.position, &self.camera.orbit) {
             (Some(p), None) => p.check("/camera/position", duration, "a finite point", finite)?,
             (None, Some(orbit)) => {

@@ -192,7 +192,11 @@ struct Session {
 fn editable(pointer: &str) -> bool {
     let parts: Vec<_> = pointer.split('/').collect();
     match parts.as_slice() {
-        ["", "camera", "fov" | "target" | "position"]
+        [
+            "",
+            "camera",
+            "fov" | "target" | "position" | "fStop" | "focusDistance" | "sensorHeight",
+        ]
         | ["", "camera", "orbit", "azimuth" | "elevation" | "distance"]
         | ["", "output", "display", "exposure" | "toneMappingExposure"]
         | ["", "environment", "color" | "intensity" | "rotation"] => true,

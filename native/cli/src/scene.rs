@@ -585,11 +585,33 @@ impl Prepared {
             Vec3::from_array(cam.position.as_ref().unwrap().at(t))
         };
         let matrix = look_at(eye, target, "/camera")?;
+        let lens = api::Camera::default();
+        let focus_distance = match &cam.focus_distance {
+            None => lens.focus_distance,
+            Some(shot::FocusDistance::Distance(distance)) => distance.at(t),
+            Some(shot::FocusDistance::Name(name)) => {
+                let center = self.bounds[self.target_indices[name]].center();
+                let distance = (center - eye).dot(-matrix.z_axis.truncate());
+                if !distance.is_finite() || distance <= 0. {
+                    return Err(Error::validation(
+                        "/camera/focusDistance",
+                        format!(
+                            "Focus object {name:?} is outside the forward half-space at {t} seconds"
+                        ),
+                        "Keep the focus object in front of the camera or use a positive distance.",
+                    ));
+                }
+                distance
+            }
+        };
         Ok((
             api::Camera {
                 fov,
                 world_matrix: matrix.to_cols_array(),
-                ..Default::default()
+                f_stop: at(&cam.f_stop, lens.f_stop, t),
+                focus_distance,
+                sensor_height: at(&cam.sensor_height, lens.sensor_height, t),
+                ..lens
             },
             shot.output.display.at(t),
         ))
@@ -751,6 +773,31 @@ mod tests {
             .join("examples")
             .join(name);
         crate::run::Input::load(&path).unwrap()
+    }
+
+    #[test]
+    fn lens_animates_and_follows_the_projected_object_center() {
+        let mut input = crate::run::Input::from_bytes(
+            br#"{
+            "version": 1, "output": {"duration": 1},
+            "camera": {"position": [0,0,5], "target": [0,0,0],
+                "fStop": {"keys": [[0,2],[1,4]]}, "focusDistance": "ball", "sensorHeight": 30},
+            "objects": [{"name":"ball","shape":"sphere",
+                "position":{"keys":[[0,[2,0,1]],[1,[2,0,3]]]}}]
+        }"#,
+            Path::new("."),
+        )
+        .unwrap();
+        let (start, _) = input.prepared.evaluate(&input.shot, 0., [16, 16]).unwrap();
+        let (end, _) = input.prepared.evaluate(&input.shot, 0.5, [16, 16]).unwrap();
+        assert_eq!(
+            [start.f_stop, start.focus_distance, start.sensor_height],
+            [2., 4., 30.]
+        );
+        assert_eq!(
+            [end.f_stop, end.focus_distance, end.sensor_height],
+            [3., 3., 30.]
+        );
     }
 
     #[test]

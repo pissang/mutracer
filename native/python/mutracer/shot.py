@@ -160,11 +160,17 @@ class Camera:
     position: Any = None
     fov: Any = None
     orbit_parameters: dict | None = None
+    f_stop: Any = None
+    focus_distance: Any = None
+    sensor_height: Any = None
 
     @classmethod
-    def orbit(cls, target, *, azimuth=0, elevation=0, distance=1.15, fov=None) -> Camera:
+    def orbit(cls, target, *, azimuth=0, elevation=0, distance=1.15, fov=None,
+              f_stop=None, focus_distance=None, sensor_height=None) -> Camera:
         """Orbit a point or a named object."""
-        return cls(target, fov=fov, orbit_parameters={"azimuth": azimuth, "elevation": elevation, "distance": distance})
+        return cls(target, fov=fov, f_stop=f_stop, focus_distance=focus_distance,
+                   sensor_height=sensor_height,
+                   orbit_parameters={"azimuth": azimuth, "elevation": elevation, "distance": distance})
 
 
 @dataclass
@@ -215,6 +221,9 @@ class Shot:
         raw["output"]["seedValue"] = raw["output"].pop("seed_value")
         raw["output"]["sampleSequenceOffset"] = raw["output"].pop("sample_sequence_offset")
         raw["output"]["sampleSequence"] = raw["output"].pop("sample_sequence")
+        raw["camera"]["fStop"] = raw["camera"].pop("f_stop")
+        raw["camera"]["focusDistance"] = raw["camera"].pop("focus_distance")
+        raw["camera"]["sensorHeight"] = raw["camera"].pop("sensor_height")
         raw["camera"]["orbit"] = raw["camera"].pop("orbit_parameters")
         return {"version": 1, **_json_value(raw, Path(directory).resolve())}
 

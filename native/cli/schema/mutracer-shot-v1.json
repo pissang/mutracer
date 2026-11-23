@@ -772,6 +772,9 @@
       "type": "object",
       "properties": {
         "fov": {"$ref": "#/$defs/fovChannel", "default": 45},
+        "fStop": {"$ref": "#/$defs/nonnegativeChannel", "default": 0},
+        "focusDistance": {"oneOf": [{"$ref": "#/$defs/name"}, {"$ref": "#/$defs/positiveChannel"}], "default": 10},
+        "sensorHeight": {"$ref": "#/$defs/positiveChannel", "default": 24},
         "target": {"$ref": "#/$defs/target"},
         "position": {"$ref": "#/$defs/pointChannel"},
         "orbit": {

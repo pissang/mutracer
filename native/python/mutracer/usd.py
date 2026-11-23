@@ -293,18 +293,39 @@ class Importer:
         camera = self.Geom.Camera(prim)
         projected = camera.GetProjectionAttr()
         aperture, focal = camera.GetVerticalApertureAttr(), camera.GetFocalLengthAttr()
+        horizontal_aperture = camera.GetHorizontalApertureAttr()
+        f_stop, focus = camera.GetFStopAttr(), camera.GetFocusDistanceAttr()
         horizontal, vertical = camera.GetHorizontalApertureOffsetAttr(), camera.GetVerticalApertureOffsetAttr()
         path = prim.GetPath()
         def fov(time):
             if projected.Get(time) != "perspective" or horizontal.Get(time) or vertical.Get(time):
                 raise Located(path, "Only centered perspective cameras can be imported.")
-            if not focal.Get(time) > 0 or not aperture.Get(time) > 0:
+            if min(focal.Get(time), aperture.Get(time), horizontal_aperture.Get(time)) <= 0:
                 raise Located(path, "Camera aperture and focal length must be positive.")
             return degrees(2 * atan(aperture.Get(time) / (2 * focal.Get(time))))
-        timeline = self.times([projected, aperture, focal, horizontal, vertical], prim)
-        return {"fov": self.channel(timeline, fov),
-                "position": self.channel(timeline, lambda t:self.pose(prim,t)[0]),
-                "target": self.channel(timeline, lambda t:self.pose(prim,t)[1])}
+        timeline = self.times([projected, aperture, horizontal_aperture, focal, horizontal, vertical], prim)
+        lens_times = self.times([aperture, f_stop, focus])
+        record = {"fov": self.channel(timeline, fov),
+                  "position": self.channel(timeline, lambda t: self.pose(prim, t)[0]),
+                  "target": self.channel(timeline, lambda t: self.pose(prim, t)[1]),
+                  "sensorHeight": self.channel(lens_times, lambda t: aperture.Get(t) * self.units * 100)}
+        if f_stop.HasAuthoredValueOpinion():
+            def aperture_stop(t):
+                value = f_stop.Get(t)
+                if not isfinite(value) or value < 0:
+                    raise Located(f_stop.GetPath(), "Use a finite, nonnegative fStop.")
+                return value
+            record["fStop"] = self.channel(lens_times, aperture_stop)
+        if focus.HasAuthoredValueOpinion():
+            def focus_metres(t):
+                distance = focus.Get(t) * self.units
+                if distance == 0 and not f_stop.Get(t):
+                    return 10
+                if not isfinite(distance) or distance <= 0:
+                    raise Located(focus.GetPath(), "Use a positive focusDistance.")
+                return distance
+            record["focusDistance"] = self.channel(lens_times, focus_metres)
+        return record
 
     def light(self, prim):
         kind = str(prim.GetTypeName())

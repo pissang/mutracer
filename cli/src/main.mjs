@@ -125,6 +125,33 @@ function normalizeAovIds(bytes) {
   return Buffer.from(bytes.buffer,bytes.byteOffset,bytes.byteLength);
 }
 
+function applyLens(target, camera, scene) {
+  const lens = camera.userData.mutracerLens;
+  if (lens === undefined) return target;
+  if (!lens || typeof lens !== 'object' || Array.isArray(lens)) throw new Error('camera.userData.mutracerLens must be an object.');
+  for (const key of Object.keys(lens)) {
+    if (!['fStop','focusDistance','sensorHeight'].includes(key)) throw new Error(`Unknown mutracerLens field ${key}.`);
+  }
+  const {fStop = 0, sensorHeight = 24} = lens;
+  let {focusDistance = 10} = lens;
+  if (typeof focusDistance === 'string') {
+    const matches = [];
+    scene.traverseVisible(node => { if (node.name === focusDistance) matches.push(node); });
+    if (matches.length !== 1) throw new Error(`focusDistance must name one visible object. Found ${matches.length} named "${focusDistance}".`);
+    const bounds = new THREE.Box3().setFromObject(matches[0]);
+    if (bounds.isEmpty()) throw new Error(`Focus object "${focusDistance}" has no bounds.`);
+    const offset = bounds.getCenter(new THREE.Vector3()).sub(camera.getWorldPosition(new THREE.Vector3()));
+    focusDistance = offset.dot(camera.getWorldDirection(new THREE.Vector3()));
+  }
+  for (const [key, value, min] of [['fStop',fStop,0], ['focusDistance',focusDistance,Number.MIN_VALUE], ['sensorHeight',sensorHeight,Number.MIN_VALUE]]) {
+    if (typeof value !== 'number' || !Number.isFinite(Math.fround(value)) || Math.fround(value) < min) {
+      throw new Error(`mutracerLens.${key} must be a finite ${min ? 'positive' : 'nonnegative'} number.`);
+    }
+    target[key] = value;
+  }
+  return target;
+}
+
 async function prepare(module, url, worker, settings) {
   if (typeof module.setup !== 'function' || typeof module.frame !== 'function') {
     throw new Error('Export setup(context) and frame(context) from the shot module.');
@@ -154,7 +181,11 @@ async function prepare(module, url, worker, settings) {
         }
       });
       strictConversion(scene,()=>sync.update());
-      return normalizeAovIds(await encoder.encode(sink.scene, sink.camera ?? fromTHREECamera(camera),settings.size));
+      const nativeCamera = sink.camera ?? fromTHREECamera(camera);
+      nativeCamera.fStop = 0;
+      nativeCamera.focusDistance = 10;
+      nativeCamera.sensorHeight = 24;
+      return normalizeAovIds(await encoder.encode(sink.scene, applyLens(nativeCamera,camera,scene),settings.size));
     },
     dispose() {sync.dispose();},
   };
