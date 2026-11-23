@@ -148,13 +148,14 @@ fn mtFrameSurface(si: SurfaceInteraction, material: OpenPbrResolvedMaterial, ray
   let outside = (cosine > 0.0) | material.thinWalled;
   let eta = openpbr_apply_specular_weight_to_ior(material.specularIor, material.specularWeight);
   var flags = 1u;
+  var guideNormal = oriented;
   var guideRoughness = material.specularRoughness;
   let unsupportedAnisotropy = material.specularAnisotropy > 0.0 &&
     (material.transmissionWeight > 0.0 || material.coatWeight > 0.0);
   // Surface data can be inspected even when complete temporal/RR inputs have
   // not been validated. Do not silently reinterpret these material layers.
   if ((material.materialType != STANDARD) | (material.alpha < 1.0) |
-      (${unsupportedCoatReflectanceWgsl(hasCoatNormals)}) | (material.fuzzWeight > 0.0) |
+      (${unsupportedCoatReflectanceWgsl}) | (material.fuzzWeight > 0.0) |
       unsupportedAnisotropy | (material.subsurfaceWeight > 0.0) |
       (dot(material.mediumScattering, material.mediumScattering) > 0.0) |
       (material.bevel > 0.0) | (material.thinFilmWeight > 0.0) |
@@ -165,11 +166,20 @@ fn mtFrameSurface(si: SurfaceInteraction, material: OpenPbrResolvedMaterial, ray
     // modify the production material or add draws to its random stream.
     resolved.inside = (cosine <= 0.0) & !material.thinWalled;
     resolved.relativeIor = select(material.specularIor, 1.0 / material.specularIor, cosine > 0.0);
-${hasAnisotropyDirections || hasCoatNormals ? /* wgsl */ `    resolved.directionTangent = si.directionTangent;
+${hasCoatNormals ? /* wgsl */ `    if (material.coatNormalEnabled) {
+      let view = -ray.d;
+      let geometricView = dot(si.faceNormal, view);
+      resolved.geometricNormal = select(-si.faceNormal, si.faceNormal, geometricView >= 0.0);
+      guideNormal = coat_frame_normal(si.normal, si.faceNormal, view);
+      resolved.coatNormal = coat_frame_normal(si.coatNormal, si.faceNormal, view);
+      resolved.inside = (geometricView <= 0.0) & !material.thinWalled;
+      resolved.relativeIor = select(material.specularIor, 1.0/material.specularIor, (geometricView > 0.0) | material.thinWalled);
+    }
+` : ''}${hasAnisotropyDirections || hasCoatNormals ? /* wgsl */ `    resolved.directionTangent = si.directionTangent;
     resolved.directionBitangent = si.directionBitangent;
     resolved.geometryTangent = si.geometryTangent;
     resolved.geometryBitangent = si.geometryBitangent;
-` : ''}    let prepared = openpbr_prepare(si.tangent, resolved, -ray.d, oriented);
+` : ''}    let prepared = openpbr_prepare(si.tangent, resolved, -ray.d, guideNormal);
     let reflectance = mtFrameReflectance(prepared);
     mtFramePixels[mtFrameIndex].diffuseAlbedo = vec4f(reflectance.diffuse, 0.0);
     mtFramePixels[mtFrameIndex].specularAlbedo = vec4f(reflectance.specular + reflectance.coat, 0.0);
@@ -185,10 +195,16 @@ ${hasAnisotropyDirections || hasCoatNormals ? /* wgsl */ `    resolved.direction
       if (totalWeight > 1e-6) {
         guideRoughness = (baseWeight * guideRoughness + coatWeight * material.coatRoughness) / totalWeight;
       }
+${hasCoatNormals ? /* wgsl */ `      if (material.coatNormalEnabled) {
+        let baseEnergy = baseWeight + openpbr_luminance(reflectance.diffuse);
+        let weightedNormal = guideNormal * baseEnergy + resolved.coatNormal * coatWeight;
+        if (dot(weightedNormal, weightedNormal) > 1e-12) { guideNormal = normalize(weightedNormal); }
+      }
+` : ''}
     }
     flags |= 128u;
   }
-  mtFramePixels[mtFrameIndex].normalRoughness = vec4f(oriented, guideRoughness);
+  mtFramePixels[mtFrameIndex].normalRoughness = vec4f(guideNormal, guideRoughness);
   mtFramePixels[mtFrameIndex].positionDepth = vec4f(si.position, depth);
   // Keep the original geometric normal, not the face-forward shading normal.
   mtFramePixels[mtFrameIndex].geometricNormal = vec4f(si.faceNormal, 0.0);

@@ -12,7 +12,8 @@ pub enum Guide {
     /// Linear HDR radiance, alpha 1, before display exposure.
     NoisyColor,
     /// Oriented world shading normal xyz and perceptual specular roughness w.
-    /// Supported clearcoat weights the base and coat roughness by their reflectance.
+    /// Clearcoat and base specular reflectance weight the roughness. With
+    /// independent coat and base normals, their total reflectances weight the normal.
     NormalRoughness,
     /// Directional diffuse reflectance RGB; validity is in the validity texture.
     DiffuseAlbedo,

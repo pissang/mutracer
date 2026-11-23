@@ -2,6 +2,7 @@
 // http://www.pbr-book.org/3ed-2018/Light_Transport_I_Surface_Reflection/Direct_Lighting.html#EstimatingtheDirectLightingIntegral
 
 import { glsl } from '../../shader.js';
+import coatFrame from './coatFrame.glsl.js';
 export function createSampleMaterialGlsl(fragments: Readonly<Record<string, string>> = {}, channelIndependentLight = false) { return glsl`
 float emissiveHitMisWeight(SurfaceInteraction si,Path path) {
   // Secondary intersections remain two-sided, but one-sided emission does not.
@@ -118,7 +119,7 @@ ${fragments['sample1'] ?? ''}  return misWeight > 0.0
     : vec3(0.0);
 }
 
-void SampleMaterial(inout SurfaceInteraction si, OpenPbrResolvedMaterial mat, inout Path path) {
+${coatFrame}void SampleMaterial(inout SurfaceInteraction si, OpenPbrResolvedMaterial mat, inout Path path) {
   vec3 matRnd = vec3(sample2D(bounceDim(BSDF_DIRECTION)), sample1D(bounceDim(BSDF_LOBE)));
 #ifdef USE_COAT_NORMAL_FRAMES
   vec3 originalFace = si.faceNormal;

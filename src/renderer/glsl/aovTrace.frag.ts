@@ -1,4 +1,5 @@
 import bsdf from './chunks/openPbrBsdf.glsl.js';
+import coatFrame from './chunks/coatFrame.glsl.js';
 import sampling from './chunks/sampling.glsl.js';
 import reflectance from './aovReflectance.glsl.js';
 import {FragmentShader, Shader} from '../shader.js';
@@ -50,7 +51,7 @@ ${uvProjection}
 ${materials.main}
 ${intersect.main}
 ${cameraRay}
-${center ? '' : sampling+bsdf+reflectance}
+${center ? '' : sampling+bsdf+coatFrame+reflectance}
 ${surface}
 void main() {
   ${center ? /* glsl */ `

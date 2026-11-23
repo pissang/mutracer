@@ -6,7 +6,7 @@ export function createAovTraceWgsl(materialHooks: MaterialShaderHooks = {}, hasC
   // The native AOT caller omits the web clearcoat capability until its
   // temporal producer and coverage policy have been validated.
   const unsupportedCoat = hasCoatNormals === undefined ? 'material.coatWeight > 0.0'
-    : unsupportedCoatReflectanceWgsl(false);
+    : unsupportedCoatReflectanceWgsl;
   const unsupportedAnisotropy = hasCoatNormals === undefined ? 'material.specularAnisotropy > 0.0'
     : 'material.specularAnisotropy > 0.0 && (material.transmissionWeight > 0.0 || material.coatWeight > 0.0)';
   return /* wgsl */ `

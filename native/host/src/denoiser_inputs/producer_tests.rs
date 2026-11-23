@@ -140,6 +140,79 @@ pub(super) use crate::test_support::read_texture;
 
 #[test]
 #[ignore = "requires real GPU"]
+fn mapped_clearcoat_uses_its_own_normal_and_reflectance_guide() {
+    let _lock = crate::abi_test_lock();
+    let Some(gpu) = test_gpu(if cfg!(target_os = "macos") {
+        wgpu::Backends::METAL
+    } else {
+        wgpu::Backends::VULKAN
+    }) else {
+        return;
+    };
+    let mut input = plane(false, true, true);
+    let material = offset(&input, layout::header::MATERIAL_OFFSET);
+    let properties = input.len() / 4;
+    // Keep only the coating lobe, with the texture bound to the coating frame.
+    for property in [[1u32, 0, 0, 0], [5, 0, 0, 0], [74, 0, 0, 0]] {
+        input.extend(property.into_iter().flat_map(u32::to_le_bytes));
+    }
+    let words = input.len() as u32 / 4;
+    for (word, value) in [
+        (layout::header::LENGTH, words),
+        (material + layout::material::EXTENSION_OFFSET, properties as u32),
+        (material + layout::material::EXTENSION_COUNT, 3),
+        (material + layout::material::NORMAL_MAP, u32::MAX),
+        (material + layout::material::COAT_WEIGHT, 1.0f32.to_bits()),
+        (material + layout::material::COAT_ROUGHNESS, 0.1f32.to_bits()),
+    ] {
+        set(&mut input, word, value);
+    }
+    let (description, assets) =
+        scene::prepare_frame_inputs(&input, &settings::RenderSettings::default()).unwrap();
+    let source = String::from_utf8(
+        assets[&AssetId::Packet(layout::resource::SOFTWARE_FRAME_SHADER)].clone(),
+    )
+    .unwrap();
+    let camera = &assets[&AssetId::Packet(layout::resource::CAMERA)];
+    let trace = &assets[&AssetId::Packet(layout::resource::TRACE_UNIFORM)];
+    let (scene, _) =
+        GpuScene::new(description, &RenderOptions::default(), &assets, gpu.clone()).unwrap();
+    let producer = FrameProducer::new(&scene, source).unwrap();
+    let mut metadata = super::tests::metadata();
+    metadata.camera = camera_metadata(camera, true);
+    let mut history = GpuFrameHistory::new(gpu.frame_device, metadata.input_extent);
+    let (frame, _) = producer
+        .produce(
+            &scene,
+            &mut history,
+            metadata,
+            GeometrySnapshot::default(),
+            camera,
+            trace,
+        )
+        .unwrap();
+    let read = |kind| read_texture(&gpu, &frame.current.resources.guide(kind).unwrap().texture);
+    let normals = values(&read(Guide::NormalRoughness));
+    let specular = values(&read(Guide::SpecularAlbedo));
+    let mut hits = 0;
+    for (i, pixel) in read(Guide::Validity).chunks_exact(4).enumerate() {
+        let bits = u32::from_le_bytes(pixel.try_into().unwrap());
+        if bits & validity::PRIMARY_HIT == 0 {
+            continue;
+        }
+        hits += 1;
+        assert_eq!(bits & validity::UNSUPPORTED_SURFACE, 0);
+        assert_ne!(bits & validity::REFLECTANCE, 0);
+        let normal = &normals[4 * i..4 * i + 4];
+        assert!(normal[0].abs() > 0.3 && normal[2] > 0.7, "{normal:?}");
+        assert!((normal[3] - 0.1).abs() < 1e-6, "{normal:?}");
+        assert!(specular[4 * i] > 0.02, "{}", specular[4 * i]);
+    }
+    assert!(hits >= 8, "Only {hits} hits");
+}
+
+#[test]
+#[ignore = "requires real GPU"]
 fn multisample_temporal_frame_means_independent_samples_at_shared_jitter() {
     let _lock = crate::abi_test_lock();
     let Some(gpu) = test_gpu(if cfg!(target_os = "macos") {
