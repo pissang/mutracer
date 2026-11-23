@@ -131,7 +131,11 @@ fn rawColor(uv: vec2i) -> vec3f {
 fn load_flatBackgroundMaskTex(uv: vec2i, level: i32) -> vec4f { return albedos[indexOf(uv)] / params.originalSamples; }
 fn load_shadowCatcherTex(uv: vec2i, level: i32) -> vec4f {
   if (params.scene.x == 0u) { return vec4f(0.0); }
-  return shadows[indexOf(uv)].mask / params.originalSamples;
+  let shadow = shadows[indexOf(uv)];
+  let total = params.originalSamples;
+  let coverage = shadow.mask.r / total;
+  let opacity = select(0.0, shadow.moments.z / max(shadow.moments.w, 0.000001), shadow.moments.w > 0.0);
+  return vec4f(shadow.mask.rgb / total, coverage * opacity);
 }
 fn correctLayer(value: vec4f, uv: vec2i, background: bool) -> vec4f {
   if (params.scene.y == 0u) { return value; }

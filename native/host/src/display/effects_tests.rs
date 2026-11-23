@@ -127,15 +127,15 @@ fn display_effects_vignette_and_disjoint_catcher_layers_match_reference() {
                 32. * c,
                 32. * bg,
                 if opaque { 32. * c } else { 0. },
-                32. * c * shadow,
+                0.,
                 32. * bg * backdrop[0],
                 32. * bg * backdrop[1],
                 32. * bg * backdrop[2],
                 32. * bg,
                 0.,
                 0.,
-                0.,
-                0.,
+                32. * c * shadow,
+                32. * c,
             ];
             let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
                 label: None,

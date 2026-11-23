@@ -58,15 +58,15 @@ fn display_parity_matrix() {
                     if catcher { 16. } else { 0. },
                     0.,
                     0.,
-                    if catcher { 8. } else { 0. },
+                    0.,
                     0.,
                     0.,
                     0.,
                     0.,
                     l * 32.,
                     (l * l + 10.) * 32.,
-                    0.,
-                    0.,
+                    if catcher { 8. } else { 0. },
+                    if catcher { 16. } else { 0. },
                 ]
             })
             .collect();
