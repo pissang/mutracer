@@ -279,6 +279,14 @@ fn render_offline_sequence() {
                 engine.display().encode_png(&render).unwrap(),
             )
             .unwrap();
+            if spp > 32 {
+                let hdr = render.read_pixels(crate::api::PixelKind::Hdr).unwrap();
+                std::fs::write(
+                    output.join(format!("frame_{i:04}.f32")),
+                    bytemuck::cast_slice(&hdr.data),
+                )
+                .unwrap();
+            }
             if [1, 18, 24, 30].contains(&i) && spp == 32 {
                 let motion = render.read_pixels(crate::api::PixelKind::Motion).unwrap();
                 std::fs::write(
