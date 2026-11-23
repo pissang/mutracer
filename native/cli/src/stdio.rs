@@ -46,6 +46,7 @@ struct Overrides {
     size: Option<[u32; 2]>,
     spp: Option<u32>,
     denoise: Option<Denoise>,
+    temporal: Option<crate::temporal::Config>,
     seed: Option<Seed>,
     seed_value: Option<u32>,
     sample_sequence_offset: Option<u32>,
@@ -66,6 +67,12 @@ struct Edit {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
 enum Request {
+    Flush {
+        id: u32,
+    },
+    Cut {
+        id: u32,
+    },
     Hello {
         id: u32,
         protocol: u32,
@@ -199,10 +206,48 @@ enum Scene {
 #[derive(Default)]
 struct Session {
     hello: bool,
+    temporal: Option<Stream>,
+    fallback_reported: bool,
     scene: Option<Scene>,
     renderer: Option<(Settings, Renderer)>,
     registered: BTreeMap<String, PathBuf>,
     directory: Option<tempfile::TempDir>,
+}
+
+struct Stream {
+    filter: mutracer_native::api::TemporalDenoiser,
+    config: crate::temporal::Config,
+    settings: Settings,
+    last: u32,
+    flushing: bool,
+}
+fn temporal_reply(
+    writer: &mut impl Write,
+    id: u32,
+    frame: Option<mutracer_native::api::OfflineFrame>,
+    format: Format,
+    done: bool,
+    latency: u32,
+) -> Result<()> {
+    if let Some(frame) = frame {
+        let bytes = crate::temporal::encode(&frame, format)?;
+        if bytes.len() > MAX_PAYLOAD {
+            return Err(Error::budget(
+                "Temporal frame exceeds the stdio payload limit",
+            ));
+        }
+        reply(
+            writer,
+            json!({"type":"frames","id":id,"done":done,"latency":latency,"frames":[{"frame":frame.index,"offset":0,"bytes":bytes.len(),"format":format}],"bytes":bytes.len()}),
+            Some(&bytes),
+        )
+    } else {
+        reply(
+            writer,
+            json!({"type":"frames","id":id,"frames":[],"latency":latency,"done":done}),
+            None,
+        )
+    }
 }
 
 fn editable(pointer: &str) -> bool {
@@ -262,6 +307,31 @@ impl Session {
         }
         let check_only = matches!(request, Request::Check { .. });
         match request {
+            Request::Cut { id } => {
+                let stream = self
+                    .temporal
+                    .as_mut()
+                    .ok_or_else(|| invalid("/type", "Start a temporal render before cutting"))?;
+                if stream.flushing {
+                    return Err(invalid("/type", "Finish flushing the current stream"));
+                }
+                stream.filter.cut();
+                reply(writer, json!({"type":"ok","id":id}), None)
+            }
+            Request::Flush { id } => {
+                let Some(stream) = self.temporal.as_mut() else {
+                    return temporal_reply(writer, id, None, Format::Png, true, 0);
+                };
+                stream.flushing = true;
+                let latency = stream.filter.latency();
+                let frame = stream.filter.flush().map_err(crate::temporal::gpu)?;
+                let done = frame.is_none();
+                let format = stream.settings.format;
+                if done {
+                    self.temporal = None;
+                }
+                temporal_reply(writer, id, frame, format, done, latency)
+            }
             Request::Hello { id, protocol } => {
                 if protocol != 1 || self.hello {
                     return Err(invalid(
@@ -273,7 +343,7 @@ impl Session {
                 reply(
                     writer,
                     json!({"type":"ok","id":id,"protocol":1,"shotVersion":1,"descriptorVersions":[8],
-                    "capabilities":["shot-json","descriptor-v8","asset-path","asset-bytes","shot-edit","png","oidn","image-decode","exr","render-settings","display-settings","frame-sample-sequence","check-settings","oidn-clean-aux-large","structured-warnings"],
+                    "capabilities":["shot-json","descriptor-v8","asset-path","asset-bytes","shot-edit","png","oidn","image-decode","exr","render-settings","display-settings","frame-sample-sequence","check-settings","oidn-clean-aux-large","structured-warnings","temporal-offline"],
                     "maxHeaderBytes":MAX_HEADER,"maxPayloadBytes":MAX_PAYLOAD,"build":env!("MUTRACER_CLI_BUILD_ID")}),
                     None,
                 )
@@ -349,6 +419,12 @@ impl Session {
                     (&self.scene, &scene),
                     (Some(Scene::Descriptor(_)), Scene::Descriptor(_))
                 ) {
+                    if self.temporal.is_some() {
+                        return Err(invalid(
+                            "/type",
+                            "Flush the temporal stream before replacing this scene",
+                        ));
+                    }
                     // Avoid carrying a shot camera override into a descriptor.
                     self.renderer = None;
                 }
@@ -534,6 +610,24 @@ impl Session {
                 };
                 settings.validate(defaults.map_or(1., |o| o.duration), "/settings")?;
                 settings.offset(frame, "/settings")?;
+                let config = overrides
+                    .temporal
+                    .or_else(|| defaults.map(|o| o.temporal.clone()))
+                    .unwrap_or_default();
+                config.validate("/settings/temporal", defaults.map(|o| o.duration), fps)?;
+                if !check_only
+                    && self.temporal.as_ref().is_some_and(|s| {
+                        s.flushing
+                            || s.settings != settings
+                            || s.config != config
+                            || s.last.checked_add(1) != Some(frame)
+                    })
+                {
+                    return Err(invalid(
+                        "/frame",
+                        "Submit consecutive frames with the same settings or finish flushing first",
+                    ));
+                }
                 let display = overrides
                     .display
                     .map(|display| {
@@ -557,6 +651,15 @@ impl Session {
                             request_warnings.push(warning);
                         }
                     }
+                }
+                if let Some(warning) =
+                    crate::temporal::fallback(settings.denoise, "/settings/denoise")
+                {
+                    if !self.fallback_reported {
+                        reply_warning(writer, id, frame, settings.spp, &warning)?;
+                        self.fallback_reported = true;
+                    }
+                    request_warnings.push(warning);
                 }
                 if check_only {
                     let weights =
@@ -582,9 +685,9 @@ impl Session {
                     json!({"type":"progress","id":id,"frame":frame,"samples":0,"targetSamples":settings.spp}),
                     None,
                 )?;
-                let image = match scene {
+                match scene {
                     Scene::Shot { input, .. } => {
-                        renderer.shot_frame_with_display(input, settings, frame, t, display)?
+                        renderer.prepare_shot(input, settings, t, display)?
                     }
                     Scene::Descriptor(bytes) => {
                         renderer
@@ -600,8 +703,31 @@ impl Session {
                             .engine
                             .update()
                             .map_err(|e| Error::gpu(e.to_string()))?;
-                        renderer.capture(settings, frame)?
                     }
+                };
+                let image = if settings.denoise == Denoise::Temporal {
+                    renderer.converge(settings, frame)?;
+                    if self.temporal.is_none() {
+                        self.temporal = Some(Stream {
+                            filter: config.start(&renderer.engine)?,
+                            config: config.clone(),
+                            settings,
+                            last: frame,
+                            flushing: false,
+                        });
+                    }
+                    let stream = self.temporal.as_mut().unwrap();
+                    if config.cuts_at(frame, fps) {
+                        stream.filter.cut();
+                    }
+                    stream
+                        .filter
+                        .push(frame, &renderer.render)
+                        .map_err(crate::temporal::gpu)?;
+                    stream.last = frame;
+                    None
+                } else {
+                    Some(renderer.capture(settings, frame)?)
                 };
                 let render_warnings = renderer.graph_warnings(&graph_targets);
                 for warning in render_warnings {
@@ -610,6 +736,17 @@ impl Session {
                         request_warnings.push(warning);
                     }
                 }
+                let Some(image) = image else {
+                    let stream = self.temporal.as_mut().unwrap();
+                    return temporal_reply(
+                        writer,
+                        id,
+                        stream.filter.drain(),
+                        settings.format,
+                        false,
+                        stream.filter.latency(),
+                    );
+                };
                 reply(
                     writer,
                     json!({"type":"frame","id":id,"frame":frame,"format":settings.format,
@@ -677,6 +814,35 @@ pub fn serve() -> Result<()> {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn empty_temporal_flush_has_no_payload_prefix() {
+        let mut session = Session::default();
+        let mut out = Vec::new();
+        session
+            .handle(Request::Hello { id: 1, protocol: 1 }, vec![], &mut out)
+            .unwrap();
+        let hello: Value = serde_json::from_slice(&out).unwrap();
+        assert!(
+            hello["capabilities"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("temporal-offline"))
+        );
+        out.clear();
+        session
+            .handle(Request::Flush { id: 2 }, vec![], &mut out)
+            .unwrap();
+        let batch: Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(batch["frames"], json!([]));
+        assert_eq!(batch["done"], true);
+        assert!(batch.get("bytes").is_none());
+        assert!(
+            session
+                .handle(Request::Cut { id: 3 }, vec![], &mut out)
+                .is_err()
+        );
+    }
 
     #[test]
     fn follows_binary_payloads_with_another_header() {

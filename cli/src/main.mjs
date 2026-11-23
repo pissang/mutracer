@@ -93,7 +93,7 @@ function options(input, command, values) {
   const seed = values.seed ?? input.seed ?? 'fixed';
   if (!['fixed','frame'].includes(seed)) throw new Error('Use --seed fixed or frame.');
   const denoise = values.denoise ?? (preview ? 'none' : input.denoise ?? 'oidn');
-  if (!['oidn','cleanAuxLarge','none'].includes(denoise)) throw new Error('Use --denoise oidn, cleanAuxLarge or none.');
+  if (!['oidn','cleanAuxLarge','temporal','none'].includes(denoise)) throw new Error('Use --denoise oidn, cleanAuxLarge, temporal or none.');
   const tracer = values.tracer ?? input.tracer ?? 'hardware';
   if (!['hardware','software'].includes(tracer)) throw new Error('Use --tracer hardware or software.');
   const seedValue = number(input.seedValue ?? 12345, 'seedValue', 0, 0xffffffff);
@@ -119,13 +119,19 @@ function options(input, command, values) {
   if (sampleSequence !== undefined && !['fixed','frame'].includes(sampleSequence)) {
     throw new Error('Use sampleSequence fixed or frame.');
   }
+  if (denoise === 'temporal' && (preview || sampleSequence !== 'frame')) {
+    throw new Error('Temporal rendering requires stride 1 and output.sampleSequence set to frame.');
+  }
+  const temporal = input.temporal && {...input.temporal};
+  if (Array.isArray(temporal?.cuts)) temporal.cuts = temporal.cuts.map(cut =>
+    typeof cut?.time === 'number' && cut.time >= 0 && cut.time < duration ? Math.ceil(cut.time * fps) : cut);
   const format = values.format;
   if (format !== undefined && (command !== 'still' || !['png','exr'].includes(format))) {
     throw new Error('Use --format png or exr for a still.');
   }
   return {duration, fps, first, last, time, stride: preview ? 2 : 1,
     settings: {size:[w,h], spp, seed, denoise, seedValue, sampleSequenceOffset:offset, tracer,
-      sampleSequence, display: canonicalDisplay(display, command === 'validate'), format,
+      sampleSequence, ...(temporal && {temporal}), display: canonicalDisplay(display, command === 'validate'), format,
       render: values.bounces === undefined ? render : {...render, bounces:number(values.bounces, 'Bounces', 1, 20)}}};
 }
 
@@ -346,6 +352,13 @@ async function main() {
       }
     };
     const output = resolve(values.output);
+    if (command === 'still' && settings.denoise === 'temporal') {
+      for await (const result of worker.temporalFrames([{frame:indexA,t:time,descriptor:await frame(time,indexA)}],settings)) {
+        await atomic(output,result.bytes);
+        emit({event:'frame',frame:result.frame,path:output});
+      }
+      return;
+    }
     if (command === 'still') {
       const {header,bytes} = await render(await frame(time,indexA), indexA,time);
       await atomic(output,bytes);
@@ -367,7 +380,28 @@ async function main() {
       }
       await atomic(manifest,key + '\n');
     }
-    for (let index=first;index<=last;index+=stride) {
+    if (settings.denoise === 'temporal') {
+      // Submit the surrounding shot context even when only a subrange is exported.
+      const radius = settings.temporal?.historyRadius;
+      const latency = (typeof radius === 'number' ? radius : radius?.max ?? 16) + (settings.temporal?.postRadius ?? 3);
+      const begin = Math.max(0,first-latency-1), end = Math.min(Math.ceil(duration*fps)-1,last+latency);
+      const sources = new Map();
+      async function* inputs() {
+        for (let index=begin; index<=end; index++) {
+          const descriptor = await frame(index/fps,index);
+          if (index>=first && index<=last) sources.set(index,digest(descriptor));
+          yield {frame:index,t:index/fps,descriptor};
+        }
+      }
+      for await (const {frame:index,bytes} of worker.temporalFrames(inputs(),settings)) {
+        if (index<first || index>last) continue;
+        const path = resolve(directory,`frame_${String(index).padStart(6,'0')}.png`);
+        await atomic(path,bytes);
+        await atomic(path+'.json',JSON.stringify({source:sources.get(index),png:digest(bytes)}));
+        sources.delete(index);
+        emit({event:'frame',frame:index,t:index/fps,path,samples:settings.spp});
+      }
+    } else for (let index=first;index<=last;index+=stride) {
       const t = index / fps;
       const descriptor = await frame(t,index);
       const source = digest(descriptor);
