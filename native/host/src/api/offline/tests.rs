@@ -214,7 +214,7 @@ fn render_offline_sequence() {
         .unwrap();
     if control.is_some() && spp == 32 {
         render
-            .set_denoiser(Some(crate::api::DenoiserOptions {
+            .set_viewer_denoiser(Some(crate::api::DenoiserOptions {
                 backend: crate::api::DENOISE_OIDN_WEBGPU,
                 library: Some(weights.clone()),
                 max_tile_size: 432,
