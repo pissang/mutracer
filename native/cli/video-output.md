@@ -3,7 +3,8 @@
 Write linear OpenEXR RGBA32F frames with `--format exr`. With OIDN enabled,
 these contain denoised HDR before exposure and tone mapping. A video render
 also saves display PNGs and uses them for MP4 encoding. Use an `.exr` output
-path for an HDR still.
+path for an HDR still. `mutracer-js still` also accepts `--format exr`.
+Select `denoise: "none"` to compare raw samples against a browser capture.
 
 ```sh
 mutracer render shot.json -o shot.mp4 --format exr --aovs

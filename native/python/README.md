@@ -8,12 +8,13 @@ Author native video shots on Python 3.10 or newer. Set `MUTRACER_BIN` to the
 from mutracer import Camera, Keys, Light, Mesh, Output, Shot
 
 shot = Shot(
-    Output(duration=1, fps=24),
+    Output(duration=1, fps=24, render={"bounces": 6},
+           display={"toneMappingExposure": 1.2}, sample_sequence="frame"),
     [Mesh("subject", shape="sphere", material={
         "metalness": 0.9,
         "roughness": Keys(((0, 0.15), (1, 0.55)), ease="inOutSine"),
     })],
-    Camera.orbit("subject", azimuth=25, elevation=10),
+    Camera.orbit("subject", azimuth=25, elevation=10, f_stop=4, focus_distance="subject"),
     lights=[Light("rect", [2, 2, 2], "subject", size=[1, 1], intensity=12)],
 )
 shot.save("shot.json")
@@ -26,7 +27,10 @@ Call `Keys.bake(duration, fps, sample)` for motion described by a function of
 time. It samples each frame and the endpoint and writes the resulting track
 to the shot. Install the optional `numpy` extra to write mesh and instance
 arrays through `Mesh.from_numpy` and `Instances.from_numpy`. These methods
-write little-endian binary sidecars.
+write little-endian binary sidecars. Use the camelCase
+[shot fields](../cli/schema/shot.md) in material, render and display
+dictionaries. The `Camera` constructor and `Camera.orbit()` also accept
+`sensor_height` in millimetres. Lens scalars accept `Keys`.
 
 Pass `progress=callback` to receive each decoded JSON progress event. A failed
 command raises `RenderError` with the CLI exit code and stderr. See the
@@ -45,7 +49,10 @@ def turn(time, frame):
 shot.render_stream("output.mp4", turn, size=[1280, 720], spp=32)
 ```
 
-The callback receives seconds and a zero-based frame index. Reusing a frame
+The callback receives seconds and a zero-based frame index. Stream keyword
+arguments follow the [stdio settings](../cli/schema/stdio.md), for example
+`render={"bounces": 8}` and `sampleSequence="frame"`. Use `Session.check()`
+to validate these settings without rendering. Reusing a frame
 requires the same callback values, input files and render settings. The
 callback runs for reused frames so changes can carry forward.
 
@@ -61,8 +68,9 @@ mutracer validate shot.json
 ```
 
 The importer writes a shot and binary mesh sidecars. It supports polygon
-meshes, UVs, sampled transforms, perspective cameras, UsdLux emitters,
-PreviewSurface constants and local MaterialX source assets. It converts Y-up
+meshes, UVs, sampled transforms, perspective cameras with lens settings,
+UsdLux emitters, OpenPBR and PreviewSurface constants, and local MaterialX
+source assets. It converts Y-up
 or Z-up coordinates using the authored `metersPerUnit` and samples animated
 properties in the stage's authored time range. Tessellate subdivision meshes
 and split material subsets before import. Animated vertex buffers, shear,

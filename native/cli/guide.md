@@ -1,9 +1,8 @@
 # Render a shot with MuTracer
 
-Create a v1 shot JSON with output duration, objects and a camera. Use metres,
-degrees and seconds in a right-handed, Y-up world. Camera and light directions
-follow local −Z. RGB values are linear. Get a machine-readable description with
-`mutracer schema`.
+Create a v1 shot JSON with output duration, objects, lights and a camera.
+Use metres, degrees, seconds and linear RGB in a right-handed, Y-up world.
+Run `mutracer schema` for fields, defaults and ranges.
 
 ```sh
 mutracer validate shot.json
@@ -27,7 +26,8 @@ and CLI defaults. Run `mutracer schema` for shot defaults and field limits.
 - Studio lights. Use a large rect above and to the side for the key, a larger
   disk with lower intensity for fill, and a narrow cylinder behind the object
   for a rim. Aim lights with object-name targets.
-
+- Focus pull. Keyframe `camera.focusDistance` or use an object name to follow
+  its bounds. Choose a positive `camera.fStop` to see depth of field.
 - glTF clip. Set a glTF object's `animation.clip` to its name and keyframe
   `animation.time` in seconds. See `gltf-animation.json` for a procedural
   asset that ships in the CLI.
@@ -36,6 +36,10 @@ and CLI defaults. Run `mutracer schema` for shot defaults and field limits.
 
 Start with the `turntable.json` and `material-sweep.json` examples. Use
 glTF/GLB or binary sidecars for meshes that exceed the inline geometry limits.
+
+For a procedural scene, use the [Node frontend](../../cli/README.md) or the
+[Python API](../python/README.md). They accept the same render and display
+settings as [shot JSON](schema/shot.md#output-and-animation).
 
 ## Cost, progress and resume
 
@@ -59,13 +63,10 @@ timeout. The CLI automatically retries GPU failures. Use `--keep-frames` or
 change the output path to start a separate render after editing the shot,
 assets or settings.
 
-The same shot, assets and settings render identical frames, with one
-exception: on Apple GPUs, hardware ray queries occasionally miss a whole
-sample without reporting an error, which changes a single frame. This happens
-mostly when other work shares the GPU. Use `--tracer software` (or
-`"tracer": "software"` in `output`) when every frame must match exactly;
-software traversal can be slower on large scenes. Frames rendered with different tracers are
-separate results and are not reused.
+Use `--tracer software` when repeatable frames matter. Apple hardware ray
+queries occasionally miss a complete sample, especially while other work
+uses the GPU. Software traversal can be slower on large scenes. Changing
+the tracer requires a separate frame directory.
 
 The CLI renders with the native GPU driver. macOS and Windows use their system encoders.
 On Linux the CLI uses ffmpeg when available and leaves the PNG sequence
