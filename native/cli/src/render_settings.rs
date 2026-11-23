@@ -47,6 +47,12 @@ enum AlphaBlend {
 }
 
 impl RenderOptions {
+    pub fn has_caustic_transport(self) -> bool {
+        self.caustics.is_some_and(|caustics| {
+            caustics.light_tracing.unwrap_or(false) || caustics.photon_mapping.unwrap_or(false)
+        })
+    }
+
     pub fn sampling_warning(self) -> Option<&'static str> {
         (self.sampling_pattern == Some(Sampling::Random)).then_some(
             "Native random sampling can render substantially darker than WebGPU. Use samplingPattern: \"sobol\" for comparable brightness.",

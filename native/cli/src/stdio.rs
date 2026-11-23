@@ -4,11 +4,12 @@ use crate::{
     render_settings::{self, RenderOptions, SampleSequence},
     run::{Format, Input, Renderer, Settings},
     shot::{self, Denoise, Seed, Tracer},
+    warnings::{self, Warning},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     io::{self, BufRead, Read, Write},
     path::{Path, PathBuf},
     sync::{Arc, mpsc},
@@ -173,6 +174,21 @@ fn reply(writer: &mut impl Write, header: Value, bytes: Option<&[u8]>) -> Result
         writer.flush()
     })();
     send.map_err(|e: io::Error| invalid("", format!("Cannot write protocol reply: {e}")))
+}
+
+fn reply_warning(
+    writer: &mut impl Write,
+    id: u32,
+    frame: u32,
+    target_samples: u32,
+    warning: &Warning,
+) -> Result<()> {
+    reply(
+        writer,
+        json!({"type":"progress","id":id,"frame":frame,"samples":0,
+            "targetSamples":target_samples,"warning":warning}),
+        None,
+    )
 }
 
 enum Scene {
@@ -528,20 +544,26 @@ impl Session {
                         Ok(display.at(t))
                     })
                     .transpose()?;
-                if let Some(warning) = settings.render.sampling_warning() {
-                    reply(
-                        writer,
-                        json!({"type":"progress","id":id,"frame":frame,"samples":0,
-                            "targetSamples":settings.spp,"warning":warning}),
-                        None,
-                    )?;
+                let graph_targets = match scene {
+                    Scene::Shot { input, .. } => input.prepared.material_graph_targets(&input.shot),
+                    Scene::Descriptor(bytes) => warnings::descriptor_material_graph_targets(bytes),
+                };
+                let mut seen_warnings = HashSet::new();
+                let mut request_warnings = Vec::new();
+                if warnings::caustics_enabled(settings.render) {
+                    for warning in warnings::predicted_caustic_graph_warnings(&graph_targets) {
+                        if seen_warnings.insert(warning.clone()) {
+                            reply_warning(writer, id, frame, settings.spp, &warning)?;
+                            request_warnings.push(warning);
+                        }
+                    }
                 }
                 if check_only {
                     let weights =
                         render_settings::denoiser_identity(settings.denoise, "/settings/denoise")?;
                     return reply(
                         writer,
-                        json!({"type":"ok","id":id,"denoiserWeights":weights}),
+                        json!({"type":"ok","id":id,"denoiserWeights":weights,"warnings":request_warnings}),
                         None,
                     );
                 }
@@ -581,6 +603,13 @@ impl Session {
                         renderer.capture(settings, frame)?
                     }
                 };
+                let render_warnings = renderer.graph_warnings(&graph_targets);
+                for warning in render_warnings {
+                    if seen_warnings.insert(warning.clone()) {
+                        reply_warning(writer, id, frame, settings.spp, &warning)?;
+                        request_warnings.push(warning);
+                    }
+                }
                 reply(
                     writer,
                     json!({"type":"frame","id":id,"frame":frame,"format":settings.format,

@@ -78,6 +78,14 @@ pub struct Prepared {
     ambient: Option<sdk::TextureId>,
 }
 
+#[derive(Clone, Debug)]
+pub struct MaterialGraphTarget {
+    pub material_id: u32,
+    pub object_name: String,
+    pub material_name: String,
+    pub pointer: String,
+}
+
 fn validation(pointer: &str, e: api::Error) -> Error {
     Error::validation(
         pointer,
@@ -103,6 +111,49 @@ fn look_at(eye: Vec3, target: Vec3, at: &str) -> Result<Mat4> {
 }
 
 impl Prepared {
+    pub fn material_graph_targets(&self, shot: &shot::Shot) -> Vec<MaterialGraphTarget> {
+        let mut targets = Vec::new();
+        for (index, object) in self.objects.iter().enumerate() {
+            let Some(authored) = shot.objects.get(index) else {
+                continue;
+            };
+            let mut seen = std::collections::BTreeSet::new();
+            for (mesh_id, _) in &object.meshes {
+                let Ok(mesh) = self.scene.mesh(*mesh_id) else {
+                    continue;
+                };
+                for material_id in
+                    std::iter::once(mesh.material).chain(mesh.materials.iter().copied())
+                {
+                    if !seen.insert(material_id.aov_id()) {
+                        continue;
+                    }
+                    let Ok(material) = self.scene.material(material_id) else {
+                        continue;
+                    };
+                    if material.graph.is_none() {
+                        continue;
+                    }
+                    targets.push(MaterialGraphTarget {
+                        material_id: material_id.aov_id(),
+                        object_name: authored.name.clone(),
+                        material_name: if material.values.name.is_empty() {
+                            authored.name.clone()
+                        } else {
+                            material.values.name.clone()
+                        },
+                        pointer: if authored.material.is_some() {
+                            format!("/objects/{index}/material")
+                        } else {
+                            format!("/objects/{index}/asset")
+                        },
+                    });
+                }
+            }
+        }
+        targets
+    }
+
     pub fn new(shot: &shot::Shot, assets: &mut Assets) -> Result<Self> {
         let mut prepared = Self {
             scene: sdk::Scene::new(),

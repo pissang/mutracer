@@ -133,7 +133,15 @@ export class Worker {
         const response = JSON.parse((await this.reader.line()).toString());
         if (response.id !== id) throw new NativeError('Worker response ID differs from the request.');
         if (response.type === 'progress') {
-          if (response.warning && !this.#warnings.has(response.warning)) {
+          if (response.warning && typeof response.warning === 'object') {
+            const key = JSON.stringify(response.warning);
+            if (!this.#warnings.has(key)) {
+              this.#warnings.add(key);
+              this.onWarning?.(response.warning);
+              const location = response.warning.pointer ? `${response.warning.pointer}: ` : '';
+              console.error(`Warning ${location}${response.warning.message} ${response.warning.hint}`.trim());
+            }
+          } else if (response.warning && !this.#warnings.has(response.warning)) {
             this.#warnings.add(response.warning);
             console.error(`Warning: ${response.warning}`);
           }

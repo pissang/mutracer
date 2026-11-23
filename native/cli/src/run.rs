@@ -4,14 +4,16 @@ use crate::{
     error::{Error, Result},
     lifetime, progress, quality,
     render_settings::{self, RenderOptions, SampleSequence},
-    scene::Prepared,
+    scene::{MaterialGraphTarget, Prepared},
     shot::{self, Denoise, Seed, Shot, Tracer},
+    warnings::{self, Warning},
 };
 use clap::{Args, ValueEnum};
 use mutracer_native::api;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
+    collections::HashSet,
     ffi::OsString,
     fs::{self, File},
     io::{self, Read, Write},
@@ -348,6 +350,13 @@ pub fn validate(file: &Path) -> Result<()> {
         false,
     )?;
     warn_sampling(settings);
+    if warnings::caustics_enabled(settings.render) {
+        let targets = input.prepared.material_graph_targets(&input.shot);
+        warnings::emit_file(
+            warnings::predicted_caustic_graph_warnings(&targets),
+            &mut HashSet::new(),
+        );
+    }
     for (pointer, replacement) in &input.shot.deprecated_fields {
         eprintln!("Warning {pointer}: Deprecated field. {replacement}");
     }
@@ -489,6 +498,17 @@ impl Renderer {
         }
     }
 
+    pub(crate) fn graph_warnings(&self, targets: &[MaterialGraphTarget]) -> Vec<Warning> {
+        let diagnostics = self.engine.diagnostics();
+        let all = diagnostics
+            .renders
+            .into_iter()
+            .flat_map(|render| render.material_graphs)
+            .chain(diagnostics.material_graphs)
+            .collect::<Vec<_>>();
+        warnings::material_graph_warnings(&all, targets)
+    }
+
     fn png(&self) -> Result<Vec<u8>> {
         self.engine
             .display()
@@ -524,8 +544,17 @@ pub fn still(args: Still, worker: bool) -> Result<()> {
         ));
     }
     warn_sampling(settings);
+    let graph_targets = input.prepared.material_graph_targets(&input.shot);
+    let mut seen_warnings = HashSet::new();
+    if warnings::caustics_enabled(settings.render) {
+        warnings::emit_file(
+            warnings::predicted_caustic_graph_warnings(&graph_targets),
+            &mut seen_warnings,
+        );
+    }
     let mut renderer = Renderer::new(settings)?;
     let image = renderer.shot_frame(&mut input, settings, frame, args.t)?;
+    warnings::emit_file(renderer.graph_warnings(&graph_targets), &mut seen_warnings);
     let guide = settings
         .aovs
         .then(|| quality::capture_guide(&renderer.render))
@@ -682,6 +711,14 @@ pub fn sequence(args: Sequence, preview: bool, worker: bool) -> Result<()> {
     let indices: Vec<u32> = (first..=last).step_by(settings.stride as usize).collect();
     let files: Vec<_> = indices.iter().map(|&i| frame_path(&directory, i)).collect();
     let manifest = input.manifest(settings)?;
+    let graph_targets = input.prepared.material_graph_targets(&input.shot);
+    let mut seen_warnings = HashSet::new();
+    if warnings::caustics_enabled(settings.render) {
+        warnings::emit_file(
+            warnings::predicted_caustic_graph_warnings(&graph_targets),
+            &mut seen_warnings,
+        );
+    }
     if !worker {
         warn_sampling(settings);
     }
@@ -712,6 +749,7 @@ pub fn sequence(args: Sequence, preview: bool, worker: bool) -> Result<()> {
             let tick = Instant::now();
             let renderer = renderer.as_mut().unwrap();
             let image = renderer.shot_frame(&mut input, settings, frame, t)?;
+            warnings::emit_file(renderer.graph_warnings(&graph_targets), &mut seen_warnings);
             let write_guide = settings
                 .aovs
                 .then(|| quality::capture_guide(&renderer.render))

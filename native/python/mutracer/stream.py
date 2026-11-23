@@ -186,7 +186,7 @@ def render_frames(shot, base: Path, directory: Path, callback, settings, fps, pr
             identity = session.scene(shot, base)
             job = {"version": 1, "scene": identity, "fps": rate, "settings": settings}
             if "check-settings" in session.capabilities.get("capabilities", []):
-                checked = session.check(count - 1, (count - 1) / rate, settings=settings)
+                checked = session.check(count - 1, (count - 1) / rate, settings=settings, progress=emit)
                 if checked.get("denoiserWeights"):
                     job["denoiserWeights"] = checked["denoiserWeights"]
             if manifest.exists():
@@ -221,7 +221,7 @@ def render_frames(shot, base: Path, directory: Path, callback, settings, fps, pr
                         if pending:
                             session.edit(pending)
                         if not reusable:
-                            header, payload = session.render(frame, t, settings=settings)
+                            header, payload = session.render(frame, t, settings=settings, progress=emit)
                         break
                     except RenderError as error:
                         if error.returncode != 5 or attempt == 2:

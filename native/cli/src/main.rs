@@ -10,6 +10,7 @@ mod run;
 mod scene;
 mod shot;
 mod stdio;
+mod warnings;
 
 use clap::{Parser, Subcommand, error::ErrorKind};
 use error::Result;
@@ -113,7 +114,7 @@ enum Action {
     Guide,
 }
 
-fn progress(record: Value) {
+pub(crate) fn progress(record: Value) {
     let mut out = io::stdout().lock();
     let _ = writeln!(out, "{record}");
     let _ = out.flush();

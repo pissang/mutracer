@@ -13,6 +13,11 @@ import {strictConversion} from './strict.mjs';
 import {NativeError, Worker, nativeCommand} from './worker.mjs';
 
 const emit = record => process.stdout.write(JSON.stringify(record) + '\n');
+const openWorker = async () => {
+  const worker = await Worker.open();
+  worker.onWarning = warning => emit({event:'warning', ...warning});
+  return worker;
+};
 const digest = data => createHash('sha256').update(data).digest('hex');
 const hashJson = object => digest(JSON.stringify(object));
 const number = (value, label, min, max) => {
@@ -290,7 +295,7 @@ async function main() {
   if (values.output && !values.output.toLowerCase().endsWith('.' + extension)) {
     throw new Error(`Output must end in .${extension}.`);
   }
-  let worker = await Worker.open();
+  let worker = await openWorker();
   let release;
   let shot;
   try {
@@ -328,7 +333,7 @@ async function main() {
           if (!(error instanceof NativeError) || error.code !== 5 || attempt >= 2) throw error;
           emit({event:'retry',frame:index,attempt:attempt+1});
           await worker.close();
-          worker = await Worker.open();
+          worker = await openWorker();
         }
       }
     };
