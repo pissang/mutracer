@@ -94,6 +94,7 @@ fn frozen_offline_replay() {
                 index,
                 Capture {
                     raw: false,
+                    check_camera: j["frameSequence"].is_number(),
                     size,
                     samples: j["samples"].as_u64().unwrap() as u32,
                     camera,
@@ -114,6 +115,22 @@ fn frozen_offline_replay() {
 }
 fn save(output: &Path, frame: OfflineFrame) {
     let image = frame.read_pixels(false).unwrap();
+    if std::env::var("MUTRACER_TEMPORAL_DUMP")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        == Some(frame.index)
+    {
+        for (name, data) in [
+            ("denoised", image.data.clone()),
+            ("accumulated", frame.read_pixels(true).unwrap().data),
+        ] {
+            std::fs::write(
+                output.join(format!("{name}.f32")),
+                bytemuck::cast_slice(&data),
+            )
+            .unwrap();
+        }
+    }
     let mut rgb = Vec::with_capacity((image.width * image.height * 3) as usize);
     for p in image.data.chunks_exact(4) {
         for &v in &p[..3] {
@@ -152,20 +169,31 @@ fn render_offline_sequence() {
             Backend::Software
         });
     let dining = dir.join("descriptor.bin").is_file();
-    let (width, height) = if dining { (1280, 720) } else { (640, 368) };
+    let control = std::env::var("MUTRACER_TEMPORAL_CONTROL").ok();
+    let spp = control
+        .as_deref()
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(32);
+    let (width, height) = if std::env::var_os("MUTRACER_TEMPORAL_1080").is_some() {
+        (1920, 1080)
+    } else if dining || std::env::var_os("MUTRACER_TEMPORAL_720").is_some() {
+        (1280, 720)
+    } else {
+        (640, 368)
+    };
     let weights = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../oidn/weights/rt_hdr_calb_cnrm_large.tza");
     let mut denoiser = TemporalDenoiser::new(
         &engine,
         Default::default(),
-        TemporalSpatial::Oidn(Some(weights)),
+        TemporalSpatial::Oidn(Some(weights.clone())),
     )
     .unwrap();
     let render = Render::new(
         &engine,
         RenderSettings {
             size: RenderSize::Fixed { width, height },
-            max_samples: 32,
+            max_samples: spp,
             aovs: TemporalDenoiser::AOVS,
             bounces: if dining { 10 } else { 6 },
             caustics: CausticSettings {
@@ -184,12 +212,50 @@ fn render_offline_sequence() {
             ..Default::default()
         })
         .unwrap();
+    if control.is_some() && spp == 32 {
+        render
+            .set_denoiser(Some(crate::api::DenoiserOptions {
+                backend: crate::api::DENOISE_OIDN_WEBGPU,
+                library: Some(weights.clone()),
+                max_tile_size: 432,
+                ..Default::default()
+            }))
+            .unwrap();
+    }
+    // Reuse the exact samples and guides on both sides of the dining highlight comparison.
+    let mut highlight_control =
+        if dining && std::env::var_os("MUTRACER_TEMPORAL_HIGHLIGHT").is_some() {
+            Some(
+                TemporalDenoiser::new(
+                    &engine,
+                    TemporalOptions {
+                        stabilize_sparkle: false,
+                        ..Default::default()
+                    },
+                    TemporalSpatial::Oidn(Some(weights)),
+                )
+                .unwrap(),
+            )
+        } else {
+            None
+        };
+    let mut peak = 0;
     if dining {
         engine
             .set_scene(&std::fs::read(dir.join("descriptor.bin")).unwrap())
             .unwrap();
     }
     for i in if dining { 76..192 } else { 0..54 } {
+        if std::env::var("MUTRACER_TEMPORAL_LIMIT")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .is_some_and(|last: u32| i > last)
+        {
+            break;
+        }
+        if spp > 32 && !(18..44).contains(&i) {
+            continue;
+        }
         if dining {
             let bytes = std::fs::read(dir.join(format!("frame_{i:04}.camera"))).unwrap();
             engine
@@ -200,14 +266,54 @@ fn render_offline_sequence() {
             engine.set_scene(&bytes).unwrap();
         }
         engine.update().unwrap();
-        let mut options = ConvergeOptions::new(32);
-        options.sample_sequence_offset = i * 32;
+        let mut options = ConvergeOptions::new(spp);
+        options.sample_sequence_offset = if spp == 32 {
+            i * 32
+        } else {
+            (1 << 22) + i * 1024 + if spp == 256 { 1 << 22 } else { 0 }
+        };
         render.converge(options).unwrap();
+        if control.is_some() {
+            std::fs::write(
+                output.join(format!("frame_{i:04}.png")),
+                engine.display().encode_png(&render).unwrap(),
+            )
+            .unwrap();
+            if [1, 18, 24, 30].contains(&i) && spp == 32 {
+                let motion = render.read_pixels(crate::api::PixelKind::Motion).unwrap();
+                std::fs::write(
+                    output.join(format!("motion_{i:04}.f32")),
+                    bytemuck::cast_slice(&motion.data),
+                )
+                .unwrap();
+            }
+            continue;
+        }
+        if let Some(control) = &mut highlight_control {
+            if (130..=169).contains(&i) {
+                control.push(i, &render).unwrap();
+                while let Some(frame) = control.drain() {
+                    if frame.index == 150 {
+                        let path = output.join("sparkle-disabled");
+                        std::fs::create_dir_all(&path).unwrap();
+                        save(&path, frame);
+                    }
+                }
+            }
+        }
         denoiser.push(i, &render).unwrap();
+        #[cfg(target_os = "macos")]
+        {
+            use objc2_metal::MTLDevice;
+            let device =
+                unsafe { engine.inner.gpu.device.as_hal::<wgpu::hal::api::Metal>() }.unwrap();
+            peak = peak.max(device.raw_device().currentAllocatedSize());
+        }
         while let Some(f) = denoiser.drain() {
             save(&output, f);
         }
     }
+    println!("Metal peak sampled after push: {peak} bytes at {width}x{height}");
     while let Some(f) = denoiser.flush().unwrap() {
         save(&output, f);
     }

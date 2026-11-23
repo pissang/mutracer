@@ -146,7 +146,7 @@ impl Passes {
             });
             // Several shared post kernels keep optional statistics bindings even when
             // the entry point does not read them. Match the explicit browser layouts.
-            let explicit=post_layout(device,name);
+            let explicit = post_layout(device, name);
             let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some(name),
                 layout: explicit.as_ref(),
@@ -276,17 +276,7 @@ impl Passes {
         let [w, h] = self.size;
         let s = i % self.plan.slots();
         let g = i % (self.plan.max + 1);
-        let [
-            depth,
-            normal,
-            rough,
-            albedo,
-            color,
-            motion,
-            id,
-            guide_normal,
-            _,
-        ] = guides;
+        let [depth, normal, rough, albedo, color, motion, id, guide_normal, _] = guides;
         self.clear("overflow", u64::from(s) * 131072, 131072);
         self.image_pass(
             "capture",
@@ -507,19 +497,50 @@ impl std::ops::Index<&str> for Passes {
     }
 }
 
-fn post_layout(device:&wgpu::Device,name:&str)->Option<wgpu::PipelineLayout>{
-    use wgpu::BufferBindingType::{Uniform,Storage};
-    let buffer=|ty|wgpu::BindingType::Buffer{ty,has_dynamic_offset:false,min_binding_size:None};
-    let tex=|sample_type|wgpu::BindingType::Texture{sample_type,view_dimension:wgpu::TextureViewDimension::D2Array,multisampled:false};
-    let uniform=buffer(Uniform);let read=buffer(Storage{read_only:true});let write=buffer(Storage{read_only:false});
-    let float=tex(wgpu::TextureSampleType::Float{filterable:false});let ids=tex(wgpu::TextureSampleType::Uint);
-    let types=match name {
-        "reproject"=>vec![uniform,float,ids,read,write,write,float],
-        "match"=>vec![uniform,float,read,read,write],
-        "combine"=>vec![uniform,float,float,read,read,read,write,write,read,ids,read],
-        _=>return None,
+fn post_layout(device: &wgpu::Device, name: &str) -> Option<wgpu::PipelineLayout> {
+    use wgpu::BufferBindingType::{Storage, Uniform};
+    let buffer = |ty| wgpu::BindingType::Buffer {
+        ty,
+        has_dynamic_offset: false,
+        min_binding_size: None,
     };
-    let entries=types.into_iter().enumerate().map(|(i,ty)|wgpu::BindGroupLayoutEntry{binding:i as u32,visibility:wgpu::ShaderStages::COMPUTE,ty,count:None}).collect::<Vec<_>>();
-    let layout=device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor{label:Some(name),entries:&entries});
-    Some(device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor{label:Some(name),bind_group_layouts:&[Some(&layout)],..Default::default()}))
+    let tex = |sample_type| wgpu::BindingType::Texture {
+        sample_type,
+        view_dimension: wgpu::TextureViewDimension::D2Array,
+        multisampled: false,
+    };
+    let uniform = buffer(Uniform);
+    let read = buffer(Storage { read_only: true });
+    let write = buffer(Storage { read_only: false });
+    let float = tex(wgpu::TextureSampleType::Float { filterable: false });
+    let ids = tex(wgpu::TextureSampleType::Uint);
+    let types = match name {
+        "reproject" => vec![uniform, float, ids, read, write, write, float],
+        "match" => vec![uniform, float, read, read, write],
+        "combine" => vec![
+            uniform, float, float, read, read, read, write, write, read, ids, read,
+        ],
+        _ => return None,
+    };
+    let entries = types
+        .into_iter()
+        .enumerate()
+        .map(|(i, ty)| wgpu::BindGroupLayoutEntry {
+            binding: i as u32,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty,
+            count: None,
+        })
+        .collect::<Vec<_>>();
+    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some(name),
+        entries: &entries,
+    });
+    Some(
+        device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some(name),
+            bind_group_layouts: &[Some(&layout)],
+            ..Default::default()
+        }),
+    )
 }

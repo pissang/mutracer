@@ -154,7 +154,15 @@ fn prepare(@builtin(global_invocation_id) id: vec3u) {
   let raw = (prepareParams.size.y - 1u - id.y) * prepareParams.size.x + id.x;
   color[i] = textureLoad(colorImage, id.xy, 0);
   albedo[i] = textureLoad(albedoImage, id.xy, 0);
-  normal[i] = accumulatedNormal[raw] / prepareParams.samples;
+  let n = accumulatedNormal[raw];
+  normal[i] = n / prepareParams.samples;
+  if (prepareParams.flags != 0u) {
+    // The Web temporal composition publishes both guides through RGBA8Unorm targets.
+    var encoded = vec3f(0.0);
+    if (dot(n.rgb, n.rgb) > 0.1) { encoded = n.rgb / prepareParams.samples * 0.5 + 0.5; }
+    normal[i] = vec4f(unpack4x8unorm(pack4x8unorm(vec4f(encoded, 1.0))).rgb * 2.0 - 1.0, 1.0);
+    albedo[i] = unpack4x8unorm(pack4x8unorm(albedo[i]));
+  }
 }
 @group(0) @binding(0) var<storage, read> filtered: array<vec4f>;
 @group(0) @binding(1) var outputImage: texture_storage_2d<rgba8unorm, write>;

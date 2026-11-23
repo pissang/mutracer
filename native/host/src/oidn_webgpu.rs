@@ -250,6 +250,7 @@ impl Denoiser {
         albedo: &wgpu::Texture,
         normal: &wgpu::Buffer,
         samples: u32,
+        temporal_guides: bool,
     ) -> Result<wgpu::Buffer> {
         gpu.loss.check()?;
         if self.display_prepare.is_none() {
@@ -280,7 +281,7 @@ impl Denoiser {
                     self.size[0],
                     self.size[1],
                     (samples as f32).to_bits(),
-                    0,
+                    u32::from(temporal_guides),
                 ]),
                 usage: wgpu::BufferUsages::UNIFORM,
             });

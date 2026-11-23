@@ -61,6 +61,13 @@ impl TemporalPlan {
     pub fn latency(self) -> u32 {
         self.max + self.post_radius
     }
+    pub(super) fn ready_count(self, count: u32, flush: bool) -> u32 {
+        if flush {
+            count
+        } else {
+            count.saturating_sub(self.latency())
+        }
+    }
     pub(super) fn slots(self) -> u32 {
         (2 * self.max).max(self.max + 2 * self.post_radius) + 1
     }
@@ -202,6 +209,19 @@ impl TemporalOptions {
         }
         Ok(out)
     }
+    /// Estimates offline OIDN memory before a device is selected. A device may impose tighter limits.
+    pub fn estimate(self, size: [u32; 2], materials: usize) -> crate::Result<TemporalPlan> {
+        self.plan(
+            size,
+            materials,
+            &wgpu::Limits {
+                max_texture_dimension_2d: 16384,
+                max_buffer_size: u64::MAX,
+                max_storage_buffer_binding_size: u32::MAX as _,
+                ..Default::default()
+            },
+        )
+    }
     /// Estimates the first offline OIDN plan that fits the supplied device limits and budget.
     pub fn plan(
         self,
@@ -222,6 +242,36 @@ mod tests {
             "../../../../../tests/fixtures/temporal-offline.json"
         ))
         .unwrap();
+        for case in f["options"].as_array().unwrap() {
+            let mut input = case["input"].clone();
+            input.as_object_mut().unwrap().remove("denoiser");
+            let opts: TemporalOptions = serde_json::from_value(input).unwrap();
+            let expected = &case["expected"];
+            let (min, max) = opts.range();
+            assert_eq!(
+                serde_json::json!({"min":min,"max":max}),
+                expected["historyRadius"]
+            );
+            let fields = serde_json::to_value(opts).unwrap();
+            for field in [
+                "postRadius",
+                "stabilizeSparkle",
+                "historyInvalidation",
+                "memoryBudget",
+            ] {
+                assert_eq!(fields[field], expected[field]);
+            }
+        }
+        for case in f["schedule"].as_array().unwrap() {
+            let opts: TemporalOptions = serde_json::from_value(case["input"].clone()).unwrap();
+            let plan = opts.plan([16, 16], 0, &Default::default()).unwrap();
+            assert_eq!(u64::from(plan.latency()), case["latency"].as_u64().unwrap());
+            let count = case["pushed"].as_u64().unwrap() as u32;
+            assert_eq!(
+                i64::from(plan.ready_count(count, case["flush"].as_bool().unwrap())) - 1,
+                case["ready"].as_i64().unwrap()
+            );
+        }
         for c in f["memory"].as_array().unwrap() {
             let mut raw = c["input"].clone();
             let cost = if raw.as_object_mut().unwrap().remove("denoiser").is_some() {
@@ -262,10 +312,8 @@ mod tests {
             );
         }
         for c in f["invalid"].as_array().unwrap() {
-            assert!(
-                serde_json::from_value::<TemporalOptions>(c.clone())
-                    .map_or(true, |o| o.validate().is_err())
-            );
+            assert!(serde_json::from_value::<TemporalOptions>(c.clone())
+                .map_or(true, |o| o.validate().is_err()));
         }
     }
 }

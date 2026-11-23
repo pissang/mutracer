@@ -75,6 +75,7 @@ impl OfflineFrame {
 }
 pub(super) struct Capture {
     pub raw: bool,
+    pub check_camera: bool,
     pub size: [u32; 2],
     pub samples: u32,
     pub camera: [f32; 20],
@@ -199,29 +200,35 @@ impl TemporalDenoiser {
         for plan in plans.into_iter().take(2) {
             let validation = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
             let oom = gpu.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-            let passes = Passes::new(
-                gpu.clone(),
-                size,
-                plan,
-                materials,
-                self.options.stabilize_sparkle,
-            );
+            let allocation = (|| -> Result<_> {
+                let passes = Passes::new(
+                    gpu.clone(),
+                    size,
+                    plan,
+                    materials,
+                    self.options.stabilize_sparkle,
+                )?;
+                let spatial = match &self.spatial {
+                    TemporalSpatial::Oidn(weights) => Some((
+                        crate::oidn_webgpu::Denoiser::new(&gpu, size, weights.as_deref(), 432)?,
+                        crate::display::Display::new(gpu.clone(), size),
+                    )),
+                    _ => None,
+                };
+                Ok((passes, spatial))
+            })();
             let exhausted = pollster::block_on(oom.pop()).is_some();
-            if let Some(e) = pollster::block_on(validation.pop()) {
-                return Err(e.to_string().into());
-            }
+            let invalid = pollster::block_on(validation.pop());
             if exhausted {
                 continue;
             }
-            let passes = passes?;
-            if let TemporalSpatial::Oidn(weights) = &self.spatial {
-                self.oidn = Some(crate::oidn_webgpu::Denoiser::new(
-                    &gpu,
-                    size,
-                    weights.as_deref(),
-                    432,
-                )?);
-                self.display = Some(crate::display::Display::new(gpu.clone(), size));
+            if let Some(e) = invalid {
+                return Err(e.to_string().into());
+            }
+            let (passes, spatial) = allocation?;
+            if let Some((oidn, display)) = spatial {
+                self.oidn = Some(oidn);
+                self.display = Some(display);
             }
             self.passes = Some(passes);
             return Ok(());
@@ -231,7 +238,10 @@ impl TemporalDenoiser {
     /// Push a converged render from this engine. Index gaps start a new history epoch.
     pub fn push(&mut self, index: u32, render: &Render) -> Result<()> {
         self.check_push()?;
-        let capture = render.offline_capture(&self.engine)?;
+        let capture = render.offline_capture(
+            &self.engine,
+            self.options.history_invalidation == HistoryInvalidation::Auto,
+        )?;
         self.push_capture(index, capture)
     }
     fn check_push(&self) -> Result<()> {
@@ -271,7 +281,10 @@ impl TemporalDenoiser {
             if previous.checked_add(1) != Some(index)
                 || auto
                     && (scene != capture.scene_key
-                        || epoch == self.epoch && p.plan.max > 0 && p.camera_cut(i, &guides[8])?)
+                        || capture.check_camera
+                            && epoch == self.epoch
+                            && p.plan.max > 0
+                            && p.camera_cut(i, &guides[8])?)
             {
                 self.epoch += 1;
             }
@@ -367,6 +380,7 @@ impl TemporalDenoiser {
                         &a,
                         normal.buffer(),
                         f.samples,
+                        true,
                     )?)
                 }
             };
@@ -380,7 +394,7 @@ impl TemporalDenoiser {
             self.publish(self.window.saturating_sub(plan.post_radius))?;
         }
         if flush && self.window == self.count {
-            self.publish(self.count)?;
+            self.publish(plan.ready_count(self.count, true))?;
         }
         Ok(())
     }
@@ -467,10 +481,55 @@ pub(super) fn scene_revisions(scene: &[u8]) -> (u64, Vec<[u32; 2]>) {
     // Inspect only the identity, lighting and material tables of a committed descriptor.
     let word = |i: usize| u32::from_le_bytes(scene[i * 4..i * 4 + 4].try_into().unwrap()) as usize;
     let table = |i: usize, count: usize| &scene[i * 4..(i + count) * 4];
+    use crate::layout::{extension, graph, texture};
+    let stride = if word(h::VERSION) >= 7 {
+        texture::WORDS
+    } else {
+        texture::WORDS - 1
+    };
+    let textures = (0..word(h::TEXTURE_COUNT))
+        .map(|i| {
+            let at = word(h::TEXTURE_OFFSET) + i * stride;
+            let mut hash = DefaultHasher::new();
+            table(at, 3).hash(&mut hash);
+            table(at + texture::FLIP_Y, stride - texture::FLIP_Y).hash(&mut hash);
+            let pixels = word(at + texture::WIDTH) * word(at + texture::HEIGHT);
+            table(
+                word(at + texture::PIXELS),
+                pixels
+                    * if word(at + texture::STORAGE) == 0 {
+                        1
+                    } else {
+                        4
+                    },
+            )
+            .hash(&mut hash);
+            hash.finish()
+        })
+        .collect::<Vec<_>>();
     let mut global = DefaultHasher::new();
+    for field in [h::ENVIRONMENT_TEXTURE, h::BACKGROUND_TEXTURE] {
+        word(field)
+            .checked_sub(1)
+            .and_then(|i| textures.get(i))
+            .hash(&mut global);
+    }
+    for (field, count) in [(h::ENVIRONMENT_SETTINGS, 4), (h::GROUNDED_BACKGROUND, 6)] {
+        if word(field) != 0 {
+            table(word(field), count).hash(&mut global);
+        }
+    }
+    (word(h::QUALITY_FLAGS) & 4).hash(&mut global);
     table(h::BACKGROUND_COLOR, 6).hash(&mut global);
     let lights = word(h::LIGHT_COUNT);
     table(word(h::LIGHT_OFFSET), lights * light::WORDS).hash(&mut global);
+    for light_index in 0..lights {
+        let at = word(h::LIGHT_OFFSET) + light_index * light::WORDS;
+        word(at + light::TEXTURE)
+            .checked_sub(1)
+            .and_then(|i| textures.get(i))
+            .hash(&mut global);
+    }
     for i in 0..word(h::MESH_COUNT) {
         let offset = word(h::MESH_OFFSET) + i * mesh::WORDS;
         word(offset + mesh::FLAGS).hash(&mut global);
@@ -480,12 +539,38 @@ pub(super) fn scene_revisions(scene: &[u8]) -> (u64, Vec<[u32; 2]>) {
     for i in 0..word(h::MATERIAL_COUNT) {
         let offset = word(h::MATERIAL_OFFSET) + i * m::WORDS;
         let mut hash = DefaultHasher::new();
-        table(offset, m::WORDS).hash(&mut hash);
-        table(
-            word(offset + m::EXTENSION_OFFSET),
-            word(offset + m::EXTENSION_COUNT) * 4,
-        )
-        .hash(&mut hash);
+        table(offset, m::EXTENSION_COUNT).hash(&mut hash);
+        for field in m::MAP..=m::EMISSIVE_MAP {
+            textures.get(word(offset + field)).hash(&mut hash);
+        }
+        let graph = word(offset + m::GRAPH);
+        if graph != 0 {
+            for (count, ptr, stride) in [
+                (graph::NODE_COUNT, graph::NODES, 5),
+                (graph::INPUT_COUNT, graph::INPUTS, 5),
+                (graph::TERMINAL_COUNT, graph::TERMINALS, 3),
+                (graph::PARAMETER_COUNT, graph::PARAMETERS, 4),
+                (graph::TEXTURE_COUNT, graph::TEXTURES, 1),
+            ] {
+                table(word(graph + ptr), word(graph + count) * stride).hash(&mut hash);
+            }
+            for k in 0..word(graph + graph::TEXTURE_COUNT) {
+                textures
+                    .get(word(word(graph + graph::TEXTURES) + k))
+                    .hash(&mut hash);
+            }
+        }
+        let extensions = word(offset + m::EXTENSION_OFFSET);
+        let count = word(offset + m::EXTENSION_COUNT);
+        table(extensions, count * extension::WORDS).hash(&mut hash);
+        for k in 0..count {
+            let at = extensions + k * extension::WORDS;
+            let kind =
+                crate::material_properties::MATERIAL_PROPERTIES.get(word(at + extension::ID));
+            if kind.is_some_and(|&(kind, _)| kind == crate::commit_plan::TEXTURE_PROPERTY) {
+                textures.get(word(at + extension::X)).hash(&mut hash);
+            }
+        }
         revisions.push([
             if ids == 0 {
                 i as u32

@@ -123,7 +123,7 @@ fn atlas_texture(w: &Words, index: usize) -> Option<bool> {
 }
 
 /// Material property kind of texture references (see material_properties.rs).
-const TEXTURE_PROPERTY: u8 = 5;
+pub(crate) const TEXTURE_PROPERTY: u8 = 5;
 /// `MT_MAT_DISPLACEMENT_MAP` in mutracer-material-properties.h.
 const DISPLACEMENT_MAP_PROPERTY: usize = 59;
 
