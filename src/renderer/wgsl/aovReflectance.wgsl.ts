@@ -3,11 +3,11 @@ import proposals from './aovReflectanceSamples.wgsl.js';
 // Directional-hemispherical quadrature of the supported OpenPBR
 // reflection lobes. Keep the original 256 cosine/VNDF proposals and weights;
 // integrate the substrate and the narrower coat with their own proposals.
-export function unsupportedCoatReflectanceWgsl(hasCoatNormals: boolean) {
-  return `material.coatWeight > 0.0 && (material.coatAnisotropy > 0.0 || material.transmissionWeight > 0.0${hasCoatNormals ? ' || material.coatNormalEnabled' : ''})`;
+export function unsupportedCoatReflectanceWgsl(rejectIndependentNormal: boolean) {
+  return `material.coatWeight > 0.0 && (material.coatAnisotropy > 0.0 || material.transmissionWeight > 0.0${rejectIndependentNormal ? ' || material.coatNormalEnabled' : ''})`;
 }
 
-export function createAovReflectanceWgsl(layered = false) {
+export function createAovReflectanceWgsl(layered = false, hasCoatNormals = false) {
   return proposals + /* wgsl */ `
 struct MtReflectance {
   diffuse: vec3f,
@@ -15,7 +15,8 @@ struct MtReflectance {
 }
 ${layered ? /* wgsl */ `fn mtCoatReflectance(prepared: OpenPbrPreparedBsdf, count: u32) -> vec3f {
   var material = prepared.material;
-  let view = prepared.viewLocal;
+  let view = ${hasCoatNormals ? 'select(prepared.viewLocal, prepared.coatViewLocal, material.coatNormalEnabled)' : 'prepared.viewLocal'};
+  if (view.z <= 1e-6) { return vec3f(0.0); }
   let alpha = openpbr_roughness_to_alpha(material.coatRoughness, 0.0);
   material.alphaX = alpha.x;
   material.alphaY = alpha.y;
@@ -26,7 +27,9 @@ ${layered ? /* wgsl */ `fn mtCoatReflectance(prepared: OpenPbrPreparedBsdf, coun
     let half = sampling_ggx_visible_normal(view, alpha, u);
     let light = reflect(-view, half);
     if (light.z <= 0.0) { continue; }
-    let fresnel = vec3f(openpbr_dielectric_fresnel(abs(dot(view, half)), 1.0 / material.coatIor));
+${hasCoatNormals ? /* wgsl */ `    if (material.coatNormalEnabled &&
+        dot(material.geometricNormal, openpbr_to_world(prepared.coatBasis, light)) <= 0.0) { continue; }
+` : ''}    let fresnel = vec3f(openpbr_dielectric_fresnel(abs(dot(view, half)), 1.0 / material.coatIor));
     var pdf = 0.0;
     let response = openpbr_eval_microfacet_reflection(material, view, light, half, fresnel, &pdf);
     if (pdf > 0.0) { sum += response * (light.z / pdf); }
@@ -75,11 +78,13 @@ ${layered ? /* wgsl */ `fn mtCoatReflectance(prepared: OpenPbrPreparedBsdf, coun
     let pdf = 0.5 * (light.z * INVPI + specularPdf);
     // Preserve the production evaluator's frame round trip, including FP32
     // rounding near narrow highlights. Proposal PDFs use the original light.
-    let evaluatedLight = openpbr_to_local(prepared.basis, openpbr_to_world(prepared.basis, light));
+    let evaluatedWorld = openpbr_to_world(prepared.basis, light);
+    let evaluatedLight = openpbr_to_local(prepared.basis, evaluatedWorld);
     if (evaluatedLight.z <= 0.0) { continue; }
-    let scale = abs(evaluatedLight.z) / (pdf * f32(count));
+${hasCoatNormals ? /* wgsl */ `    if (material.coatNormalEnabled && dot(material.geometricNormal, evaluatedWorld) <= 0.0) { continue; }
+` : ''}    let scale = abs(evaluatedLight.z) / (pdf * f32(count));
 ${layered ? /* wgsl */ `    var substrateScale = vec3f(1.0);
-    if (coated) { substrateScale = openpbr_coat_base_scale(prepared, evaluatedLight.z); }
+    if (coated) { substrateScale = openpbr_coat_base_scale(prepared, ${hasCoatNormals ? 'select(evaluatedLight.z, dot(prepared.coatBasis.normal, evaluatedWorld), material.coatNormalEnabled)' : 'evaluatedLight.z'}); }
 ` : ''}    if (wantDiffuse && diffuseWeight > 0.0) {
       let compensation = prepared.diffuseSpecularEnergyCompensation * openpbr_opaque_energy_complement(
         prepared.specularEtaTOverEtaI, prepared.specularAlpha, abs(evaluatedLight.z));

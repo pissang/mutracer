@@ -423,11 +423,11 @@ motion. Device recovery also clears history. Deformed vertices have no motion
 estimate; validity 0 must not be treated as a stationary surface.
 
 Reflectance outputs are separate from the existing OIDN `albedo` guide.
-On WebGPU and WebGL, opaque isotropic clearcoat with a shared shading normal
-attenuates the base reflectance and adds to `specularAlbedo`. Coated surfaces
-with transmission or independent normals, fuzz, anisotropy, subsurface or
-volume scattering, bevel, thin film, dispersion, partial alpha and nonstandard
-materials contribute to `roughness.b` and have zero reflectance validity.
+On WebGPU and WebGL, opaque isotropic clearcoat attenuates the base reflectance
+and adds to `specularAlbedo` using its own shading normal. Clearcoat combined
+with transmission or anisotropy has zero reflectance validity and contributes
+to `roughness.b`. The same applies to fuzz, subsurface or volume scattering,
+bevel, thin film, dispersion, partial alpha and nonstandard materials.
 Reflectance tracing can be expensive.
 
 `diffuseColor` and `specularColor` read resolved material inputs without

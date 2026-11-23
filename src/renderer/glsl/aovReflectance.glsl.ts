@@ -5,6 +5,10 @@ export default proposals + /* glsl */ `
 vec3 aovCoatReflectance(OpenPbrPreparedBsdf prepared) {
   OpenPbrResolvedMaterial material = prepared.material;
   vec3 view = prepared.viewLocal;
+#ifdef USE_COAT_NORMAL_FRAMES
+  if (material.coatNormalEnabled) { view = prepared.coatViewLocal; }
+#endif
+  if (view.z <= 1e-6) { return vec3(0.0); }
   vec2 alpha = openpbr_roughness_to_alpha(material.coatRoughness, 0.0);
   material.alphaX = alpha.x;
   material.alphaY = alpha.y;
@@ -15,6 +19,10 @@ vec3 aovCoatReflectance(OpenPbrPreparedBsdf prepared) {
     vec3 halfVector = sampling_ggx_visible_normal(view, alpha, u);
     vec3 light = reflect(-view, halfVector);
     if (light.z <= 0.0) { continue; }
+#ifdef USE_COAT_NORMAL_FRAMES
+    if (material.coatNormalEnabled &&
+        dot(material.geometricNormal, openpbr_to_world(prepared.coatBasis, light)) <= 0.0) { continue; }
+#endif
     vec3 fresnel = vec3(openpbr_dielectric_fresnel(abs(dot(view, halfVector)), 1.0 / material.coatIor));
     float pdf = 0.0;
     vec3 response = openpbr_eval_microfacet_reflection(material, view, light, halfVector, fresnel, pdf);
@@ -65,11 +73,21 @@ void aovReflectance(OpenPbrPreparedBsdf prepared, bool wantDiffuse, bool wantSpe
     float pdf = 0.5 * (light.z * INVPI + specularPdf);
     // Preserve the production evaluator's frame round trip, including FP32
     // rounding near narrow highlights. Proposal PDFs use the original light.
-    vec3 evaluatedLight = openpbr_to_local(prepared.basis, openpbr_to_world(prepared.basis, light));
+    vec3 evaluatedWorld = openpbr_to_world(prepared.basis, light);
+    vec3 evaluatedLight = openpbr_to_local(prepared.basis, evaluatedWorld);
     if (evaluatedLight.z <= 0.0) { continue; }
+#ifdef USE_COAT_NORMAL_FRAMES
+    if (material.coatNormalEnabled && dot(material.geometricNormal, evaluatedWorld) <= 0.0) { continue; }
+#endif
     float scale = abs(evaluatedLight.z) / (pdf * float(count));
     vec3 substrateScale = vec3(1.0);
-    if (coated) { substrateScale = openpbr_coat_base_scale(prepared, evaluatedLight.z); }
+    if (coated) {
+      float coatCosine = evaluatedLight.z;
+#ifdef USE_COAT_NORMAL_FRAMES
+      if (material.coatNormalEnabled) { coatCosine = dot(prepared.coatBasis.normal, evaluatedWorld); }
+#endif
+      substrateScale = openpbr_coat_base_scale(prepared, coatCosine);
+    }
     if (wantDiffuse && diffuseWeight > 0.0) {
       float compensation = prepared.diffuseSpecularEnergyCompensation * openpbr_opaque_energy_complement(
         prepared.specularEtaTOverEtaI, prepared.specularAlpha, abs(evaluatedLight.z));
