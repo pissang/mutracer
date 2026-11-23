@@ -47,10 +47,13 @@ import { type JNLMDenoiser } from './jnlm.js';
 import type { DenoiserHandle, OIDNWeb, OIDNWebGPUData, OIDNWebGPUOutputData } from './denoiser.js';
 import type { WGPUJNLMDenoisePass } from './WGPUJNLMDenoiser.js';
 
+import type {DenoisingGuideCapture} from './denoisingGuideCapture.js';
+
 export interface WGPURenderingPipelineOptions {
   presentationFormat?: GPUTextureFormat;
   materialTextures?: MaterialTextureSelection;
   shaderPrefetch?: 'off' | 'editing';
+  denoisingGuideCapture?: DenoisingGuideCapture;
 }
 
 function createTimeQuery(device: GPUDevice) {
@@ -1967,7 +1970,7 @@ width: renderWidth, height: renderHeight,
 
 /** Independent render targets, without preview or presentation policy. */
 export function makeWGPURenderTargets(canvas: HTMLCanvasElement | OffscreenCanvas, device: GPUDevice, options: WGPURenderingPipelineOptions = {}): RenderPipeline {
-  const rayTracePass = new WGPURayTracePass(device, options.materialTextures);
+  const rayTracePass = new WGPURayTracePass(device, options.materialTextures, options.denoisingGuideCapture);
   rayTracePass.shaderPrefetch = options.shaderPrefetch ?? 'off';
   rayTracePass.startEditingPrefetch();
   const traceQueue = new GPUTraceQueue(device.queue);

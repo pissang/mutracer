@@ -15,6 +15,8 @@ import randGlsl from './chunks/rand.glsl.js';
 import random from './chunks/random.glsl.js';
 import envMap from './chunks/envMap.glsl.js';
 import {createSampleMaterialGlsl} from './chunks/sampleMaterial.glsl.js';
+import type {DenoisingGuideCapture} from '../denoisingGuideCapture.js';
+import {denoisingGuideCaptureGlsl} from './denoisingGuideCapture.glsl.js';
 import sampleLightGlsl from './chunks/sampleLight.glsl.js';
 import { FragmentShader, glsl, Shader } from '../shader.js';
 import openPbrBsdfGlsl from './chunks/openPbrBsdf.glsl.js';
@@ -72,7 +74,10 @@ export default function createRayTraceFragmentShader(...options: unknown[]) {
   const fragments = research?.fragments;
   const materialBufferGlsl = createMaterialBufferGlsl(fragments);
   const rayTraceCore = createRayTraceCoreGlsl(fragments);
-  const sampleMaterialGlsl = createSampleMaterialGlsl(fragments, channelIndependentLight);
+  const captureMode = (options[0] as {denoisingGuideCapture?: DenoisingGuideCapture} | undefined)?.denoisingGuideCapture;
+  const guideCapture = captureMode ? denoisingGuideCaptureGlsl(captureMode) : undefined;
+  const sampleFragments = guideCapture ? {...fragments, sample4: (fragments?.sample4 ?? '') + guideCapture.surface} : fragments;
+  const sampleMaterialGlsl = createSampleMaterialGlsl(sampleFragments, channelIndependentLight);
   const intelMac = isIntelMac();
   return new FragmentShader({
   name: 'rayTraceFrag',
@@ -127,7 +132,7 @@ int heroChannel;
 int pathChannel;
 
 ${sampleLightGlsl}
-${research?.declarations ?? ''}${sampleMaterialGlsl}
+${research?.declarations ?? ''}${guideCapture?.declarations ?? ''}${sampleMaterialGlsl}
 
 ${cameraRayGlsl}
 struct RayTraceAuxiliary {
@@ -666,8 +671,8 @@ ${sharePrefix ? '  spChannel = channel;\n' : ''}  pathWavelength = 0.0;
   outAux.isBlank = false;
   outAux.isShadowCatcher = false;
 
-  vec4 liAndAlpha = integrator(cam, outAux);
-
+${guideCapture?.begin ?? ''}  vec4 liAndAlpha = integrator(cam, outAux);
+${guideCapture?.finish ?? ''}
   // Clamp at Integration Level to reduce fireflies.
   // TODO Path level configuration?
 #ifdef CLAMPING

@@ -21,7 +21,7 @@ export class WebGLRayTraceOutputPass {
     RayTraceInput | 'catcherBackgroundTex', LayerOutput
   >;
 
-  constructor(renderer: WebGLDevice) {
+  constructor(renderer: WebGLDevice, floatAlbedo = false) {
     this._renderer = renderer;
     this._pass = new WebGLFullQuadPass('rayTraceOutput', renderer, {
       shader: normalizeRayTraceOutput,
@@ -32,7 +32,7 @@ export class WebGLRayTraceOutputPass {
           minFilter: constants.LINEAR,
           magFilter: constants.LINEAR
         },
-        albedo: { type: constants.UNSIGNED_BYTE },
+        albedo: { type: floatAlbedo ? constants.HALF_FLOAT : constants.UNSIGNED_BYTE },
         normal: { type: constants.UNSIGNED_BYTE },
         shadowCatcher: { type: constants.HALF_FLOAT }
       }

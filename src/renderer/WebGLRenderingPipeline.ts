@@ -9,6 +9,7 @@ import { ScratchPool } from './ScratchPool.js';
 import { makeRenderPipeline, type TraceSettings, type RenderPipeline } from './renderPipeline.js';
 import type { TargetPipeline } from './accumulationTarget.js';
 import { readRgbaPixels } from './WebGLReadback.js';
+import type {DenoisingGuideCapture} from './denoisingGuideCapture.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
@@ -41,7 +42,7 @@ import { WebGLJNLMDenoisePass } from './WebGLJNLMDenoiser.js';
  * The frame is encoded as a fixed pass sequence. Each pass owns explicit
  * textures/FBOs, so no compositor graph or node lifecycle participates here.
  */
-function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLRayTracePass, scratch: ScratchPool) {
+function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLRayTracePass, scratch: ScratchPool, floatAlbedo = false) {
   let sampleRenderedCallback = (
     _sampleCount: number,
     _isFirstFrame: boolean,
@@ -99,7 +100,7 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
   const tileRender = makeTileRender(renderer.gl);
   tileRender.setDesiredMsPerTile(maxTimePerTile);
 
-  const rayTraceOutputPass = new WebGLRayTraceOutputPass(renderer);
+  const rayTraceOutputPass = new WebGLRayTraceOutputPass(renderer, floatAlbedo);
   let bloomPass: WebGLBloomPass | undefined;
 
   const composePass = scratch.get('composePass', () => new WebGLFullQuadPass<
@@ -631,7 +632,7 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
       if (kind === 'denoised' && (!denoisedTexture || !denoiseValid)) kind = 'hdr';
       const texture = kind === 'denoised' ? denoisedTexture! : rayTraceOutputPass.getOutput(kind === 'hdr' ? 'color' : kind);
       rawReadFrameBuffer.bind(renderer, [texture]);
-      return { data: readRgbaPixels(renderer.gl, renderWidth, renderHeight, kind === 'albedo' || kind === 'normal'), width: renderWidth, height: renderHeight };
+      return { data: readRgbaPixels(renderer.gl, renderWidth, renderHeight, (kind === 'albedo' && !floatAlbedo) || kind === 'normal'), width: renderWidth, height: renderHeight };
     },
     dispose() {
       if (disposed) return; disposed = true;
@@ -647,8 +648,8 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
 }
 
 /** Independent render targets, without preview or presentation policy. */
-export function makeWebGLRenderTargets(renderer: WebGLDevice): RenderPipeline {
-  const rayTracePass = new WebGLRayTracePass(renderer);
+export function makeWebGLRenderTargets(renderer: WebGLDevice, guideCapture?: DenoisingGuideCapture): RenderPipeline {
+  const rayTracePass = new WebGLRayTracePass(renderer, guideCapture);
   const scratch = new ScratchPool();
-  return makeRenderPipeline(rayTracePass, () => makeWebGLAccumulationTarget(renderer, rayTracePass, scratch), true, scratch);
+  return makeRenderPipeline(rayTracePass, () => makeWebGLAccumulationTarget(renderer, rayTracePass, scratch, guideCapture !== undefined), true, scratch);
 }

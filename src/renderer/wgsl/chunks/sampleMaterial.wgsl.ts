@@ -2,7 +2,7 @@ import {queryState, pendingSceneQueryRef} from './queryPoints.wgsl.js';
 // Next-event estimation with resampled importance sampling over the light
 // candidates, followed by BSDF (or phase function) sampling, as described in
 // http://www.pbr-book.org/3ed-2018/Light_Transport_I_Surface_Reflection/Direct_Lighting.html#EstimatingtheDirectLightingIntegral
-export function createSampleMaterialWgsl(hasAnisotropyDirections = true, hasCoatNormals = false, caustics = false, researchContribution = '',photonMapping=false, channelIndependentRis=false, sharedGraphEmission=false, queryPoints=false, earlyScattering=false, recordReflection=false) {
+export function createSampleMaterialWgsl(hasAnisotropyDirections = true, hasCoatNormals = false, caustics = false, researchContribution = '',photonMapping=false, channelIndependentRis=false, sharedGraphEmission=false, queryPoints=false, earlyScattering=false, recordReflection=false, preparedSurface?: (prepared: string) => string) {
   earlyScattering &&= queryPoints;
   const pendingQuery = pendingSceneQueryRef(earlyScattering);
   const continuation: Record<string, string> = {originalFace: 'vec3f', ndv1: 'f32', ffnormal: 'vec3f', mediumSampled: 'bool'};
@@ -435,7 +435,7 @@ ${hasAnisotropyDirections ? /* wgsl */ `
     (*ma).geometryBitangent = (*si).geometryBitangent;
 ` : /* wgsl */ ``}
     ${prepared} = openpbr_prepare((*si).tangent, *ma, -(*path).ray.d, ${ffnormal});
-  }
+${preparedSurface?.(prepared) ?? ''}  }
 ${earlyScattering ? `  ${state.refs.scattering} = ${scatter};
   ${state.refs.discrete} = ${discrete};
 ` : ''}${queryPoints ? `  }${earlyScattering ? ` else {

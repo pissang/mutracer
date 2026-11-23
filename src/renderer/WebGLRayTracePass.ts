@@ -3,6 +3,7 @@ import {invalidateInstanceTransformRanges, canSkipInstanceRefit} from './instanc
 import {materialNeedsVertexTangents, meshesNeedGeneratedTangents} from './tangentRequirements.js';
 import {resolveSurfaceHit, type SurfaceHit} from './surfaceHit.js';
 import {researchTransport} from './researchTransport.js';
+import type {DenoisingGuideCapture} from './denoisingGuideCapture.js';
 import {EmissiveTriangleCache} from './lightSampling.js';
 import {prepareWebGLLightSampling} from './webglLightSampling.js';
 import {AovPrimitiveCache} from './AovPrimitiveCache.js';
@@ -262,7 +263,7 @@ class WebGLRayTracePass {
   private _shareSpectralPrefix = true;
   private _independentSpectralPaths = false;
 
-  constructor(renderer: WebGLRenderer) {
+  constructor(renderer: WebGLRenderer, private readonly _guideCapture?: DenoisingGuideCapture) {
     this._renderer = renderer;
     const accumulationOutput = {
       type: constants.FLOAT,
@@ -272,7 +273,7 @@ class WebGLRayTracePass {
       wrapT: constants.CLAMP_TO_EDGE
     };
 
-    const rayTraceFrag = createRayTraceFragmentShader();
+    const rayTraceFrag = createRayTraceFragmentShader({denoisingGuideCapture: this._guideCapture});
     rayTraceFrag.parallelCompile = true;
     shadowCatcherFrag.parallelCompile = true;
     this._mainPass = new WebGLFullQuadPass<
@@ -746,7 +747,7 @@ class WebGLRayTracePass {
     if (spectral !== !!this._spectral) {
       this._spectral = spectral;
       const shader = createRayTraceFragmentShader({
-        channelIndependentLight: spectral, shareSpectralPrefix: spectral && this._shareSpectralPrefix
+        channelIndependentLight: spectral, shareSpectralPrefix: spectral && this._shareSpectralPrefix, denoisingGuideCapture: this._guideCapture
       });
       if (!researchTransport()?.configure(this, 'webgl')?.enabled) {
         shader.parallelCompile = true;
@@ -1040,7 +1041,7 @@ class WebGLRayTracePass {
     const share = options.dispersionWavelengths !== 1;
     if (this._spectral && (share !== this._shareSpectralPrefix || wasIndependent) && !research?.enabled) {
       const shader = createRayTraceFragmentShader({
-        channelIndependentLight: true, shareSpectralPrefix: share
+        channelIndependentLight: true, shareSpectralPrefix: share, denoisingGuideCapture: this._guideCapture
       });
       shader.parallelCompile = true; this._mainPass.setShader(shader);
     }

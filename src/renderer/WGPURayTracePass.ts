@@ -13,6 +13,8 @@ import {causticDiagnostics} from './causticDiagnostics.js';
 import type {WGPUPhotonMap} from './WGPUPhotonMap.js';
 import {getCausticsRuntime, loadCausticsRuntime} from './lazyCaustics.js';
 import {researchTransport, type ResearchPassState} from './researchTransport.js';
+import type {DenoisingGuideCapture} from './denoisingGuideCapture.js';
+import {denoisingGuideCaptureWgsl} from './wgsl/denoisingGuideCapture.wgsl.js';
 import {causticEmissionTable} from './causticEmission.js';
 import type {WGPUCausticLightPass} from './WGPUCausticLightPass.js';
 import {
@@ -545,7 +547,8 @@ class WGPURayTracePass {
 
 
 
-  constructor(device: GPUDevice, private _textureSelection: MaterialTextureSelection = {requested: 'atlas'}) {
+  constructor(device: GPUDevice, private _textureSelection: MaterialTextureSelection = {requested: 'atlas'},
+    private readonly _guideCapture?: DenoisingGuideCapture) {
     this._device = device;
     this._shaderCache = new WGPUShaderCache(device);
     if (_textureSelection.support) this._bindless = new WGPUBindlessTextures(device);
@@ -1369,7 +1372,7 @@ class WGPURayTracePass {
             displayAovStorage: true
             ,analyticLightStorage: true
           },
-          bake
+          bake, '', false, this._guideCapture ? denoisingGuideCaptureWgsl(this._guideCapture, !!constants.USE_COAT_NORMAL_FRAMES) : undefined
         );
         if (bindless) code = bindlessShaderSource(code, this._textureSelection.support!.enable);
         variant.diagnostics.sourceGenerationTimeMs = shaderCompilationNow() - startedAt;
