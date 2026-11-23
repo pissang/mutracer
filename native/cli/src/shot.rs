@@ -194,7 +194,7 @@ impl<T: Interpolate> Channel<T> {
             }
         }
     }
-    fn check(
+    pub fn check(
         &self,
         at: &str,
         duration: f64,
@@ -489,40 +489,6 @@ pub struct InstanceView {
     pub instances: Sidecar,
 }
 
-#[derive(Default, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct Material {
-    pub asset: Option<String>,
-    pub inputs: Option<BTreeMap<String, Channel<MaterialValue>>>,
-    pub color: Option<Channel<[f32; 3]>>,
-    pub roughness: Option<Channel<f32>>,
-    pub metalness: Option<Channel<f32>>,
-    pub transmission: Option<Channel<f32>>,
-    pub transmission_color: Option<Channel<[f32; 3]>>,
-    pub ior: Option<Channel<f32>>,
-    pub opacity: Option<Channel<f32>>,
-    pub emission_color: Option<Channel<[f32; 3]>>,
-    pub emission_strength: Option<Channel<f32>>,
-    pub coat: Option<Channel<f32>>,
-    pub coat_color: Option<Channel<[f32; 3]>>,
-    pub coat_roughness: Option<Channel<f32>>,
-    pub coat_ior: Option<Channel<f32>>,
-    pub diffuse_roughness: Option<Channel<f32>>,
-    pub maps: Option<Maps>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Maps {
-    pub color: Option<String>,
-    pub roughness: Option<String>,
-    pub metalness: Option<String>,
-    pub normal: Option<String>,
-    pub emission: Option<String>,
-    pub transmission: Option<String>,
-    pub opacity: Option<String>,
-}
-
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Object {
@@ -535,7 +501,7 @@ pub struct Object {
     pub position: Option<Channel<[f32; 3]>>,
     pub rotation: Option<Channel<Rotation>>,
     pub scale: Option<Channel<[f32; 3]>>,
-    pub material: Option<Material>,
+    pub material: Option<crate::material::Material>,
     pub instances: Option<String>,
     pub animation: Option<Animation>,
 }
@@ -650,7 +616,7 @@ pub fn parse(bytes: &[u8]) -> Result<Shot> {
         reject_null(&value, "")?;
     }
     let mut decoder = serde_json::Deserializer::from_slice(bytes);
-    let shot: Shot =
+    let mut shot: Shot =
         serde_path_to_error::deserialize(&mut decoder).map_err(|error| decode_error("", error))?;
     decoder
         .end()
@@ -756,12 +722,12 @@ pub fn check_samples(spp: u32, offset: u32) -> Result<()> {
     Ok(())
 }
 
-fn valid_name(name: &str) -> bool {
+pub fn valid_name(name: &str) -> bool {
     !name.is_empty() && name.chars().count() <= 128 && !name.chars().any(|c| c < ' ')
 }
 
 impl Shot {
-    fn check(&self) -> Result<()> {
+    fn check(&mut self) -> Result<()> {
         let bad = |at, msg| Error::validation(at, msg, "Refer to the v1 shot schema.");
         if self.version != 1 {
             return Err(bad("/version", "Expected shot version 1"));
@@ -817,8 +783,6 @@ impl Shot {
         }
         let positive = |v: f32| v.is_finite() && v > 0.;
         let nonnegative = |v: f32| v.is_finite() && v >= 0.;
-        let unit = |v: f32| (0. ..=1.).contains(&v);
-        let ior = |v: f32| v.is_finite() && v >= 1.;
         let fov = |v: f32| v > 0. && v < 180.;
         let color = |v: [f32; 3]| v.into_iter().all(nonnegative);
         self.output.display.check(duration, "/output/display")?;
@@ -951,43 +915,6 @@ impl Shot {
             );
             if let Some(m) = &obj.material {
                 let path = format!("{path}/material");
-                for (key, value) in [
-                    ("color", &m.color),
-                    ("emissionColor", &m.emission_color),
-                    ("transmissionColor", &m.transmission_color),
-                    ("coatColor", &m.coat_color),
-                ] {
-                    channel!(value, &format!("{path}/{key}"), "nonnegative RGB", color);
-                }
-                for (key, value) in [
-                    ("roughness", &m.roughness),
-                    ("metalness", &m.metalness),
-                    ("transmission", &m.transmission),
-                    ("opacity", &m.opacity),
-                    ("coat", &m.coat),
-                    ("coatRoughness", &m.coat_roughness),
-                    ("diffuseRoughness", &m.diffuse_roughness),
-                ] {
-                    channel!(
-                        value,
-                        &format!("{path}/{key}"),
-                        "a number from 0 to 1",
-                        unit
-                    );
-                }
-                channel!(
-                    &m.emission_strength,
-                    &format!("{path}/emissionStrength"),
-                    "nonnegative strength",
-                    nonnegative
-                );
-                channel!(&m.ior, &format!("{path}/ior"), "IOR of at least 1", ior);
-                channel!(
-                    &m.coat_ior,
-                    &format!("{path}/coatIor"),
-                    "IOR of at least 1",
-                    ior
-                );
                 for (name, value) in m.inputs.iter().flatten() {
                     value.check(
                         &format!("{path}/inputs/{}", escape(name)),
@@ -1074,6 +1001,11 @@ impl Shot {
                 "degrees in (0, 180)",
                 fov
             );
+        }
+        for (index, object) in self.objects.iter_mut().enumerate() {
+            if let Some(material) = &mut object.material {
+                material.check(duration, &format!("/objects/{index}/material"))?;
+            }
         }
         Ok(())
     }

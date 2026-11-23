@@ -186,13 +186,17 @@ class Importer:
                 return {"asset": name}
             raise Located(material.GetPath(), "MaterialX requires a local, resolved sourceAsset document.")
         shader, _, _ = material.ComputeSurfaceSource()
-        if not shader or shader.GetIdAttr().Get() != "UsdPreviewSurface":
-            raise Located(material.GetPath(), "Expected UsdPreviewSurface or a MaterialX sourceAsset.")
+        shader_id = str(shader.GetIdAttr().Get()) if shader else ""
+        if shader_id in ("open_pbr_surface", "ND_open_pbr_surface_surfaceshader"):
+            return self.open_pbr(shader)
+        if shader_id != "UsdPreviewSurface":
+            raise Located(material.GetPath(), "Expected OpenPBR, UsdPreviewSurface or a MaterialX sourceAsset.")
         result = {}
         properties = {
             "diffuseColor": "color", "roughness": "roughness", "metallic": "metalness",
             "ior": "ior", "opacity": "opacity", "clearcoat": "coat",
             "clearcoatRoughness": "coatRoughness", "emissiveColor": "emissionColor",
+            "opacityThreshold": "alphaCutoff",
         }
         for key, target in properties.items():
             port = shader.GetInput(key)
@@ -209,8 +213,34 @@ class Importer:
             result["emissionStrength"] = 1
         if shader.GetInput("useSpecularWorkflow") and shader.GetInput("useSpecularWorkflow").Get(self.first):
             raise Located(shader.GetPath(), "PreviewSurface specular workflow is unsupported.")
-        if shader.GetInput("opacityThreshold") and shader.GetInput("opacityThreshold").Get(self.first):
-            raise Located(shader.GetPath(), "PreviewSurface alpha masking is unsupported.")
+        return result
+
+    def open_pbr(self, shader):
+        weights = {"base", "specular", "transmission", "subsurface", "coat", "fuzz", "thin_film"}
+        lengths = {"transmission_depth", "subsurface_radius"}
+        result = {}
+        for port in shader.GetInputs():
+            name = str(port.GetBaseName())
+            if port.HasConnectedSource():
+                raise Located(port.GetAttr().GetPath(), "Connected OpenPBR inputs require a MaterialX sourceAsset.")
+            attr = port.GetAttr()
+            if not attr.HasAuthoredValueOpinion():
+                continue
+            parts = (name + "_weight" if name in weights else name).split("_")
+            field = parts[0] + "".join(part.title() for part in parts[1:])
+
+            def sample(t):
+                value = attr.Get(t)
+                if isinstance(value, (int, float, bool)):
+                    return value * self.units if name in lengths else value
+                if isinstance(value, (self.Gf.Vec2f, self.Gf.Vec3f, self.Gf.Vec2d, self.Gf.Vec3d)):
+                    return list(value)
+                raise Located(attr.GetPath(), "Use an OpenPBR numeric constant or a MaterialX sourceAsset.")
+
+            value = self.channel(self.times([attr]), sample)
+            if isinstance(value, dict) and isinstance(value["keys"][0][1], bool):
+                raise Located(attr.GetPath(), "Time-varying OpenPBR booleans require separate shots.")
+            result[field] = value
         return result
 
     def mesh(self, prim, index):

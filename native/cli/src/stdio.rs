@@ -208,16 +208,10 @@ fn editable(pointer: &str) -> bool {
             "lights",
             n,
             "position" | "target" | "color" | "intensity" | "size" | "radius" | "length" | "angle",
-        ]
-        | [
-            "",
-            "objects",
-            n,
-            "material",
-            "color" | "roughness" | "metalness" | "transmission" | "transmissionColor" | "ior"
-            | "opacity" | "emissionColor" | "emissionStrength" | "coat" | "coatColor"
-            | "coatRoughness" | "coatIor" | "diffuseRoughness",
         ] => n.parse::<usize>().is_ok(),
+        ["", "objects", n, "material", key] => {
+            n.parse::<usize>().is_ok() && crate::material::editable(key)
+        }
         _ => false,
     }
 }

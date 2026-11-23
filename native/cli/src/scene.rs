@@ -138,41 +138,30 @@ impl Prepared {
                         (sdk::OpenPbrMaterial::default(), None)
                     };
                     if let Some(desc) = description {
-                        if let Some(maps) = &desc.maps {
-                            for (key, name, property) in [
-                                ("color", &maps.color, 39),
-                                ("opacity", &maps.opacity, 40),
-                                ("normal", &maps.normal, 44),
-                                ("emission", &maps.emission, 43),
-                                ("roughness", &maps.roughness, 47),
-                                ("metalness", &maps.metalness, 48),
-                                ("transmission", &maps.transmission, 49),
-                            ] {
-                                if let Some(name) = name {
-                                    let pointer = format!("{p}/material/maps/{key}");
-                                    let id = if let Some(&id) = images.get(name) {
-                                        id
-                                    } else {
-                                        let Some(Loaded::Image(texture)) = assets.loaded.get(name)
-                                        else {
-                                            return Err(Error::validation(
-                                                &pointer,
-                                                format!("Expected an image asset, got {name:?}"),
-                                                "Use a name from assets with an image field.",
-                                            ));
-                                        };
-                                        let id = prepared
-                                            .scene
-                                            .add_texture(texture.clone())
-                                            .map_err(|e| validation(&pointer, e))?;
-                                        images.insert(name.clone(), id);
-                                        id
-                                    };
-                                    material
-                                        .set_texture(property, Some(id))
-                                        .map_err(|e| validation(&pointer, e))?;
-                                }
-                            }
+                        for (&property, (pointer, name)) in &desc.textures {
+                            let id = if let Some(&id) = images.get(name) {
+                                id
+                            } else {
+                                let Some(Loaded::Image(texture)) = assets.loaded.get(name) else {
+                                    return Err(Error::validation(
+                                        pointer,
+                                        format!("Expected an image asset, got {name:?}"),
+                                        "Use a name from assets with an image field.",
+                                    ));
+                                };
+                                let id = prepared
+                                    .scene
+                                    .add_texture(texture.clone())
+                                    .map_err(|e| validation(pointer, e))?;
+                                images.insert(name.clone(), id);
+                                id
+                            };
+                            material
+                                .set_texture(property, Some(id))
+                                .map_err(|e| validation(pointer, e))?;
+                        }
+                        if desc.textures.contains_key(&59) {
+                            material.values.layers.displacement_scale = 0.1;
                         }
                     }
                     let id = prepared
@@ -465,29 +454,12 @@ impl Prepared {
                 }
             }
             if let (Some((id, defaults, bindings)), Some(m)) = (&obj.material, &desc.material) {
-                let mut values = defaults.values.clone();
-                values.color = at(&m.color, values.color, t);
-                values.roughness = at(&m.roughness, values.roughness, t);
-                values.metalness = at(&m.metalness, values.metalness, t);
-                values.ior = at(&m.ior, values.ior, t);
-                values.transmission = at(&m.transmission, values.transmission, t);
-                values.opacity = at(&m.opacity, values.opacity, t);
-                values.emission = at(&m.emission_color, values.emission, t);
-                values.emission_strength = at(&m.emission_strength, values.emission_strength, t);
-                values.layers.transmission_color =
-                    at(&m.transmission_color, values.layers.transmission_color, t);
-                values.layers.diffuse_roughness =
-                    at(&m.diffuse_roughness, values.layers.diffuse_roughness, t);
-                values.layers.coat_weight = at(&m.coat, values.layers.coat_weight, t);
-                values.layers.coat_color = at(&m.coat_color, values.layers.coat_color, t);
-                values.layers.coat_roughness =
-                    at(&m.coat_roughness, values.layers.coat_roughness, t);
-                values.layers.coat_ior = at(&m.coat_ior, values.layers.coat_ior, t);
-                let mut graph = defaults.graph.clone();
+                let mut next = defaults.clone();
+                m.apply(&mut next, t);
                 if let Some(inputs) = &m.inputs {
                     if !inputs.is_empty() {
                         let pointer = format!("{p}/material/inputs");
-                        let graph = graph.as_mut().ok_or_else(|| {
+                        let graph = next.graph.as_mut().ok_or_else(|| {
                             Error::validation(
                                 &pointer,
                                 "MaterialX surface has no connected interface inputs",
@@ -500,14 +472,11 @@ impl Prepared {
                             .update(graph, inputs, t, &pointer)?;
                     }
                 }
-                let old = self.scene.material(*id).map_err(|e| validation(&p, e))?;
-                if old.values != values || old.graph != graph {
-                    let target = self
+                if self.scene.material(*id).map_err(|e| validation(&p, e))? != &next {
+                    *self
                         .scene
                         .material_mut(*id)
-                        .map_err(|e| validation(&p, e))?;
-                    target.values = values;
-                    target.graph = graph;
+                        .map_err(|e| validation(&p, e))? = next;
                 }
             }
         }

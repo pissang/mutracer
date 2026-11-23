@@ -1,0 +1,267 @@
+use crate::{
+    error::{Error, Result, escape},
+    shot::{Channel, MaterialValue, finite},
+};
+use mutracer_native::scene_api::OpenPbrMaterial;
+use serde::Deserialize;
+use serde_json::Value;
+use std::{collections::BTreeMap, sync::OnceLock};
+
+#[derive(Deserialize)]
+struct Property {
+    id: u32,
+    key: String,
+    #[serde(rename = "type")]
+    kind: Kind,
+    supported: bool,
+    #[serde(default)]
+    values: Vec<String>,
+}
+
+#[derive(Clone, Copy, PartialEq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Kind {
+    Float,
+    Vec2,
+    Color,
+    Bool,
+    Enum,
+    Texture,
+}
+
+fn properties() -> &'static [Property] {
+    static PROPERTIES: OnceLock<Vec<Property>> = OnceLock::new();
+    PROPERTIES.get_or_init(|| {
+        serde_json::from_str(include_str!("../../schemas/material-properties.json"))
+            .expect("native material property contract")
+    })
+}
+
+fn property(key: &str, in_maps: bool) -> Option<&'static Property> {
+    let key = if in_maps {
+        match key {
+            "color" => "map",
+            "opacity" => "alphaMap",
+            "normal" => "normalMap",
+            "emission" => "emissiveMap",
+            "roughness" => "roughnessMap",
+            "metalness" => "metalnessMap",
+            "transmission" => "transmissionMap",
+            _ => key,
+        }
+    } else {
+        match key {
+            "color" => "baseColor",
+            "roughness" => "specularRoughness",
+            "metalness" => "baseMetalness",
+            "transmission" => "transmissionWeight",
+            "ior" => "specularIor",
+            "coat" => "coatWeight",
+            "diffuseRoughness" => "baseDiffuseRoughness",
+            "emissionStrength" => "emissionLuminance",
+            "anisotropy" | "specularRoughnessAnisotropy" => "specularAnisotropy",
+            "coatRoughnessAnisotropy" => "coatAnisotropy",
+            "subsurfaceScatterAnisotropy" => "subsurfaceAnisotropy",
+            "geometryOpacity" => "opacity",
+            "geometryThinWalled" => "thinWalled",
+            "dispersion" => "transmissionDispersionScale",
+            _ => key,
+        }
+    };
+    properties().iter().find(|p| p.supported && p.key == key)
+}
+
+pub fn editable(key: &str) -> bool {
+    property(key, false).is_some_and(|p| p.kind != Kind::Texture)
+}
+
+enum Setting {
+    Float(Channel<f32>),
+    Vec2(Channel<[f32; 2]>),
+    Color(Channel<[f32; 3]>),
+    Uint(u32),
+}
+
+#[derive(Default, Deserialize)]
+pub struct Material {
+    pub asset: Option<String>,
+    pub inputs: Option<BTreeMap<String, Channel<MaterialValue>>>,
+    #[serde(default)]
+    maps: BTreeMap<String, Value>,
+    #[serde(flatten)]
+    fields: BTreeMap<String, Value>,
+    #[serde(skip)]
+    settings: BTreeMap<u32, Setting>,
+    #[serde(skip)]
+    pub textures: BTreeMap<u32, (String, String)>,
+}
+
+fn float_range(key: &str) -> (f32, f32) {
+    match key {
+        "baseDiffuseRoughness"
+        | "baseMetalness"
+        | "specularRoughness"
+        | "specularAnisotropy"
+        | "transmissionWeight"
+        | "subsurfaceWeight"
+        | "fuzzWeight"
+        | "fuzzRoughness"
+        | "coatWeight"
+        | "coatRoughness"
+        | "coatAnisotropy"
+        | "coatDarkening"
+        | "thinFilmWeight"
+        | "opacity"
+        | "alphaCutoff" => (0., 1.),
+        "transmissionScatterAnisotropy" | "subsurfaceAnisotropy" => (-1., 1.),
+        "specularIor" | "coatIor" | "thinFilmIor" => (1., f32::MAX),
+        "specularAnisotropyRotation"
+        | "coatAnisotropyRotation"
+        | "displacementScale"
+        | "displacementBias"
+        | "displacementUvProjectionScale" => (f32::MIN, f32::MAX),
+        _ => (0., f32::MAX),
+    }
+}
+
+impl Material {
+    pub fn check(&mut self, duration: f64, pointer: &str) -> Result<()> {
+        let mut seen = BTreeMap::new();
+        for (fields, in_maps) in [(&self.fields, false), (&self.maps, true)] {
+            for (name, raw) in fields {
+                let path = if in_maps {
+                    format!("{pointer}/maps/{}", escape(name))
+                } else {
+                    format!("{pointer}/{}", escape(name))
+                };
+                let p = property(name, in_maps)
+                    .filter(|p| !in_maps || p.kind == Kind::Texture)
+                    .ok_or_else(|| {
+                        Error::validation(
+                            &path,
+                            format!("Unknown OpenPBR field {name:?}"),
+                            "Use a property or texture slot listed by mutracer schema.",
+                        )
+                    })?;
+                if let Some(previous) = seen.insert(p.id, path.clone()) {
+                    return Err(Error::validation(
+                        &path,
+                        format!("The same property was already supplied at {previous}"),
+                        format!("Set {} once.", p.key),
+                    ));
+                }
+                let wrong_type = || {
+                    Error::validation(
+                        &path,
+                        "Invalid material property value",
+                        "Use the type and range shown by mutracer schema.",
+                    )
+                };
+                let setting = match p.kind {
+                    Kind::Float => {
+                        let ch: Channel<f32> =
+                            serde_json::from_value(raw.clone()).map_err(|_| wrong_type())?;
+                        let (min, max) = float_range(&p.key);
+                        ch.check(&path, duration, "a number in the property's range", |v| {
+                            (min..=max).contains(&v)
+                        })?;
+                        Setting::Float(ch)
+                    }
+                    Kind::Vec2 => {
+                        let ch: Channel<[f32; 2]> =
+                            serde_json::from_value(raw.clone()).map_err(|_| wrong_type())?;
+                        ch.check(&path, duration, "two finite numbers", finite)?;
+                        Setting::Vec2(ch)
+                    }
+                    Kind::Color => {
+                        let ch: Channel<[f32; 3]> =
+                            serde_json::from_value(raw.clone()).map_err(|_| wrong_type())?;
+                        ch.check(&path, duration, "nonnegative linear RGB", |rgb| {
+                            rgb.into_iter().all(|v| v.is_finite() && v >= 0.)
+                        })?;
+                        Setting::Color(ch)
+                    }
+                    Kind::Bool => Setting::Uint(u32::from(raw.as_bool().ok_or_else(wrong_type)?)),
+                    Kind::Enum => {
+                        let value = raw.as_str().ok_or_else(wrong_type)?;
+                        let index =
+                            p.values
+                                .iter()
+                                .position(|item| item == value)
+                                .ok_or_else(|| {
+                                    Error::validation(
+                                        &path,
+                                        format!("Unknown {} value {value:?}", p.key),
+                                        format!("Use {}.", p.values.join(", ")),
+                                    )
+                                })?;
+                        Setting::Uint(index as u32)
+                    }
+                    Kind::Texture => {
+                        let asset = raw
+                            .as_str()
+                            .filter(|name| crate::shot::valid_name(name))
+                            .ok_or_else(wrong_type)?;
+                        self.textures.insert(p.id, (path, asset.to_owned()));
+                        continue;
+                    }
+                };
+                self.settings.insert(p.id, setting);
+            }
+        }
+        self.fields.clear();
+        self.maps.clear();
+        Ok(())
+    }
+
+    pub fn has_layered_shading(&self) -> bool {
+        self.settings.contains_key(&10) || self.settings.contains_key(&25)
+    }
+
+    pub fn apply(&self, material: &mut OpenPbrMaterial, t: f64) {
+        for (&id, value) in &self.settings {
+            let result = match value {
+                Setting::Float(ch) => material.set_float(id, [ch.at(t), 0., 0.]),
+                Setting::Vec2(ch) => {
+                    let [x, y] = ch.at(t);
+                    material.set_float(id, [x, y, 0.])
+                }
+                Setting::Color(ch) => material.set_float(id, ch.at(t)),
+                Setting::Uint(value) => material.set_uint(id, *value),
+            };
+            result.expect("validated material property");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn material_uses_shared_property_ids_and_preserves_aliases() {
+        let mut m: Material = serde_json::from_value(serde_json::json!({
+            "color": [0.1, 0.2, 0.3],
+            "specularRoughness": {"keys": [[0,0.2],[1,0.6]]},
+            "transmissionScatter": [0.3, 0.2, 0.1],
+            "subsurfaceScatterAnisotropy": -0.6,
+            "geometryThinWalled": true,
+            "maps": {"fuzzColorMap": "cloth"}
+        }))
+        .unwrap();
+        m.check(1., "/material").unwrap();
+        assert!(matches!(m.settings[&13], Setting::Color(_)));
+        assert!(matches!(m.settings[&21], Setting::Float(_)));
+        assert_eq!(m.textures[&66].1, "cloth");
+        let mut out = OpenPbrMaterial::default();
+        m.apply(&mut out, 0.5);
+        assert_eq!(out.values.color, [0.1, 0.2, 0.3]);
+        assert!((out.values.roughness - 0.4).abs() < 1e-6);
+        assert!(out.values.layers.thin_walled);
+        let mut duplicate: Material = serde_json::from_value(serde_json::json!({
+            "maps": {"normal": "image"}, "normalMap": "other"
+        }))
+        .unwrap();
+        assert!(duplicate.check(1., "/material").is_err());
+    }
+}

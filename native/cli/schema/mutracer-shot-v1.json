@@ -153,6 +153,30 @@
         }
       ]
     },
+    "signedUnitChannel": {
+      "oneOf": [
+        {"type": "number", "minimum": -1, "maximum": 1},
+        {
+          "type": "object",
+          "properties": {
+            "keys": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "prefixItems": [{"type": "number", "minimum": 0}, {"type": "number", "minimum": -1, "maximum": 1}],
+                "minItems": 2,
+                "items": false
+              },
+              "minItems": 1,
+              "maxItems": 100000
+            },
+            "ease": {"$ref": "#/$defs/ease", "default": "linear"}
+          },
+          "required": ["keys"],
+          "additionalProperties": false
+        }
+      ]
+    },
     "unitChannel": {
       "oneOf": [
         {"type": "number", "minimum": 0, "maximum": 1},
@@ -287,6 +311,46 @@
               "items": {
                 "type": "array",
                 "prefixItems": [{"type": "number", "minimum": 0}, {"$ref": "#/$defs/scale"}],
+                "minItems": 2,
+                "items": false
+              },
+              "minItems": 1,
+              "maxItems": 100000
+            },
+            "ease": {"$ref": "#/$defs/ease", "default": "linear"}
+          },
+          "required": ["keys"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "vec2Channel": {
+      "oneOf": [
+        {
+          "type": "array",
+          "prefixItems": [{"type": "number"}, {"type": "number"}],
+          "minItems": 2,
+          "items": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "keys": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "prefixItems": [
+                  {"type": "number", "minimum": 0},
+                  {
+                    "type": "array",
+                    "prefixItems": [
+                      {"type": "number"},
+                      {"type": "number"}
+                    ],
+                    "minItems": 2,
+                    "items": false
+                  }
+                ],
                 "minItems": 2,
                 "items": false
               },
@@ -693,30 +757,125 @@
           "propertyNames": {"$ref": "#/$defs/name"},
           "additionalProperties": {"$ref": "#/$defs/inputChannel"}
         },
-        "color": {"$ref": "#/$defs/colorChannel"},
-        "emissionColor": {"$ref": "#/$defs/colorChannel"},
+        "baseWeight": {"$ref": "#/$defs/nonnegativeChannel"},
+        "baseColor": {"$ref": "#/$defs/colorChannel"},
+        "baseDiffuseRoughness": {"$ref": "#/$defs/unitChannel"},
+        "baseMetalness": {"$ref": "#/$defs/unitChannel"},
+        "specularWeight": {"$ref": "#/$defs/nonnegativeChannel"},
+        "specularColor": {"$ref": "#/$defs/colorChannel"},
+        "specularRoughness": {"$ref": "#/$defs/unitChannel"},
+        "specularIor": {"$ref": "#/$defs/iorChannel"},
+        "specularAnisotropy": {"$ref": "#/$defs/unitChannel"},
+        "transmissionWeight": {"$ref": "#/$defs/unitChannel"},
         "transmissionColor": {"$ref": "#/$defs/colorChannel"},
+        "transmissionDepth": {"$ref": "#/$defs/nonnegativeChannel"},
+        "transmissionScatter": {"$ref": "#/$defs/colorChannel"},
+        "transmissionScatterAnisotropy": {"$ref": "#/$defs/signedUnitChannel"},
+        "transmissionDispersionScale": {"$ref": "#/$defs/nonnegativeChannel"},
+        "transmissionDispersionAbbeNumber": {"$ref": "#/$defs/nonnegativeChannel"},
+        "subsurfaceWeight": {"$ref": "#/$defs/unitChannel"},
+        "subsurfaceColor": {"$ref": "#/$defs/colorChannel"},
+        "subsurfaceRadius": {"$ref": "#/$defs/nonnegativeChannel"},
+        "subsurfaceRadiusScale": {"$ref": "#/$defs/colorChannel"},
+        "subsurfaceAnisotropy": {"$ref": "#/$defs/signedUnitChannel"},
+        "fuzzWeight": {"$ref": "#/$defs/unitChannel"},
+        "fuzzColor": {"$ref": "#/$defs/colorChannel"},
+        "fuzzRoughness": {"$ref": "#/$defs/unitChannel"},
+        "coatWeight": {"$ref": "#/$defs/unitChannel"},
         "coatColor": {"$ref": "#/$defs/colorChannel"},
+        "coatRoughness": {"$ref": "#/$defs/unitChannel"},
+        "coatAnisotropy": {"$ref": "#/$defs/unitChannel"},
+        "coatIor": {"$ref": "#/$defs/iorChannel"},
+        "coatDarkening": {"$ref": "#/$defs/unitChannel"},
+        "thinFilmWeight": {"$ref": "#/$defs/unitChannel"},
+        "thinFilmThickness": {"$ref": "#/$defs/nonnegativeChannel"},
+        "thinFilmIor": {"$ref": "#/$defs/iorChannel"},
+        "emissionColor": {"$ref": "#/$defs/colorChannel"},
+        "emissionLuminance": {"$ref": "#/$defs/nonnegativeChannel"},
+        "opacity": {"$ref": "#/$defs/unitChannel"},
+        "thinWalled": {"type": "boolean"},
+        "doubleSided": {"type": "boolean"},
+        "map": {"$ref": "#/$defs/name"},
+        "alphaMap": {"$ref": "#/$defs/name"},
+        "alphaMode": {"enum": ["auto", "opaque", "mask", "blend"]},
+        "alphaCutoff": {"$ref": "#/$defs/unitChannel"},
+        "emissiveMap": {"$ref": "#/$defs/name"},
+        "normalMap": {"$ref": "#/$defs/name"},
+        "normalScale": {"$ref": "#/$defs/vec2Channel"},
+        "metallicRoughnessMap": {"$ref": "#/$defs/name"},
+        "roughnessMap": {"$ref": "#/$defs/name"},
+        "metalnessMap": {"$ref": "#/$defs/name"},
+        "transmissionMap": {"$ref": "#/$defs/name"},
+        "thinFilmMap": {"$ref": "#/$defs/name"},
+        "shadowCatcher": {"type": "boolean"},
+        "unlit": {"type": "boolean"},
+        "bevelSize": {"$ref": "#/$defs/nonnegativeChannel"},
+        "mapAlphaUsage": {"enum": ["opaque", "alpha", "transmission"]},
+        "uvProjection": {"enum": ["none", "spherical", "cylindrical", "triplanar"]},
+        "uvProjectionScale": {"$ref": "#/$defs/vec2Channel"},
+        "displacementUvProjection": {"enum": ["none", "triplanar", "spherical", "cylindrical"]},
+        "displacementUvProjectionScale": {"$ref": "#/$defs/scalarChannel"},
+        "displacementMap": {"$ref": "#/$defs/name"},
+        "displacementScale": {"$ref": "#/$defs/scalarChannel"},
+        "displacementStepSize": {"$ref": "#/$defs/nonnegativeChannel"},
+        "thinFilmThicknessMinimum": {"$ref": "#/$defs/nonnegativeChannel"},
+        "thinFilmMapChannel": {"enum": ["r", "g", "b", "a"]},
+        "coatWeightMap": {"$ref": "#/$defs/name"},
+        "coatRoughnessMap": {"$ref": "#/$defs/name"},
+        "fuzzColorMap": {"$ref": "#/$defs/name"},
+        "fuzzRoughnessMap": {"$ref": "#/$defs/name"},
+        "specularWeightMap": {"$ref": "#/$defs/name"},
+        "specularColorMap": {"$ref": "#/$defs/name"},
+        "anisotropyMap": {"$ref": "#/$defs/name"},
+        "specularAnisotropyRotation": {"$ref": "#/$defs/scalarChannel"},
+        "coatAnisotropyRotation": {"$ref": "#/$defs/scalarChannel"},
+        "specularAnisotropyModel": {"enum": ["openpbr", "gltf"]},
+        "coatNormalMap": {"$ref": "#/$defs/name"},
+        "coatNormalScale": {"$ref": "#/$defs/vec2Channel"},
+        "displacementBias": {"$ref": "#/$defs/scalarChannel"},
+        "color": {"$ref": "#/$defs/colorChannel"},
         "roughness": {"$ref": "#/$defs/unitChannel"},
         "metalness": {"$ref": "#/$defs/unitChannel"},
         "transmission": {"$ref": "#/$defs/unitChannel"},
-        "opacity": {"$ref": "#/$defs/unitChannel"},
-        "coat": {"$ref": "#/$defs/unitChannel"},
-        "coatRoughness": {"$ref": "#/$defs/unitChannel"},
-        "diffuseRoughness": {"$ref": "#/$defs/unitChannel"},
         "ior": {"$ref": "#/$defs/iorChannel"},
-        "coatIor": {"$ref": "#/$defs/iorChannel"},
+        "coat": {"$ref": "#/$defs/unitChannel"},
+        "diffuseRoughness": {"$ref": "#/$defs/unitChannel"},
         "emissionStrength": {"$ref": "#/$defs/nonnegativeChannel"},
+        "anisotropy": {"$ref": "#/$defs/unitChannel"},
+        "specularRoughnessAnisotropy": {"$ref": "#/$defs/unitChannel"},
+        "coatRoughnessAnisotropy": {"$ref": "#/$defs/unitChannel"},
+        "subsurfaceScatterAnisotropy": {"$ref": "#/$defs/signedUnitChannel"},
+        "geometryOpacity": {"$ref": "#/$defs/unitChannel"},
+        "geometryThinWalled": {"type": "boolean"},
+        "dispersion": {"$ref": "#/$defs/nonnegativeChannel"},
         "maps": {
           "type": "object",
           "properties": {
+            "map": {"$ref": "#/$defs/name"},
+            "alphaMap": {"$ref": "#/$defs/name"},
+            "emissiveMap": {"$ref": "#/$defs/name"},
+            "normalMap": {"$ref": "#/$defs/name"},
+            "metallicRoughnessMap": {"$ref": "#/$defs/name"},
+            "roughnessMap": {"$ref": "#/$defs/name"},
+            "metalnessMap": {"$ref": "#/$defs/name"},
+            "transmissionMap": {"$ref": "#/$defs/name"},
+            "thinFilmMap": {"$ref": "#/$defs/name"},
+            "displacementMap": {"$ref": "#/$defs/name"},
+            "coatWeightMap": {"$ref": "#/$defs/name"},
+            "coatRoughnessMap": {"$ref": "#/$defs/name"},
+            "fuzzColorMap": {"$ref": "#/$defs/name"},
+            "fuzzRoughnessMap": {"$ref": "#/$defs/name"},
+            "specularWeightMap": {"$ref": "#/$defs/name"},
+            "specularColorMap": {"$ref": "#/$defs/name"},
+            "anisotropyMap": {"$ref": "#/$defs/name"},
+            "coatNormalMap": {"$ref": "#/$defs/name"},
             "color": {"$ref": "#/$defs/name"},
-            "roughness": {"$ref": "#/$defs/name"},
-            "metalness": {"$ref": "#/$defs/name"},
+            "opacity": {"$ref": "#/$defs/name"},
             "normal": {"$ref": "#/$defs/name"},
             "emission": {"$ref": "#/$defs/name"},
-            "transmission": {"$ref": "#/$defs/name"},
-            "opacity": {"$ref": "#/$defs/name"}
+            "roughness": {"$ref": "#/$defs/name"},
+            "metalness": {"$ref": "#/$defs/name"},
+            "transmission": {"$ref": "#/$defs/name"}
           },
           "required": [],
           "additionalProperties": false

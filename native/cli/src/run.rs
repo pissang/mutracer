@@ -310,7 +310,7 @@ impl Input {
                     || obj
                         .material
                         .as_ref()
-                        .is_some_and(|m| m.transmission.is_some() || m.coat.is_some())
+                        .is_some_and(crate::material::Material::has_layered_shading)
             })
             .count();
         let material_factor = 1. + 0.75 * complex as f64 / self.shot.objects.len() as f64;

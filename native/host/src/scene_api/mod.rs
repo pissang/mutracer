@@ -168,7 +168,7 @@ impl Geometry {
 }
 /// OpenPBR values. Defaults: gray 0.8, roughness 0.3, IOR 1.5, opaque,
 /// no emission, transmission, maps or coating; solid surfaces.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct OpenPbrMaterial {
     /// Common OpenPBR values. Other properties use [`OpenPbrMaterial::set_float`]
     /// and [`OpenPbrMaterial::set_uint`].

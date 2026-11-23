@@ -2,6 +2,7 @@ mod assets;
 mod encode;
 mod error;
 mod lifetime;
+mod material;
 mod materialx;
 mod quality;
 mod render_settings;
