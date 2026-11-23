@@ -29,4 +29,27 @@ AovDenoisingGuide aovDenoisingGuide(OpenPbrPreparedBsdf prepared, vec3 diffuse, 
   float weightedRoughness = dot(weights, vec3(1.0, sqrt(baseAlpha), sqrt(coatAlpha)));
   return AovDenoisingGuide(diffuseGuide, specularGuide, vec4(weightedNormal, weightedRoughness) / total);
 }
+
+struct AovDenoisingPathGuide {
+  vec3 throughput;
+  vec3 diffuse;
+  vec3 normal;
+  float depth;
+};
+
+void aovFollowDenoisingPath(inout AovDenoisingPathGuide path, AovDenoisingGuide surface, float segmentLength) {
+  vec3 mean = vec3(1.0 / 3.0);
+  float diffuseWeight = dot(surface.diffuse, mean);
+  float totalWeight = diffuseWeight + dot(surface.specular, mean);
+  float here = totalWeight > 0.0 ? smoothstep(0.0, 0.5, diffuseWeight / totalWeight) : 0.0;
+
+  float incomingWeight = dot(path.throughput, mean);
+  path.depth += incomingWeight * segmentLength;
+  path.normal += (incomingWeight * here) * surface.normalRoughness.xyz;
+  path.diffuse += here * path.throughput * surface.diffuse;
+
+  vec3 deferred = (1.0 - here) * surface.specular;
+  float largest = max(max(deferred.x, deferred.y), deferred.z);
+  path.throughput = largest > 1e-4 ? path.throughput * deferred : vec3(0.0);
+}
 `;

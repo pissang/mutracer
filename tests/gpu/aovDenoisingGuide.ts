@@ -1,18 +1,27 @@
 import {createAovDenoisingGuideWgsl} from '../../src/renderer/wgsl/aovDenoisingGuide.wgsl.js';
 import glslGuide from '../../src/renderer/glsl/aovDenoisingGuide.glsl.js';
 
-const height = 3;
+const height = 5;
 const cases = [
   // Smooth base, rough clearcoat, different normals and colored lobes.
   {alpha: [0, 0], coatRoughness: .5, diffuse: [.15, .3, 0], base: [.3, 0, .3], coat: [0, 0, .45],
-    expected: [[.15, .3, .45], [.3, 0, .3], [.3, 0, .7, .45]]},
+    expected: [[.15, .3, .45], [.3, 0, .3], [.3, 0, .7, .45], [.15, .3, .45, 2], [.3, 0, .7]]},
   // Geometric mean .075 gives an even diffuse/specular split in the base.
   {alpha: [.15, .0375], coatRoughness: .5, diffuse: [0, 0, 0], base: [0, .6, 0], coat: [0, 0, 0],
-    expected: [[0, .3, 0], [0, .3, 0], [0, 0, 1, Math.sqrt(.075)]]},
+    expected: [[0, .3, 0], [0, .3, 0], [0, 0, 1, Math.sqrt(.075)], [0, .3, 0, 2], [0, 0, 1]]},
   {alpha: [.3, .3], coatRoughness: .5, diffuse: [.3, .3, .3], base: [0, 0, 0], coat: [0, 0, 0],
-    expected: [[.3, .3, .3], [0, 0, 0], [0, 0, 1, 1]]},
+    expected: [[.3, .3, .3], [0, 0, 0], [0, 0, 1, 1], [.3, .3, .3, 2], [0, 0, 1]]},
   {alpha: [.3, .3], coatRoughness: .5, diffuse: [0, 0, 0], base: [0, 0, 0], coat: [0, 0, 0],
-    expected: [[0, 0, 0], [0, 0, 0], [0, 0, 0, 0]]},
+    expected: [[0, 0, 0], [0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 2], [0, 0, 0]]},
+  // A colored mirror hands the normal and RGB reflectance weights to the wall.
+  {alpha: [0, 0], coatRoughness: 0, diffuse: [0, 0, 0], base: [.6, .3, 0], coat: [0, 0, 0],
+    expected: [[0, 0, 0], [.6, .3, 0], [0, 0, 1, 0], [.3, .12, 0, 2.9], [0, .3, 0]]},
+  // Diffuse is one quarter of the energy, so half the guide stays at the first hit.
+  {alpha: [0, 0], coatRoughness: 0, diffuse: [.2, .2, .2], base: [.6, .6, .6], coat: [0, 0, 0],
+    expected: [[.2, .2, .2], [.6, .6, .6], [0, 0, 1, .25], [.25, .22, .19, 2.9], [0, .3, .5]]},
+  // Below the deferred-weight cutoff only the first depth segment contributes.
+  {alpha: [0, 0], coatRoughness: 0, diffuse: [0, 0, 0], base: [.00001, 0, 0], coat: [0, 0, 0],
+    expected: [[0, 0, 0], [.00001, 0, 0], [0, 0, 1, 0], [0, 0, 0, 2], [0, 0, 0]]},
 ];
 const width = cases.length;
 const vector = (values: number[]) => values.map(value => value.toFixed(8)).join(', ');
@@ -41,6 +50,12 @@ async function webgpu() {
         output[id.x] = vec4f(guide.diffuse, 0);
         output[id.x + ${width}u] = vec4f(guide.specular, 0);
         output[id.x + ${2 * width}u] = guide.normalRoughness;
+        var path = AovDenoisingPathGuide(vec3f(1), vec3f(0), vec3f(0), 0);
+        let wall = AovDenoisingGuide(vec3f(.5, .4, .3), vec3f(0), vec4f(0, 1, 0, 1));
+        aovFollowDenoisingPath(&path, guide, 2.0);
+        aovFollowDenoisingPath(&path, wall, 3.0);
+        output[id.x + ${3 * width}u] = vec4f(path.diffuse, path.depth);
+        output[id.x + ${4 * width}u] = vec4f(path.normal, 0);
       }
     `});
     const pipeline = await device.createComputePipelineAsync({layout: 'auto', compute: {module: shader, entryPoint: 'main'}});
@@ -98,7 +113,13 @@ function webgl() {
         vec3 coat[] = vec3[](${cases.map(c => `vec3(${vector(c.coat)})`).join(', ')});
         OpenPbrPreparedBsdf prepared = OpenPbrPreparedBsdf(materials[i], Basis(vec3(0, 0, 1)), Basis(vec3(1, 0, 0)));
         AovDenoisingGuide guide = aovDenoisingGuide(prepared, diffuse[i], base[i], coat[i]);
-        result = row == 0 ? vec4(guide.diffuse, 0.0) : row == 1 ? vec4(guide.specular, 0.0) : guide.normalRoughness;
+        AovDenoisingPathGuide path = AovDenoisingPathGuide(vec3(1), vec3(0), vec3(0), 0.0);
+        AovDenoisingGuide wall = AovDenoisingGuide(vec3(.5, .4, .3), vec3(0), vec4(0, 1, 0, 1));
+        aovFollowDenoisingPath(path, guide, 2.0);
+        aovFollowDenoisingPath(path, wall, 3.0);
+        vec4 rows[] = vec4[](vec4(guide.diffuse, 0.0), vec4(guide.specular, 0.0), guide.normalRoughness,
+          vec4(path.diffuse, path.depth), vec4(path.normal, 0.0));
+        result = rows[row];
       }
     `));
     gl.linkProgram(program);
