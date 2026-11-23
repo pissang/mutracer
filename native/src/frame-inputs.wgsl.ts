@@ -14,7 +14,7 @@ export function nativeFrameInputHooks(hasCoatNormals: boolean, hasAnisotropyDire
     recordReflection: true,
     begin: '  mtFrameBegin(idx);\n',
     primarySurface: '  mtFrameSurface(si, ma, ray);\n',
-    preparedSurface: (prepared) => `    mtFrameGuideSurface(${prepared}, distance((*path).ray.o, (*si).position));\n`,
+    preparedSurface: (prepared) => `    mtFrameGuideSurface(${prepared}, si, path);\n`,
     unclampedColor: '  if (mtLeadingSample) { mtFramePixels[mtFrameIndex].unclampedRadiance = vec4f(liAndAlpha.rgb, 1.0); }\n',
     end: '  mtFrameFinish(liAndAlpha.rgb);\n',
     declarations: /* wgsl */ `
@@ -45,6 +45,7 @@ var<private> mtGuidePath: AovDenoisingPathGuide;
 var<private> mtGuideFirst: AovDenoisingGuide;
 var<private> mtGuideHits: u32;
 var<private> mtGuideUsable: bool;
+var<private> mtGuidePrimaryReady: bool;
 
 fn mtFrameBegin(index: u32) {
   mtFrameIndex = index;
@@ -61,9 +62,10 @@ fn mtFrameBegin(index: u32) {
     mtGuidePath = AovDenoisingPathGuide(vec3f(1.0), vec3f(0.0), vec3f(0.0), 0.0);
     mtGuideHits = 0u;
     mtGuideUsable = true;
+    mtGuidePrimaryReady = false;
   }
 }
-fn mtFrameGuideSurface(prepared: OpenPbrPreparedBsdf, segmentLength: f32) {
+fn mtFrameGuideSurface(prepared: OpenPbrPreparedBsdf, si: ptr<function, SurfaceInteraction>, path: ptr<function, Path>) {
   if (MT_DENOISING_GUIDE_MODEL == 0u || !mtLeadingSample || SPECTRAL ||
       (mtFramePixels[mtFrameIndex].identity.w & 161u) != 129u) { return; }
   if (!mtGuideUsable || all(mtGuidePath.throughput <= vec3f(0.0)) ||
@@ -72,10 +74,20 @@ fn mtFrameGuideSurface(prepared: OpenPbrPreparedBsdf, segmentLength: f32) {
     mtGuideUsable = false;
     return;
   }
-  let surfaceGuide = aovDenoisingGuide(prepared, mtFrameReflectance(prepared));
+  // The opaque eye hit uses the same resolved material and shading frame
+  // as the physical first-surface record. Reuse its reflectance integral.
+  let surface = mtFramePixels[mtFrameIndex].identity.xy;
+  let reuse = mtGuideHits == 0u && mtGuidePrimaryReady && (*path).fromEye &&
+    all(surface == vec2u(u32((*si).instanceIndex), u32((*si).triangleIndex))) &&
+    all(mtFramePixels[mtFrameIndex].positionDepth.xyz == (*si).position);
+  var surfaceGuide = mtGuideFirst;
+  if (!reuse) {
+    surfaceGuide = aovDenoisingGuide(prepared, mtFrameReflectance(prepared));
+  }
   if (mtGuideHits == 0u) { mtGuideFirst = surfaceGuide; }
   if (MT_DENOISING_GUIDE_MODEL == 2u) {
     var updated = mtGuidePath;
+    let segmentLength = distance((*path).ray.o, (*si).position);
     aovFollowDenoisingPath(&updated, surfaceGuide, segmentLength);
     mtGuidePath = updated;
   }
@@ -221,6 +233,10 @@ ${hasCoatNormals ? /* wgsl */ `    if (material.coatNormalEnabled) {
     resolved.geometryBitangent = si.geometryBitangent;
 ` : ''}    let prepared = openpbr_prepare(si.tangent, resolved, -ray.d, guideNormal);
     let reflectance = mtFrameReflectance(prepared);
+    if (MT_DENOISING_GUIDE_MODEL != 0u && !SPECTRAL && aovDenoisingPathSupports(prepared.material)) {
+      mtGuideFirst = aovDenoisingGuide(prepared, reflectance);
+      mtGuidePrimaryReady = true;
+    }
     mtFramePixels[mtFrameIndex].diffuseAlbedo = vec4f(reflectance.diffuse, 0.0);
     mtFramePixels[mtFrameIndex].specularAlbedo = vec4f(reflectance.specular + reflectance.coat, 0.0);
     if (material.specularAnisotropy > 0.0) {
