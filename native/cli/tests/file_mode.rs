@@ -20,7 +20,17 @@ fn validate(path: &str) -> (i32, Value) {
         .output()
         .unwrap();
     let output = if result.status.success() {
-        result.stdout
+        let events = String::from_utf8(result.stdout)
+            .unwrap()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .collect::<Vec<_>>();
+        events
+            .into_iter()
+            .rev()
+            .find(|event| event["event"] != "warning")
+            .map(|event| serde_json::to_vec(&event).unwrap())
+            .expect("successful validation emits a non-warning event")
     } else {
         result.stderr
     };

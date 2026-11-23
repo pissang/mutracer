@@ -1,9 +1,8 @@
 # Render a shot with MuTracer
 
-Create a v1 shot JSON with output duration, objects and a camera. Use metres,
-degrees and seconds in a right-handed, Y-up world. Camera and light directions
-follow local −Z. RGB values are linear. Get a machine-readable description with
-`mutracer schema`.
+Create a v1 shot JSON with output duration, objects, lights and a camera.
+Use metres, degrees, seconds and linear RGB in a right-handed, Y-up world.
+Run `mutracer schema` for fields, defaults and ranges.
 
 ```sh
 mutracer validate shot.json
@@ -23,19 +22,25 @@ and CLI defaults. Run `mutracer schema` for shot defaults and field limits.
   `fit: {"height":1}` and animate the camera's orbit azimuth. Set camera target
   to the object name, then adjust orbit distance. A value of 1 fits the bounds.
 - Material sweep. Add a sphere and floor and keyframe a material control such
-  as `"roughness":{"keys":[[0,0.12],[1,0.6]],"ease":"inOutSine"}`.
+  as `"specularRoughness":{"keys":[[0,0.12],[1,0.6]],"ease":"inOutSine"}`.
 - Studio lights. Use a large rect above and to the side for the key, a larger
   disk with lower intensity for fill, and a narrow cylinder behind the object
   for a rim. Aim lights with object-name targets.
-
+- Focus pull. Keyframe `camera.focusDistance` or use an object name to follow
+  its bounds. Choose a positive `camera.fStop` to see depth of field.
 - glTF clip. Set a glTF object's `animation.clip` to its name and keyframe
-  `animation.time` in seconds. See `gltf-animation.json` for a procedural
-  asset that ships in the CLI.
+  `animation.time` in seconds.
 - MaterialX growth. Use a MaterialX asset and keyframe a connected numeric
-  interface through `material.inputs`. See `materialx-growth.json`.
+  interface through `material.inputs`.
+- Display. Set `output.display` to a value such as
+  `{"toneMapping":"agx","toneMappingExposure":1.2}`.
 
-Start with the `turntable.json` and `material-sweep.json` examples. Use
-glTF/GLB or binary sidecars for meshes that exceed the inline geometry limits.
+Use glTF/GLB or binary sidecars for meshes that exceed the inline geometry
+limits.
+
+For a procedural scene, use the [Node frontend](../../cli/README.md) or the
+[Python API](../python/README.md). They accept the same render and display
+settings as [shot JSON](schema/shot.md#output-and-animation).
 
 ## Cost, progress and resume
 
@@ -59,13 +64,10 @@ timeout. The CLI automatically retries GPU failures. Use `--keep-frames` or
 change the output path to start a separate render after editing the shot,
 assets or settings.
 
-The same shot, assets and settings render identical frames, with one
-exception: on Apple GPUs, hardware ray queries occasionally miss a whole
-sample without reporting an error, which changes a single frame. This happens
-mostly when other work shares the GPU. Use `--tracer software` (or
-`"tracer": "software"` in `output`) when every frame must match exactly;
-software traversal can be slower on large scenes. Frames rendered with different tracers are
-separate results and are not reused.
+Use `--tracer software` when repeatable frames matter. Apple hardware ray
+queries occasionally miss a complete sample, especially while other work
+uses the GPU. Software traversal can be slower on large scenes. Changing
+the tracer requires a separate frame directory.
 
 The CLI renders with the native GPU driver. macOS and Windows use their system encoders.
 On Linux the CLI uses ffmpeg when available and leaves the PNG sequence
@@ -76,6 +78,9 @@ For HDR, render with `--format exr`. Add `--aovs` to capture surface guides
 for `mutracer temporal`. Use `mutracer assemble` to join PNG sequences with
 optional captions.
 
-Progress is JSON lines on stdout. Errors go to stderr. Exit codes are 0 for
-success, 2 for invalid input, 3 for asset or output failure, 4 for a budget
-limit and 5 for a resumable GPU or worker failure.
+Progress and warning events are JSON lines on stdout. Warnings include a code,
+JSON pointer when available, message and hint; they do not change the exit code.
+Some warnings also appear as readable text on stderr.
+Errors go to stderr.
+Exit codes are 0 for success, 2 for invalid input, 3 for asset or output
+failure, 4 for a budget limit and 5 for a resumable GPU or worker failure.

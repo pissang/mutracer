@@ -9,6 +9,11 @@ or procedural geometry. Keep geometry and textures in external assets.
 
 1. Write a shot with distinct object names, a camera, light sources and an
    explicit duration. Use named targets and camera orbit for turntables.
+   Set `camera.fStop` and `focusDistance` for depth of field. Set
+   `output.render` for bounce depth or caustics. Use `toneMapping` and
+   `toneMappingExposure` in `output.display` for tone mapping and linear
+   exposure. Use OpenPBR names such as `baseColor`, `specularRoughness` and
+   `coatWeight`. Name texture slots directly on the material.
 2. Run `mutracer validate shot.json`. Fix the reported locations before
    rendering. Check pixel samples and frame count before choosing a budget.
 3. Run `mutracer still shot.json --t TIME -o still.png`. Inspect composition
@@ -20,6 +25,11 @@ or procedural geometry. Keep geometry and textures in external assets.
    Read JSON progress. Rerun the same command to reuse completed frames after
    a device failure. Use a separate frame directory when inputs change.
 
+Handle stdout warning events by their `code`, `pointer`, `message` and `hint`.
+Warnings describe recoverable render behavior and do not change the exit code;
+fix them when their hint applies before relying on the image.
+
 Use `--frames A-B` for a range and `--max-minutes` to bound rendering time.
-For compositing, use `--format exr`. Add `--aovs` to use the offline temporal
-filter. Join approved PNG sequences with `mutracer assemble`.
+For compositing, use `--format exr`. Use `sampleSequence: "frame"` for adjacent
+sampling ranges. Add `--aovs` to use the offline temporal filter. Join
+approved PNG sequences with `mutracer assemble`.

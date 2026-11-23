@@ -1,13 +1,15 @@
 use crate::{
     error::{Error, Result},
     lifetime,
+    render_settings::{self, RenderOptions, SampleSequence},
     run::{Format, Input, Renderer, Settings},
     shot::{self, Denoise, Seed, Tracer},
+    warnings::{self, Warning},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     io::{self, BufRead, Read, Write},
     path::{Path, PathBuf},
     sync::{Arc, mpsc},
@@ -47,6 +49,9 @@ struct Overrides {
     seed: Option<Seed>,
     seed_value: Option<u32>,
     sample_sequence_offset: Option<u32>,
+    sample_sequence: Option<SampleSequence>,
+    render: Option<RenderOptions>,
+    display: Option<shot::Display>,
     format: Option<Format>,
     tracer: Option<Tracer>,
 }
@@ -92,7 +97,13 @@ enum Request {
         id: u32,
         frame: u32,
         t: Option<f64>,
-        settings: Option<Overrides>,
+        settings: Option<Value>,
+    },
+    Check {
+        id: u32,
+        frame: u32,
+        t: Option<f64>,
+        settings: Option<Value>,
     },
 }
 
@@ -165,6 +176,21 @@ fn reply(writer: &mut impl Write, header: Value, bytes: Option<&[u8]>) -> Result
     send.map_err(|e: io::Error| invalid("", format!("Cannot write protocol reply: {e}")))
 }
 
+fn reply_warning(
+    writer: &mut impl Write,
+    id: u32,
+    frame: u32,
+    target_samples: u32,
+    warning: &Warning,
+) -> Result<()> {
+    reply(
+        writer,
+        json!({"type":"progress","id":id,"frame":frame,"samples":0,
+            "targetSamples":target_samples,"warning":warning}),
+        None,
+    )
+}
+
 enum Scene {
     Shot { input: Box<Input>, raw: Value },
     Descriptor(Arc<Vec<u8>>),
@@ -182,9 +208,13 @@ struct Session {
 fn editable(pointer: &str) -> bool {
     let parts: Vec<_> = pointer.split('/').collect();
     match parts.as_slice() {
-        ["", "camera", "fov" | "target" | "position"]
+        [
+            "",
+            "camera",
+            "fov" | "target" | "position" | "fStop" | "focusDistance" | "sensorHeight",
+        ]
         | ["", "camera", "orbit", "azimuth" | "elevation" | "distance"]
-        | ["", "output", "display", "exposure"]
+        | ["", "output", "display", "exposure" | "toneMappingExposure"]
         | ["", "environment", "color" | "intensity" | "rotation"] => true,
         ["", "objects", n, "position" | "rotation" | "scale"]
         | ["", "objects", n, "animation", "time"]
@@ -194,16 +224,10 @@ fn editable(pointer: &str) -> bool {
             "lights",
             n,
             "position" | "target" | "color" | "intensity" | "size" | "radius" | "length" | "angle",
-        ]
-        | [
-            "",
-            "objects",
-            n,
-            "material",
-            "color" | "roughness" | "metalness" | "transmission" | "transmissionColor" | "ior"
-            | "opacity" | "emissionColor" | "emissionStrength" | "coat" | "coatColor"
-            | "coatRoughness" | "coatIor" | "diffuseRoughness",
         ] => n.parse::<usize>().is_ok(),
+        ["", "objects", n, "material", key] => {
+            n.parse::<usize>().is_ok() && crate::material::editable(key)
+        }
         _ => false,
     }
 }
@@ -236,6 +260,7 @@ impl Session {
         if !self.hello && !matches!(request, Request::Hello { .. }) {
             return Err(invalid("/type", "Send hello first"));
         }
+        let check_only = matches!(request, Request::Check { .. });
         match request {
             Request::Hello { id, protocol } => {
                 if protocol != 1 || self.hello {
@@ -248,7 +273,7 @@ impl Session {
                 reply(
                     writer,
                     json!({"type":"ok","id":id,"protocol":1,"shotVersion":1,"descriptorVersions":[8],
-                    "capabilities":["shot-json","descriptor-v8","asset-path","asset-bytes","shot-edit","png","oidn","image-decode","exr"],
+                    "capabilities":["shot-json","descriptor-v8","asset-path","asset-bytes","shot-edit","png","oidn","image-decode","exr","render-settings","display-settings","frame-sample-sequence","check-settings","oidn-clean-aux-large","structured-warnings"],
                     "maxHeaderBytes":MAX_HEADER,"maxPayloadBytes":MAX_PAYLOAD,"build":env!("MUTRACER_CLI_BUILD_ID")}),
                     None,
                 )
@@ -436,6 +461,12 @@ impl Session {
                 frame,
                 t,
                 settings,
+            }
+            | Request::Check {
+                id,
+                frame,
+                t,
+                settings,
             } => {
                 let tick = Instant::now();
                 let scene = self
@@ -443,7 +474,14 @@ impl Session {
                     .as_mut()
                     .ok_or_else(|| invalid("/type", "Submit a scene before rendering"))?;
                 let explicit_settings = settings.is_some();
-                let overrides = settings.unwrap_or_default();
+                let overrides: Overrides = match settings {
+                    Some(settings) => {
+                        shot::reject_null(&settings, "/settings")?;
+                        serde_path_to_error::deserialize(settings)
+                            .map_err(|e| shot::decode_error("/settings", e))?
+                    }
+                    None => Overrides::default(),
+                };
                 let defaults = if let Scene::Shot { input, .. } = scene {
                     Some(&input.shot.output)
                 } else {
@@ -479,6 +517,12 @@ impl Session {
                     sample_sequence_offset: overrides
                         .sample_sequence_offset
                         .unwrap_or_else(|| defaults.map_or(0, |o| o.sample_sequence_offset)),
+                    sample_sequence: overrides.sample_sequence.unwrap_or_else(|| {
+                        defaults.map_or(SampleSequence::Fixed, |o| o.sample_sequence)
+                    }),
+                    render: overrides.render.unwrap_or_else(|| {
+                        defaults.map_or_else(RenderOptions::default, |o| o.render)
+                    }),
                     format: overrides.format.unwrap_or(Format::Png),
                     aovs: false,
                     tracer: overrides
@@ -488,12 +532,54 @@ impl Session {
                     stride: 1,
                     gpu: None,
                 };
-                settings.validate(defaults.map_or(1., |o| o.duration))?;
+                settings.validate(defaults.map_or(1., |o| o.duration), "/settings")?;
+                settings.offset(frame, "/settings")?;
+                let display = overrides
+                    .display
+                    .map(|display| {
+                        display.check(
+                            defaults.map_or(f64::MAX, |o| o.duration),
+                            "/settings/display",
+                        )?;
+                        Ok(display.at(t))
+                    })
+                    .transpose()?;
+                let graph_targets = match scene {
+                    Scene::Shot { input, .. } => input.prepared.material_graph_targets(&input.shot),
+                    Scene::Descriptor(bytes) => warnings::descriptor_material_graph_targets(bytes),
+                };
+                let mut seen_warnings = HashSet::new();
+                let mut request_warnings = Vec::new();
+                if warnings::caustics_enabled(settings.render) {
+                    for warning in warnings::predicted_caustic_graph_warnings(&graph_targets) {
+                        if seen_warnings.insert(warning.clone()) {
+                            reply_warning(writer, id, frame, settings.spp, &warning)?;
+                            request_warnings.push(warning);
+                        }
+                    }
+                }
+                if let Some(warning) = settings.render.sampling_warning() {
+                    let warning = warnings::random_sampling(warning);
+                    if seen_warnings.insert(warning.clone()) {
+                        reply_warning(writer, id, frame, settings.spp, &warning)?;
+                        request_warnings.push(warning);
+                    }
+                }
+                if check_only {
+                    let weights =
+                        render_settings::denoiser_identity(settings.denoise, "/settings/denoise")?;
+                    return reply(
+                        writer,
+                        json!({"type":"ok","id":id,"denoiserWeights":weights,"warnings":request_warnings}),
+                        None,
+                    );
+                }
                 if self.renderer.as_ref().is_none_or(|(old, _)| {
                     old.size != settings.size
                         || old.spp != settings.spp
                         || old.denoise != settings.denoise
                         || old.tracer != settings.tracer
+                        || old.render != settings.render
                 }) {
                     self.renderer = Some((settings, Renderer::new(settings)?));
                 }
@@ -504,11 +590,18 @@ impl Session {
                     None,
                 )?;
                 let image = match scene {
-                    Scene::Shot { input, .. } => renderer.shot_frame(input, settings, frame, t)?,
+                    Scene::Shot { input, .. } => {
+                        renderer.shot_frame_with_display(input, settings, frame, t, display)?
+                    }
                     Scene::Descriptor(bytes) => {
                         renderer
                             .engine
                             .set_scene_shared(bytes.clone())
+                            .map_err(|e| Error::gpu(e.to_string()))?;
+                        renderer
+                            .engine
+                            .display()
+                            .set_settings(display.unwrap_or_default())
                             .map_err(|e| Error::gpu(e.to_string()))?;
                         renderer
                             .engine
@@ -517,6 +610,13 @@ impl Session {
                         renderer.capture(settings, frame)?
                     }
                 };
+                let render_warnings = renderer.graph_warnings(&graph_targets);
+                for warning in render_warnings {
+                    if seen_warnings.insert(warning.clone()) {
+                        reply_warning(writer, id, frame, settings.spp, &warning)?;
+                        request_warnings.push(warning);
+                    }
+                }
                 reply(
                     writer,
                     json!({"type":"frame","id":id,"frame":frame,"format":settings.format,
@@ -613,6 +713,77 @@ mod tests {
                 Some("/bytes")
             );
         }
+    }
+
+    #[test]
+    fn materialx_validation_error_includes_xml_location_and_keeps_session_open() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("bad.mtlx"),
+            r#"<materialx>
+  <mystery name="shader" type="surfaceshader"/>
+  <surfacematerial name="surface" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="shader"/>
+  </surfacematerial>
+</materialx>"#,
+        )
+        .unwrap();
+        let mut shot = json!({
+            "version": 1, "output": {"duration": 1},
+            "objects": [{"name": "subject", "shape": "sphere"}],
+            "camera": {"position": [0, 0, 3], "target": "subject"},
+        });
+        let scene = |id, shot: &Value| {
+            let bytes = serde_json::to_vec(shot).unwrap();
+            Packet {
+                header: json!({
+                    "type":"scene","id":id,"format":"shot-json","bytes":bytes.len(),"baseDir":dir.path(),
+                }),
+                bytes,
+            }
+        };
+        let good = scene(2, &shot);
+        shot["assets"] = json!({"surface": {"materialx": "bad.mtlx"}});
+        shot["objects"][0]["material"] = json!({"asset": "surface"});
+        let mut requests = [
+            Packet {
+                header: json!({"type":"hello","id":1,"protocol":1}),
+                bytes: vec![],
+            },
+            good,
+            scene(3, &shot),
+            Packet {
+                header: json!({"type":"check","id":4,"frame":0}),
+                bytes: vec![],
+            },
+        ]
+        .into_iter();
+        let mut output = Vec::new();
+        run(|| Ok(requests.next()), &mut output).unwrap();
+        let mut output = Cursor::new(output);
+        assert_eq!(
+            read_packet(&mut output).unwrap().unwrap().header["type"],
+            "ok"
+        );
+        assert_eq!(
+            read_packet(&mut output).unwrap().unwrap().header["type"],
+            "ok"
+        );
+        let error = read_packet(&mut output).unwrap().unwrap().header;
+        assert_eq!(error["id"], 3);
+        assert_eq!(error["type"], "error");
+        assert_eq!(error["code"], 2);
+        assert!(
+            error["message"]
+                .as_str()
+                .unwrap()
+                .contains("bad.mtlx:2:3: shader (<mystery>)")
+        );
+        assert!(error["hint"].as_str().unwrap().contains("open_pbr_surface"));
+        assert_eq!(
+            read_packet(&mut output).unwrap().unwrap().header["type"],
+            "ok"
+        );
     }
 
     #[test]

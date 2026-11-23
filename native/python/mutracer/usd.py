@@ -1,6 +1,8 @@
 """Optional OpenUSD to shot-v1 importer."""
 from __future__ import annotations
 
+from ._material_names import MATERIAL_ALIASES
+
 import argparse
 from array import array
 from hashlib import sha256
@@ -186,13 +188,17 @@ class Importer:
                 return {"asset": name}
             raise Located(material.GetPath(), "MaterialX requires a local, resolved sourceAsset document.")
         shader, _, _ = material.ComputeSurfaceSource()
-        if not shader or shader.GetIdAttr().Get() != "UsdPreviewSurface":
-            raise Located(material.GetPath(), "Expected UsdPreviewSurface or a MaterialX sourceAsset.")
+        shader_id = str(shader.GetIdAttr().Get()) if shader else ""
+        if shader_id in ("open_pbr_surface", "ND_open_pbr_surface_surfaceshader"):
+            return self.open_pbr(shader)
+        if shader_id != "UsdPreviewSurface":
+            raise Located(material.GetPath(), "Expected OpenPBR, UsdPreviewSurface or a MaterialX sourceAsset.")
         result = {}
         properties = {
-            "diffuseColor": "color", "roughness": "roughness", "metallic": "metalness",
-            "ior": "ior", "opacity": "opacity", "clearcoat": "coat",
+            "diffuseColor": "baseColor", "roughness": "specularRoughness", "metallic": "baseMetalness",
+            "ior": "specularIor", "opacity": "geometryOpacity", "clearcoat": "coatWeight",
             "clearcoatRoughness": "coatRoughness", "emissiveColor": "emissionColor",
+            "opacityThreshold": "alphaCutoff",
         }
         for key, target in properties.items():
             port = shader.GetInput(key)
@@ -206,11 +212,37 @@ class Importer:
                 return list(sampled) if key in ("diffuseColor", "emissiveColor") else sampled
             result[target] = self.channel(self.times([attr]), value)
         if "emissionColor" in result:
-            result["emissionStrength"] = 1
+            result["emissionLuminance"] = 1
         if shader.GetInput("useSpecularWorkflow") and shader.GetInput("useSpecularWorkflow").Get(self.first):
             raise Located(shader.GetPath(), "PreviewSurface specular workflow is unsupported.")
-        if shader.GetInput("opacityThreshold") and shader.GetInput("opacityThreshold").Get(self.first):
-            raise Located(shader.GetPath(), "PreviewSurface alpha masking is unsupported.")
+        return result
+
+    def open_pbr(self, shader):
+        weights = {"base", "specular", "transmission", "subsurface", "coat", "fuzz", "thin_film"}
+        lengths = {"transmission_depth", "subsurface_radius"}
+        result = {}
+        for port in shader.GetInputs():
+            name = str(port.GetBaseName())
+            if port.HasConnectedSource():
+                raise Located(port.GetAttr().GetPath(), "Connected OpenPBR inputs require a MaterialX sourceAsset.")
+            attr = port.GetAttr()
+            if not attr.HasAuthoredValueOpinion():
+                continue
+            parts = (name + "_weight" if name in weights else name).split("_")
+            field = parts[0] + "".join(part.title() for part in parts[1:])
+
+            def sample(t):
+                value = attr.Get(t)
+                if isinstance(value, (int, float, bool)):
+                    return value * self.units if name in lengths else value
+                if isinstance(value, (self.Gf.Vec2f, self.Gf.Vec3f, self.Gf.Vec2d, self.Gf.Vec3d)):
+                    return list(value)
+                raise Located(attr.GetPath(), "Use an OpenPBR numeric constant or a MaterialX sourceAsset.")
+
+            value = self.channel(self.times([attr]), sample)
+            if isinstance(value, dict) and isinstance(value["keys"][0][1], bool):
+                raise Located(attr.GetPath(), "Time-varying OpenPBR booleans require separate shots.")
+            result[MATERIAL_ALIASES.get(field, field)] = value
         return result
 
     def mesh(self, prim, index):
@@ -293,18 +325,39 @@ class Importer:
         camera = self.Geom.Camera(prim)
         projected = camera.GetProjectionAttr()
         aperture, focal = camera.GetVerticalApertureAttr(), camera.GetFocalLengthAttr()
+        horizontal_aperture = camera.GetHorizontalApertureAttr()
+        f_stop, focus = camera.GetFStopAttr(), camera.GetFocusDistanceAttr()
         horizontal, vertical = camera.GetHorizontalApertureOffsetAttr(), camera.GetVerticalApertureOffsetAttr()
         path = prim.GetPath()
         def fov(time):
             if projected.Get(time) != "perspective" or horizontal.Get(time) or vertical.Get(time):
                 raise Located(path, "Only centered perspective cameras can be imported.")
-            if not focal.Get(time) > 0 or not aperture.Get(time) > 0:
+            if min(focal.Get(time), aperture.Get(time), horizontal_aperture.Get(time)) <= 0:
                 raise Located(path, "Camera aperture and focal length must be positive.")
             return degrees(2 * atan(aperture.Get(time) / (2 * focal.Get(time))))
-        timeline = self.times([projected, aperture, focal, horizontal, vertical], prim)
-        return {"fov": self.channel(timeline, fov),
-                "position": self.channel(timeline, lambda t:self.pose(prim,t)[0]),
-                "target": self.channel(timeline, lambda t:self.pose(prim,t)[1])}
+        timeline = self.times([projected, aperture, horizontal_aperture, focal, horizontal, vertical], prim)
+        lens_times = self.times([aperture, f_stop, focus])
+        record = {"fov": self.channel(timeline, fov),
+                  "position": self.channel(timeline, lambda t: self.pose(prim, t)[0]),
+                  "target": self.channel(timeline, lambda t: self.pose(prim, t)[1]),
+                  "sensorHeight": self.channel(lens_times, lambda t: aperture.Get(t) * self.units * 100)}
+        if f_stop.HasAuthoredValueOpinion():
+            def aperture_stop(t):
+                value = f_stop.Get(t)
+                if not isfinite(value) or value < 0:
+                    raise Located(f_stop.GetPath(), "Use a finite, nonnegative fStop.")
+                return value
+            record["fStop"] = self.channel(lens_times, aperture_stop)
+        if focus.HasAuthoredValueOpinion():
+            def focus_metres(t):
+                distance = focus.Get(t) * self.units
+                if distance == 0 and not f_stop.Get(t):
+                    return 10
+                if not isfinite(distance) or distance <= 0:
+                    raise Located(focus.GetPath(), "Use a positive focusDistance.")
+                return distance
+            record["focusDistance"] = self.channel(lens_times, focus_metres)
+        return record
 
     def light(self, prim):
         kind = str(prim.GetTypeName())

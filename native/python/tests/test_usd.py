@@ -38,7 +38,7 @@ class OpenUsdImport(unittest.TestCase):
             obj = shot["objects"][0]
             self.assertEqual(obj["name"],"/Motion/Card")
             self.assertEqual(obj["position"]["keys"],[[0,[-.3,0,0]],[23/24,[.3,0,0]]])
-            self.assertAlmostEqual(obj["material"]["roughness"],.45)
+            self.assertAlmostEqual(obj["material"]["specularRoughness"],.45)
             self.assertAlmostEqual(shot["camera"]["position"][1],1.2)
             self.assertAlmostEqual(shot["camera"]["position"][2],4)
             index = obj["geometry"]["indices"]

@@ -70,6 +70,7 @@ export function binary() {
 
 export class Worker {
   #next = 0;
+  #warnings = new Set();
   #queue = Promise.resolve();
 
   static async open() {
@@ -131,9 +132,23 @@ export class Worker {
       for (;;) {
         const response = JSON.parse((await this.reader.line()).toString());
         if (response.id !== id) throw new NativeError('Worker response ID differs from the request.');
-        if (response.type === 'progress') continue;
+        if (response.type === 'progress') {
+          if (response.warning && typeof response.warning === 'object') {
+            const key = JSON.stringify(response.warning);
+            if (!this.#warnings.has(key)) {
+              this.#warnings.add(key);
+              this.onWarning?.(response.warning);
+              const location = response.warning.pointer ? `${response.warning.pointer}: ` : '';
+              console.error(`Warning ${location}${response.warning.message} ${response.warning.hint}`.trim());
+            }
+          } else if (response.warning && !this.#warnings.has(response.warning)) {
+            this.#warnings.add(response.warning);
+            console.error(`Warning: ${response.warning}`);
+          }
+          continue;
+        }
         if (response.type === 'error') {
-          throw new NativeError(`${response.pointer ?? ''} ${response.message}`, response.code);
+          throw new NativeError([response.pointer, response.message, response.hint].filter(Boolean).join(' '), response.code);
         }
         if (response.bytes === undefined) return {header: response};
         const length = (await this.reader.exact(4)).readUInt32LE();

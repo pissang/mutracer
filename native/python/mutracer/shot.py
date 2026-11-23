@@ -8,6 +8,8 @@ from typing import Any, Callable
 import os
 import tempfile
 
+from ._display import canonical_display
+from ._material_names import MAP_NAMES, MATERIAL_ALIASES
 from .runner import invoke
 
 
@@ -160,11 +162,17 @@ class Camera:
     position: Any = None
     fov: Any = None
     orbit_parameters: dict | None = None
+    f_stop: Any = None
+    focus_distance: Any = None
+    sensor_height: Any = None
 
     @classmethod
-    def orbit(cls, target, *, azimuth=0, elevation=0, distance=1.15, fov=None) -> Camera:
+    def orbit(cls, target, *, azimuth=0, elevation=0, distance=1.15, fov=None,
+              f_stop=None, focus_distance=None, sensor_height=None) -> Camera:
         """Orbit a point or a named object."""
-        return cls(target, fov=fov, orbit_parameters={"azimuth": azimuth, "elevation": elevation, "distance": distance})
+        return cls(target, fov=fov, f_stop=f_stop, focus_distance=focus_distance,
+                   sensor_height=sensor_height,
+                   orbit_parameters={"azimuth": azimuth, "elevation": elevation, "distance": distance})
 
 
 @dataclass
@@ -179,6 +187,8 @@ class Output:
     denoise: str | None = None
     tracer: str | None = None
     display: dict | None = None
+    render: dict | None = None
+    sample_sequence: str | None = None
 
 
 def _json_value(value, directory: Path):
@@ -197,6 +207,19 @@ def _json_value(value, directory: Path):
     return value
 
 
+def _canonical_material(material: dict) -> dict:
+    fields = dict(material)
+    for old, key in MATERIAL_ALIASES.items():
+        if old in fields and key not in fields:
+            fields[key] = fields.pop(old)
+    maps = fields.get("maps")
+    if isinstance(maps, dict):
+        slots = [MAP_NAMES.get(key) for key in maps]
+        if None not in slots and len(set(slots)) == len(slots) and not fields.keys() & set(slots):
+            fields.update(zip(slots, fields.pop("maps").values()))
+    return fields
+
+
 @dataclass
 class Shot:
     output: Output
@@ -208,10 +231,24 @@ class Shot:
     _path: Path | None = field(default=None, init=False, repr=False, compare=False)
 
     def to_dict(self, directory: str | Path = ".") -> dict:
+        raw = self._shot_dict(directory)
+        for item in raw["objects"]:
+            if isinstance(item.get("material"), dict):
+                item["material"] = _canonical_material(item["material"])
+        display = raw["output"].get("display")
+        if isinstance(display, dict):
+            raw["output"]["display"] = canonical_display(display)
+        return raw
+
+    def _shot_dict(self, directory: str | Path) -> dict:
         raw = asdict(self)
         del raw["_path"]
         raw["output"]["seedValue"] = raw["output"].pop("seed_value")
         raw["output"]["sampleSequenceOffset"] = raw["output"].pop("sample_sequence_offset")
+        raw["output"]["sampleSequence"] = raw["output"].pop("sample_sequence")
+        raw["camera"]["fStop"] = raw["camera"].pop("f_stop")
+        raw["camera"]["focusDistance"] = raw["camera"].pop("focus_distance")
+        raw["camera"]["sensorHeight"] = raw["camera"].pop("sensor_height")
         raw["camera"]["orbit"] = raw["camera"].pop("orbit_parameters")
         return {"version": 1, **_json_value(raw, Path(directory).resolve())}
 
@@ -252,6 +289,6 @@ class Shot:
             raise ValueError("Call shot.save(path) before invoking the CLI.")
         output = Path(output)
         directory = Path(keep_frames) if keep_frames is not None else output.with_name(output.name + ".frames")
-        rate, events = render_frames(self.to_dict(self._path.parent), self._path.parent, directory,
+        rate, events = render_frames(self._shot_dict(self._path.parent), self._path.parent, directory,
                                      callback, settings, fps, progress)
         return events + invoke("encode", directory, output, progress, fps=rate)

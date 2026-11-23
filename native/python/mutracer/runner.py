@@ -47,7 +47,12 @@ def invoke(command: str, shot: Path, output: Path | None = None,
             value = "x".join(map(str, value))
         if key == "frames" and not isinstance(value, (str, int)):
             value = "-".join(map(str, value))
-        args.extend(("--" + key.replace("_", "-"), str(value)))
+        flag = "--" + key.replace("_", "-")
+        if isinstance(value, bool):
+            if value:
+                args.append(flag)
+        else:
+            args.extend((flag, str(value)))
 
     events = []
     # A file keeps stderr draining even while stdout is read line by line.

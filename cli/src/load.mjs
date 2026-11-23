@@ -4,6 +4,13 @@ import {fileURLToPath} from 'node:url';
 import * as THREE from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {MeshoptDecoder} from 'three/addons/libs/meshopt_decoder.module.js';
+import {parseMaterialX} from '../../src/materialx.ts';
+import {camel, fields} from '../../src/materialx/parse.ts';
+import {parseXml} from '../../src/materialx/xml.ts';
+import {NativeError} from './worker.mjs';
+import Texture from '../../src/scene/Texture.ts';
+import {normalizeGraph} from '../../src/renderer/materialGraph/normalize.ts';
+
 
 function toArrayBuffer(bytes) {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
@@ -22,7 +29,82 @@ async function read(source, base, dependencies) {
   return bytes;
 }
 
+const surfaces = ['open_pbr_surface', 'standard_surface', 'gltf_pbr', 'UsdPreviewSurface'];
+const surfaceHint = `Use ${surfaces.join(', ')}. Bake unsupported graph inputs to texture maps or set uniform material properties.`;
+
+function materialXDiagnostic(xml, url, materialName, shaderTag, warnings) {
+  const entries = [];
+  const path = element => {
+    const name = element.attrs.name ?? element.tag;
+    return !element.parent || element.parent.tag === 'materialx' ? name : `${path(element.parent)}/${name}`;
+  };
+  const root = parseXml(xml, (element, offset) => {
+    if (element.tag !== 'materialx') entries.push({element, offset, path: path(element)});
+  });
+  const material = root.children.find(element => element.tag === 'surfacematerial' &&
+    (materialName === undefined || element.attrs.name === materialName));
+  const shaderInput = material?.children.find(element => element.attrs.name === 'surfaceshader');
+  const shader = entries.find(({element}) => element.tag === shaderTag &&
+    element.attrs.name === shaderInput?.attrs.nodename) ??
+    entries.find(({element}) => element.tag === shaderTag);
+  const location = (entry) => {
+    const prefix = xml.slice(0, entry?.offset ?? 0);
+    const line = prefix.split('\n').length;
+    const column = [...prefix.slice(prefix.lastIndexOf('\n') + 1)].length + 1;
+    return `${url.href}:${line}:${column}`;
+  };
+  const errors = warnings.map(warning => {
+    const separator = warning.indexOf(': ');
+    const id = separator === -1 ? '' : warning.slice(0, separator);
+    const terminal = id.startsWith('surface/value/') ? id.slice('surface/value/'.length).split('.')[0] : undefined;
+    const authoredInput = terminal && shader?.element.children.find(input => {
+      const key = camel(input.attrs.name ?? '');
+      return (fields[key] ?? key) === terminal;
+    });
+    const matches = entries.filter(entry => id === entry.path || id.startsWith(entry.path + '.'));
+    const origin = (authoredInput && entries.find(entry => entry.element === authoredInput)) ??
+      matches.at(-1) ?? shader;
+    const name = origin ? `${origin.path} (<${origin.element.tag}>)` : 'MaterialX';
+    return `${location(origin)}: ${name}: ${warning}`;
+  });
+  return new NativeError(`${errors.join('\n')} ${surfaceHint}`, 2);
+}
+
+async function readMaterialXAsset(source, base, dependencies) {
+  try {
+    return await read(source, base, dependencies);
+  } catch (error) {
+    throw new NativeError(`${new URL(source, base).href}: ${error.message}`, 3);
+  }
+}
+
 export function loaders(worker, moduleUrl, dependencies) {
+  function pixels(width, height, data, {colorSpace, environment = false} = {}) {
+    const float = data instanceof Float32Array;
+    if (!float && !(data instanceof Uint8Array) && !(data instanceof Uint8ClampedArray)) {
+      throw new TypeError('load.pixels expects an RGBA Uint8Array, Uint8ClampedArray or Float32Array.');
+    }
+    if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0 ||
+        width > 16384 || height > 16384 || data.length !== width * height * 4) {
+      throw new RangeError('load.pixels expects positive dimensions up to 16384 and four values per pixel.');
+    }
+    if (environment && (!float || colorSpace && colorSpace !== 'linear')) {
+      throw new TypeError('An HDR environment needs linear Float32Array pixels.');
+    }
+    if (colorSpace !== undefined && colorSpace !== 'srgb' && colorSpace !== 'linear') {
+      throw new TypeError('Use srgb or linear for colorSpace.');
+    }
+    const rgba = data instanceof Uint8ClampedArray
+      ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength) : data;
+    const texture = new THREE.DataTexture(rgba, width, height, THREE.RGBAFormat,
+        float ? THREE.FloatType : THREE.UnsignedByteType);
+    const encoding = colorSpace ?? (float ? 'linear' : 'srgb');
+    texture.colorSpace = encoding === 'srgb' ? THREE.SRGBColorSpace : THREE.LinearSRGBColorSpace;
+    if (environment) texture.mapping = THREE.EquirectangularReflectionMapping;
+    texture.needsUpdate = true;
+    return texture;
+  }
+
   async function image(bytes, hdr) {
     const {header, bytes: pixels} = await worker.request('decode', {format: hdr ? 'hdr' : 'image'}, bytes);
     const data = hdr ? new Float32Array(toArrayBuffer(pixels)) : Uint8Array.from(pixels);
@@ -34,7 +116,52 @@ export function loaders(worker, moduleUrl, dependencies) {
     return texture;
   }
 
+  async function materialX(source, {materialName} = {}) {
+    const inline = typeof source === 'object' && source !== null && !(source instanceof URL);
+    const url = inline ? moduleUrl : new URL(source, moduleUrl);
+    let xml = inline ? source.source : undefined;
+    if (!inline) {
+      const bytes = await readMaterialXAsset(url, moduleUrl, dependencies);
+      try {
+        xml = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
+      } catch (error) {
+        throw new NativeError(`${url.href}: Expected UTF-8 MaterialX. ${error.message}`, 3);
+      }
+    }
+    if (typeof xml !== 'string') throw new Error('Supply a MaterialX path, URL or {source: xml}.');
+    let parsed;
+    try {
+      parsed = parseMaterialX(xml, materialName);
+    } catch (error) {
+      throw new NativeError(`${url.href}: ${error.message}. ${surfaceHint}`, 2);
+    }
+    const warnings = [...parsed.warnings];
+    if (!surfaces.includes(parsed.shader)) {
+      warnings.splice(0, warnings.length, `Unsupported MaterialX surface ${parsed.shader}`);
+    }
+    if (parsed.values.specularIor !== undefined && parsed.values.specularIor < 1) {
+      warnings.push('MaterialX specularIor must be at least 1.');
+    }
+    if (parsed.displacement?.graph) warnings.push('Use a displacementMap for MaterialX displacement.');
+    if (warnings.length) throw materialXDiagnostic(xml, url, materialName, parsed.shader, warnings);
+    if (parsed.graph) {
+      const used = new Set(normalizeGraph(parsed.graph).nodes.map(node => node.id));
+      for (const [id, reference] of parsed.images) {
+        if (!used.has(id)) continue;
+        const decoded = await image(await readMaterialXAsset(reference.file, url, dependencies), false);
+        const texture = new Texture(decoded.image);
+        texture.colorSpace = reference.srgb ? 'srgb' : 'linear';
+        if (reference.wrapS) texture.wrapS = reference.wrapS;
+        if (reference.wrapT) texture.wrapT = reference.wrapT;
+        parsed.graph.setInput(id, 'file', {type:'filename', value:texture});
+      }
+    }
+    return parsed;
+  }
+
   return {
+    pixels,
+    materialX,
     texture: async path => image(await read(path, moduleUrl, dependencies), false),
     hdr: async path => image(await read(path, moduleUrl, dependencies), true),
     gltf: async path => {

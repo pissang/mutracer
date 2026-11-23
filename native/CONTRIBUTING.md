@@ -175,6 +175,10 @@ Filtered Rust tests do not replace the final AOT, C consumer or GPU validation.
 
 ### Focused regression runs
 
+Run `node native/scripts/generate-cli-materialx-fixtures.mjs --check` after
+changing the browser MaterialX compiler or viewer MaterialX assets. Run the
+same command without `--check` to regenerate the native CLI IR fixtures.
+
 Run `npm run test:parity` for browser WebGPU/WebGL and native display images,
 execution traces and schedule events. Set `MUTRACER_PARITY_OUTPUT` outside the
 checkout and `MUTRACER_OIDN_DISPLAY_INPUT` to the frozen HDR/guide directory to

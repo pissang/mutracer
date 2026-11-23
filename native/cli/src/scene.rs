@@ -78,6 +78,14 @@ pub struct Prepared {
     ambient: Option<sdk::TextureId>,
 }
 
+#[derive(Clone, Debug)]
+pub struct MaterialGraphTarget {
+    pub material_id: u32,
+    pub object_name: String,
+    pub material_name: String,
+    pub pointer: String,
+}
+
 fn validation(pointer: &str, e: api::Error) -> Error {
     Error::validation(
         pointer,
@@ -103,6 +111,49 @@ fn look_at(eye: Vec3, target: Vec3, at: &str) -> Result<Mat4> {
 }
 
 impl Prepared {
+    pub fn material_graph_targets(&self, shot: &shot::Shot) -> Vec<MaterialGraphTarget> {
+        let mut targets = Vec::new();
+        for (index, object) in self.objects.iter().enumerate() {
+            let Some(authored) = shot.objects.get(index) else {
+                continue;
+            };
+            let mut seen = std::collections::BTreeSet::new();
+            for (mesh_id, _) in &object.meshes {
+                let Ok(mesh) = self.scene.mesh(*mesh_id) else {
+                    continue;
+                };
+                for material_id in
+                    std::iter::once(mesh.material).chain(mesh.materials.iter().copied())
+                {
+                    if !seen.insert(material_id.aov_id()) {
+                        continue;
+                    }
+                    let Ok(material) = self.scene.material(material_id) else {
+                        continue;
+                    };
+                    if material.graph.is_none() {
+                        continue;
+                    }
+                    targets.push(MaterialGraphTarget {
+                        material_id: material_id.aov_id(),
+                        object_name: authored.name.clone(),
+                        material_name: if material.values.name.is_empty() {
+                            authored.name.clone()
+                        } else {
+                            material.values.name.clone()
+                        },
+                        pointer: if authored.material.is_some() {
+                            format!("/objects/{index}/material")
+                        } else {
+                            format!("/objects/{index}/asset")
+                        },
+                    });
+                }
+            }
+        }
+        targets
+    }
+
     pub fn new(shot: &shot::Shot, assets: &mut Assets) -> Result<Self> {
         let mut prepared = Self {
             scene: sdk::Scene::new(),
@@ -138,41 +189,30 @@ impl Prepared {
                         (sdk::OpenPbrMaterial::default(), None)
                     };
                     if let Some(desc) = description {
-                        if let Some(maps) = &desc.maps {
-                            for (key, name, property) in [
-                                ("color", &maps.color, 39),
-                                ("opacity", &maps.opacity, 40),
-                                ("normal", &maps.normal, 44),
-                                ("emission", &maps.emission, 43),
-                                ("roughness", &maps.roughness, 47),
-                                ("metalness", &maps.metalness, 48),
-                                ("transmission", &maps.transmission, 49),
-                            ] {
-                                if let Some(name) = name {
-                                    let pointer = format!("{p}/material/maps/{key}");
-                                    let id = if let Some(&id) = images.get(name) {
-                                        id
-                                    } else {
-                                        let Some(Loaded::Image(texture)) = assets.loaded.get(name)
-                                        else {
-                                            return Err(Error::validation(
-                                                &pointer,
-                                                format!("Expected an image asset, got {name:?}"),
-                                                "Use a name from assets with an image field.",
-                                            ));
-                                        };
-                                        let id = prepared
-                                            .scene
-                                            .add_texture(texture.clone())
-                                            .map_err(|e| validation(&pointer, e))?;
-                                        images.insert(name.clone(), id);
-                                        id
-                                    };
-                                    material
-                                        .set_texture(property, Some(id))
-                                        .map_err(|e| validation(&pointer, e))?;
-                                }
-                            }
+                        for (&property, (pointer, name)) in &desc.textures {
+                            let id = if let Some(&id) = images.get(name) {
+                                id
+                            } else {
+                                let Some(Loaded::Image(texture)) = assets.loaded.get(name) else {
+                                    return Err(Error::validation(
+                                        pointer,
+                                        format!("Expected an image asset, got {name:?}"),
+                                        "Use a name from assets with an image field.",
+                                    ));
+                                };
+                                let id = prepared
+                                    .scene
+                                    .add_texture(texture.clone())
+                                    .map_err(|e| validation(pointer, e))?;
+                                images.insert(name.clone(), id);
+                                id
+                            };
+                            material
+                                .set_texture(property, Some(id))
+                                .map_err(|e| validation(pointer, e))?;
+                        }
+                        if desc.textures.contains_key(&59) {
+                            material.values.layers.displacement_scale = 0.1;
                         }
                     }
                     let id = prepared
@@ -465,29 +505,12 @@ impl Prepared {
                 }
             }
             if let (Some((id, defaults, bindings)), Some(m)) = (&obj.material, &desc.material) {
-                let mut values = defaults.values.clone();
-                values.color = at(&m.color, values.color, t);
-                values.roughness = at(&m.roughness, values.roughness, t);
-                values.metalness = at(&m.metalness, values.metalness, t);
-                values.ior = at(&m.ior, values.ior, t);
-                values.transmission = at(&m.transmission, values.transmission, t);
-                values.opacity = at(&m.opacity, values.opacity, t);
-                values.emission = at(&m.emission_color, values.emission, t);
-                values.emission_strength = at(&m.emission_strength, values.emission_strength, t);
-                values.layers.transmission_color =
-                    at(&m.transmission_color, values.layers.transmission_color, t);
-                values.layers.diffuse_roughness =
-                    at(&m.diffuse_roughness, values.layers.diffuse_roughness, t);
-                values.layers.coat_weight = at(&m.coat, values.layers.coat_weight, t);
-                values.layers.coat_color = at(&m.coat_color, values.layers.coat_color, t);
-                values.layers.coat_roughness =
-                    at(&m.coat_roughness, values.layers.coat_roughness, t);
-                values.layers.coat_ior = at(&m.coat_ior, values.layers.coat_ior, t);
-                let mut graph = defaults.graph.clone();
+                let mut next = defaults.clone();
+                m.apply(&mut next, t);
                 if let Some(inputs) = &m.inputs {
                     if !inputs.is_empty() {
                         let pointer = format!("{p}/material/inputs");
-                        let graph = graph.as_mut().ok_or_else(|| {
+                        let graph = next.graph.as_mut().ok_or_else(|| {
                             Error::validation(
                                 &pointer,
                                 "MaterialX surface has no connected interface inputs",
@@ -500,14 +523,11 @@ impl Prepared {
                             .update(graph, inputs, t, &pointer)?;
                     }
                 }
-                let old = self.scene.material(*id).map_err(|e| validation(&p, e))?;
-                if old.values != values || old.graph != graph {
-                    let target = self
+                if self.scene.material(*id).map_err(|e| validation(&p, e))? != &next {
+                    *self
                         .scene
                         .material_mut(*id)
-                        .map_err(|e| validation(&p, e))?;
-                    target.values = values;
-                    target.graph = graph;
+                        .map_err(|e| validation(&p, e))? = next;
                 }
             }
         }
@@ -585,30 +605,35 @@ impl Prepared {
             Vec3::from_array(cam.position.as_ref().unwrap().at(t))
         };
         let matrix = look_at(eye, target, "/camera")?;
-        let exposure = at(&shot.output.display.exposure, 0., t).exp2();
-        if !exposure.is_finite() || exposure <= 0. {
-            return Err(Error::validation(
-                "/output/display/exposure",
-                "Exposure multiplier is outside the finite range",
-                "Use fewer stops of exposure compensation.",
-            ));
-        }
+        let lens = api::Camera::default();
+        let focus_distance = match &cam.focus_distance {
+            None => lens.focus_distance,
+            Some(shot::FocusDistance::Distance(distance)) => distance.at(t),
+            Some(shot::FocusDistance::Name(name)) => {
+                let center = self.bounds[self.target_indices[name]].center();
+                let distance = (center - eye).dot(-matrix.z_axis.truncate());
+                if !distance.is_finite() || distance <= 0. {
+                    return Err(Error::validation(
+                        "/camera/focusDistance",
+                        format!(
+                            "Focus object {name:?} is outside the forward half-space at {t} seconds"
+                        ),
+                        "Keep the focus object in front of the camera or use a positive distance.",
+                    ));
+                }
+                distance
+            }
+        };
         Ok((
             api::Camera {
                 fov,
                 world_matrix: matrix.to_cols_array(),
-                ..Default::default()
+                f_stop: at(&cam.f_stop, lens.f_stop, t),
+                focus_distance,
+                sensor_height: at(&cam.sensor_height, lens.sensor_height, t),
+                ..lens
             },
-            api::DisplaySettings {
-                tone_mapping: match shot.output.display.tonemap {
-                    shot::Tonemap::Agx => api::ToneMapping::Agx,
-                    shot::Tonemap::Aces => api::ToneMapping::Aces,
-                    shot::Tonemap::Reinhard => api::ToneMapping::Reinhard,
-                    shot::Tonemap::Linear | shot::Tonemap::None => api::ToneMapping::Linear,
-                },
-                tone_mapping_exposure: exposure,
-                ..Default::default()
-            },
+            shot.output.display.at(t),
         ))
     }
 }
@@ -768,6 +793,31 @@ mod tests {
             .join("examples")
             .join(name);
         crate::run::Input::load(&path).unwrap()
+    }
+
+    #[test]
+    fn lens_animates_and_follows_the_projected_object_center() {
+        let mut input = crate::run::Input::from_bytes(
+            br#"{
+            "version": 1, "output": {"duration": 1},
+            "camera": {"position": [0,0,5], "target": [0,0,0],
+                "fStop": {"keys": [[0,2],[1,4]]}, "focusDistance": "ball", "sensorHeight": 30},
+            "objects": [{"name":"ball","shape":"sphere",
+                "position":{"keys":[[0,[2,0,1]],[1,[2,0,3]]]}}]
+        }"#,
+            Path::new("."),
+        )
+        .unwrap();
+        let (start, _) = input.prepared.evaluate(&input.shot, 0., [16, 16]).unwrap();
+        let (end, _) = input.prepared.evaluate(&input.shot, 0.5, [16, 16]).unwrap();
+        assert_eq!(
+            [start.f_stop, start.focus_distance, start.sensor_height],
+            [2., 4., 30.]
+        );
+        assert_eq!(
+            [end.f_stop, end.focus_distance, end.sensor_height],
+            [3., 3., 30.]
+        );
     }
 
     #[test]

@@ -6,17 +6,42 @@ seconds in a right-handed, Y-up world. Cameras and lights point along local
 −Z. Color triples use linear RGB and can exceed 1.
 
 See the [JSON Schema](mutracer-shot-v1.json) for fields and individual ranges.
-The [material sweep](../examples/material-sweep.json) uses procedural geometry.
-The [turntable](../examples/turntable.json) frames a glTF asset.
+The [CLI guide](../guide.md#authoring) shows how to author procedural shots and
+turntables.
 
 ## Output and animation
 
 Output defaults are 1280 × 720, 24 fps, 32 samples per pixel, fixed seed
-12345, OIDN, the hardware tracer and AgX at 0 EV. Duration excludes its endpoint. Frame indices
-start at 0 and frame `i` evaluates the shot at `i / fps` seconds. The frame
-count is `ceil(duration × fps)`. With `seed: "frame"`, the seed is
-`seedValue + i` modulo 2³². `sampleSequenceOffset` starts at 0. An explicit
-offset selects a different sample range and produces a separate result.
+12345, OIDN, the hardware tracer and AgX with a linear exposure of 1.
+Frames are numbered from 0. Frame `i` evaluates the shot at `i / fps` seconds, and
+`ceil(duration × fps)` frames are produced. Duration excludes its endpoint.
+
+Set `output.render` for bounce depth, caustics, clamping, sampling pattern,
+direct-light candidates, dispersion, bevel and alpha blending. An omitted
+`bounces` retains the video CLI default of 6. Set `bounces: 3` to match the
+browser's default. See the [JSON Schema](mutracer-shot-v1.json) for values,
+defaults and ranges. Native `random` sampling can produce frames that are
+substantially darker than WebGPU at the same sample count. Use `sobol` for
+comparable brightness.
+
+`seed: "frame"` uses `seedValue + i` modulo 2³². With
+`sampleSequence: "frame"`, frame `i` uses `sampleSequenceOffset + i × spp`
+at the effective samples per pixel. Both modes default to `"fixed"`, and
+the base offset defaults to 0. Sample indices must fit in an unsigned 32-bit
+integer. To keep the sampling ranges used by another renderer, match its
+frame index, seed, sample count and offset.
+
+Set `output.display.toneMapping` and `toneMappingExposure` to use the browser
+tone-mapping name and a nonnegative linear exposure multiplier. A multiplier
+of 2 doubles the exposure. The schema marks compatible older spellings as
+deprecated, and `validate` reports the replacement for each one.
+
+Use `denoise: "none"` for raw frames and `"oidn"` for the bundled Standard
+model. To use `"cleanAuxLarge"`, put `rt_hdr_calb_cnrm_large.tza`,
+`rt_alb_large.tza` and `rt_nrm_large.tza` in one directory and set
+`MUTRACER_OIDN_WEIGHTS` to it. The three files are available in
+[oidn-weights 2.3.0-1](https://cdn.jsdelivr.net/npm/oidn-weights@2.3.0-1/).
+Large takes more time and GPU memory because it filters the guides first.
 
 An animatable value can be a constant or a channel such as
 `{"keys":[[0,0.2],[1,0.65]],"ease":"inOutSine"}`. Use strictly increasing
@@ -50,6 +75,12 @@ frame. For a point target, distance is in metres. Orbit azimuth starts at +Z
 and moves toward +X. Positive elevation moves toward +Y. Positions and targets
 must define a nonzero direction. The camera defaults to vertical FOV 45°.
 
+Set `fStop` for depth of field, `focusDistance` in metres and `sensorHeight`
+in millimetres. Defaults are 0 (pinhole), 10 and 24. Each numeric field can
+be keyframed. `focusDistance` can also name an object. Each frame focuses on
+the plane through its current bounds center, perpendicular to the viewing
+direction. Keep the focus object in front of the camera.
+
 Light properties are in scene units. Rect sizes give full width and height,
 disk and sphere sizes use radius, and cylinders use radius and full length.
 Spot lights take a full cone angle in degrees. Choose a nonnegative intensity
@@ -72,12 +103,21 @@ sidecar cannot be combined on one object.
 The built-in `catalog:animated-card` glTF is a procedural CC0 sample. A
 render using it records its attribution in `credits.txt` alongside the frames.
 
-MaterialX accepts local UTF-8 `.mtlx` files with `open_pbr_surface`. It uses
-the first surface material and supports constants, mix, arithmetic, noise,
-image nodes with repeat and linear filtering, and connected numeric
-nodegraph interfaces. Use `graph/input` if a bare interface name is ambiguous.
-Unsupported shaders, nodes, inputs and sub-outputs are reported during
-validation. See the [patina growth example](../examples/materialx-growth.json).
+Use OpenPBR property names such as `baseColor`, `specularRoughness` and
+`transmissionScatter`. Numeric values are animatable. Set a texture slot
+such as `map`, `normalMap` or `fuzzColorMap` to the name of an image asset.
+Supply each property once. See the
+[material schema](mutracer-shot-v1.json#/$defs/material) for all properties and
+[OpenPBR material options](../../../docs/materials.md) for their
+effects.
+
+MaterialX selects the first surface in a local UTF-8 `.mtlx` file. It accepts
+OpenPBR, Standard Surface, glTF PBR and USD Preview Surface inputs supported
+by the [material graph](../../../docs/materialx.md). Use `graph/input` to
+disambiguate a named input. Unsupported shaders, nodes and inputs produce
+validation errors (exit code 2) with their material and XML locations.
+File reads and invalid UTF-8 produce asset errors (exit code 3). Use a shot
+`displacementMap` for displacement.
 
 Inline positions, normals and UVs are arrays of triples or pairs. Indices
 are a flat list of zero-based triangle indices. Use inline geometry for up

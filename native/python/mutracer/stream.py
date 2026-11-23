@@ -10,6 +10,7 @@ import struct
 import subprocess
 import tempfile
 
+from ._display import canonical_settings
 from .runner import RenderError, binary
 
 MAX_HEADER = 1024 * 1024
@@ -121,8 +122,14 @@ class Session:
     def edit(self, changes: dict):
         self._request("edit", changes=[{"path": path, "value": value} for path, value in changes.items()])
 
+    def check(self, frame: int, t: float, *, settings=None, progress=None):
+        """Validate effective render settings without rendering or creating a GPU device."""
+        fields = {"settings": canonical_settings(settings)} if settings is not None else {}
+        header, _ = self._request("check", frame=frame, t=t, progress=progress, **fields)
+        return header
+
     def render(self, frame: int, t: float, *, settings=None, progress=None):
-        fields = {"settings": settings} if settings is not None else {}
+        fields = {"settings": canonical_settings(settings)} if settings is not None else {}
         return self._request("render", frame=frame, t=t, progress=progress, **fields)
 
 
@@ -178,6 +185,10 @@ def render_frames(shot, base: Path, directory: Path, callback, settings, fps, pr
             session = Session()
             identity = session.scene(shot, base)
             job = {"version": 1, "scene": identity, "fps": rate, "settings": settings}
+            if "check-settings" in session.capabilities.get("capabilities", []):
+                checked = session.check(count - 1, (count - 1) / rate, settings=settings, progress=emit)
+                if checked.get("denoiserWeights"):
+                    job["denoiserWeights"] = checked["denoiserWeights"]
             if manifest.exists():
                 if json.loads(manifest.read_text(encoding="utf-8")) != job:
                     raise ValueError("Callback frame directory describes a different job.")
@@ -210,7 +221,7 @@ def render_frames(shot, base: Path, directory: Path, callback, settings, fps, pr
                         if pending:
                             session.edit(pending)
                         if not reusable:
-                            header, payload = session.render(frame, t, settings=settings)
+                            header, payload = session.render(frame, t, settings=settings, progress=emit)
                         break
                     except RenderError as error:
                         if error.returncode != 5 or attempt == 2:

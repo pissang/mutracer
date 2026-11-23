@@ -254,10 +254,13 @@ export class NativeSceneEncoder {
             return pending;
         };
         const env = !changes?.lights && previous?.environment ? previous.environment : await resolve(generateEnvMapFromSceneComponents(scene.lights.filter(l => l.type === 'AmbientLight'), scene.lights.filter(l => l.type === 'EnvironmentLight')));
-        w.environment = env;
+        const hasEnvironmentContribution = env.data.some((value, index) => index % 4 !== 3 && value !== 0);
+        const environment = hasEnvironmentContribution ? env : undefined;
+        w.environment = environment;
         const background = scene.background;
-        const envTexture = new Texture(env), envId = textures.length;
-        textures.push({ texture: envTexture, pixels: env.data instanceof Float32Array ? env.data : Float32Array.from(env.data) });
+        const envId = environment ? textures.length : -1;
+        if (environment)
+            textures.push({ texture: new Texture(environment), pixels: environment.data instanceof Float32Array ? environment.data : Float32Array.from(environment.data) });
         let backgroundId = envId;
         if (background && !Array.isArray(background)) {
             const source = generateBackgroundMapFromSceneBackground(background);
@@ -374,8 +377,12 @@ export class NativeSceneEncoder {
                 ls.f[o + L.SPREAD_OR_OUTER] = light.spread;
                 ls.u[o + L.TEXTURE] = light.texture ? textureId(light.texture as Texture) + 1 : 0;
             }
-            if ('radius' in light)
-                ls.f[o + L.SIZE] = ls.f[o + L.RADIUS] = light.radius;
+            if (light.type === 'SphereLight' || light.type === 'SpotLight')
+                ls.f[o + L.SIZE] = light.radius;
+            if (light.type === 'DiskLight' || light.type === 'CylinderLight') {
+                ls.f[o + L.RADIUS] = light.radius;
+                ls.u[o + L.NORMALIZE] = Number(light.normalize);
+            }
             if (light.type === 'SpotLight') {
                 ls.f[o + L.HEIGHT_OR_INNER] = light.innerAngle;
                 ls.f[o + L.SPREAD_OR_OUTER] = light.outerAngle;
@@ -386,8 +393,6 @@ export class NativeSceneEncoder {
                     ls.u[o + L.IES_BYTES] = text.length;
                 }
             }
-            if ('normalize' in light)
-                ls.u[o + L.NORMALIZE] = Number(light.normalize);
             if (light.type === 'CylinderLight') {
                 ls.f[o + L.LENGTH] = light.length;
                 ls.u[o + L.TREAT_AS_LINE] = Number(light.treatAsLine);

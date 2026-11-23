@@ -12,7 +12,7 @@ const decode = (text: string) => text.replace(/&(#x[0-9a-f]+|#\d+|\w+);/gi, (mat
 });
 
 /** Parses the element structure of an XML document; text content is ignored. */
-export function parseXml(text: string): XmlElement {
+export function parseXml(text: string, onElement?: (element: XmlElement, offset: number) => void): XmlElement {
   const token = /<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<!\[CDATA\[[\s\S]*?\]\]>|<![^>]*>|<(\/?)([\w:.-]+)((?:\s+[\w:.-]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>/g;
   const attribute = /([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
   const document: XmlElement = { tag: '#document', attrs: {}, children: [], parent: null };
@@ -28,6 +28,7 @@ export function parseXml(text: string): XmlElement {
     const element: XmlElement = { tag, attrs: {}, children: [], parent: current };
     for (const [, name, double, single] of attrs.matchAll(attribute)) element.attrs[name] = decode(double ?? single ?? '');
     current.children.push(element);
+    onElement?.(element, match.index);
     if (!selfClosing) current = element;
   }
   if (current !== document) throw new Error(`Malformed XML: <${current.tag}> is not closed`);
