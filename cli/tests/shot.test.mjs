@@ -104,3 +104,40 @@ test('MaterialX can decorate a legacy Three.js material with a named-focus lens'
     await rm(dir,{recursive:true,force:true});
   }
 });
+
+test('MaterialX distinguishes located validation errors from file failures', {skip: !native}, async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'mutracer-node-'));
+  try {
+    const file = join(dir, 'shot.mjs');
+    const path = join(dir, 'surface.mtlx');
+    await writeFile(file, `
+      export const output = {duration: 1};
+      export async function setup({load}) { await load.materialX('./surface.mtlx'); }
+      export function frame() {}
+    `);
+    await assert.rejects(validate(file), error => error.code === 3 && /surface.mtlx/.test(error.stderr));
+    await writeFile(path, Buffer.from([0xff]));
+    await assert.rejects(validate(file), error => error.code === 3 && /Expected UTF-8/.test(error.stderr));
+    const xml = (shader, nodes, inputs) => `<materialx>
+  ${nodes}
+  <${shader} name="shader" type="surfaceshader">${inputs}</${shader}>
+  <surfacematerial name="material" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="shader"/>
+  </surfacematerial>
+</materialx>`;
+    await writeFile(path, xml('unsupported_shader', '', ''));
+    await assert.rejects(validate(file), error => error.code === 2 &&
+      /surface.mtlx:3:3: shader.*Unsupported MaterialX surface unsupported_shader/.test(error.stderr) &&
+      /open_pbr_surface/.test(error.stderr));
+    await writeFile(path, xml('open_pbr_surface', '<future_node name="mystery" type="float"/>',
+      '<input name="specular_roughness" type="float" nodename="mystery"/>'));
+    await assert.rejects(validate(file), error => error.code === 2 &&
+      /surface.mtlx:2:3: mystery.*Unsupported MaterialX category future_node/.test(error.stderr));
+    await writeFile(path, xml('open_pbr_surface', '',
+      '<input name="future_input" type="float" value="1"/>'));
+    await assert.rejects(validate(file), error => error.code === 2 &&
+      /surface.mtlx:3:\d+: shader\/future_input.*Unsupported OpenPBR graph input futureInput/.test(error.stderr));
+  } finally {
+    await rm(dir, {recursive: true, force: true});
+  }
+});

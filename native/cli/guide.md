@@ -29,8 +29,7 @@ and CLI defaults. Run `mutracer schema` for shot defaults and field limits.
 - Focus pull. Keyframe `camera.focusDistance` or use an object name to follow
   its bounds. Choose a positive `camera.fStop` to see depth of field.
 - glTF clip. Set a glTF object's `animation.clip` to its name and keyframe
-  `animation.time` in seconds. See `gltf-animation.json` for a procedural
-  asset that ships in the CLI.
+  `animation.time` in seconds.
 - MaterialX growth. Use a MaterialX asset and keyframe a connected numeric
   interface through `material.inputs`.
 - Display. Set `output.display` to a value such as
@@ -79,6 +78,6 @@ For HDR, render with `--format exr`. Add `--aovs` to capture surface guides
 for `mutracer temporal`. Use `mutracer assemble` to join PNG sequences with
 optional captions.
 
-Progress is JSON lines on stdout. Warnings and errors go to stderr. Exit codes are 0 for
-success, 2 for invalid input, 3 for asset or output failure, 4 for a budget
-limit and 5 for a resumable GPU or worker failure.
+Progress is JSON lines on stdout. Warnings and errors go to stderr.
+Exit codes are 0 for success, 2 for invalid input, 3 for asset or output
+failure, 4 for a budget limit and 5 for a resumable GPU or worker failure.

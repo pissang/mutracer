@@ -5,6 +5,16 @@ import {fileURLToPath} from 'node:url';
 const root=resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const fields=JSON.parse(readFileSync(resolve(root,'schemas/material-properties.json'),'utf8'));
 const check=process.argv.includes('--check');
+for (const {key, type, supported, shotRange} of fields) {
+ if (type !== 'float' || !supported) continue;
+ if (!shotRange) throw new Error(`Specify the shot range for ${key} in material-properties.json`);
+ const {min = -Infinity, max = Infinity} = shotRange;
+ if (!(min <= max) || (!Number.isFinite(min) && min !== -Infinity) ||
+     (!Number.isFinite(max) && max !== Infinity) || max !== Math.fround(max) || min !== Math.fround(min)) {
+  throw new Error(`Invalid f32 shot range for ${key}`);
+ }
+}
+
 function save(name,text){const path=resolve(root,name);if(check){if(readFileSync(path,'utf8')!==text)throw new Error(`Regenerate ${name}`);}else writeFileSync(path,text);}
 const cases=fields.filter(p=>p.supported).map(p=>{
  let value;

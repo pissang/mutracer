@@ -5,6 +5,9 @@ import * as THREE from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {MeshoptDecoder} from 'three/addons/libs/meshopt_decoder.module.js';
 import {parseMaterialX} from '../../src/materialx.ts';
+import {camel, fields} from '../../src/materialx/parse.ts';
+import {parseXml} from '../../src/materialx/xml.ts';
+import {NativeError} from './worker.mjs';
 import Texture from '../../src/scene/Texture.ts';
 import {normalizeGraph} from '../../src/renderer/materialGraph/normalize.ts';
 
@@ -24,6 +27,55 @@ async function read(source, base, dependencies) {
   const bytes = await readFile(file);
   dependencies.set(file, createHash('sha256').update(bytes).digest('hex'));
   return bytes;
+}
+
+const surfaces = ['open_pbr_surface', 'standard_surface', 'gltf_pbr', 'UsdPreviewSurface'];
+const surfaceHint = `Use ${surfaces.join(', ')}. Bake unsupported graph inputs to texture maps or set uniform material properties.`;
+
+function materialXDiagnostic(xml, url, materialName, shaderTag, warnings) {
+  const entries = [];
+  const path = element => {
+    const name = element.attrs.name ?? element.tag;
+    return !element.parent || element.parent.tag === 'materialx' ? name : `${path(element.parent)}/${name}`;
+  };
+  const root = parseXml(xml, (element, offset) => {
+    if (element.tag !== 'materialx') entries.push({element, offset, path: path(element)});
+  });
+  const material = root.children.find(element => element.tag === 'surfacematerial' &&
+    (materialName === undefined || element.attrs.name === materialName));
+  const shaderInput = material?.children.find(element => element.attrs.name === 'surfaceshader');
+  const shader = entries.find(({element}) => element.tag === shaderTag &&
+    element.attrs.name === shaderInput?.attrs.nodename) ??
+    entries.find(({element}) => element.tag === shaderTag);
+  const location = (entry) => {
+    const prefix = xml.slice(0, entry?.offset ?? 0);
+    const line = prefix.split('\n').length;
+    const column = [...prefix.slice(prefix.lastIndexOf('\n') + 1)].length + 1;
+    return `${url.href}:${line}:${column}`;
+  };
+  const errors = warnings.map(warning => {
+    const separator = warning.indexOf(': ');
+    const id = separator === -1 ? '' : warning.slice(0, separator);
+    const terminal = id.startsWith('surface/value/') ? id.slice('surface/value/'.length).split('.')[0] : undefined;
+    const authoredInput = terminal && shader?.element.children.find(input => {
+      const key = camel(input.attrs.name ?? '');
+      return (fields[key] ?? key) === terminal;
+    });
+    const matches = entries.filter(entry => id === entry.path || id.startsWith(entry.path + '.'));
+    const origin = (authoredInput && entries.find(entry => entry.element === authoredInput)) ??
+      matches.at(-1) ?? shader;
+    const name = origin ? `${origin.path} (<${origin.element.tag}>)` : 'MaterialX';
+    return `${location(origin)}: ${name}: ${warning}`;
+  });
+  return new NativeError(`${errors.join('\n')} ${surfaceHint}`, 2);
+}
+
+async function readMaterialXAsset(source, base, dependencies) {
+  try {
+    return await read(source, base, dependencies);
+  } catch (error) {
+    throw new NativeError(`${new URL(source, base).href}: ${error.message}`, 3);
+  }
 }
 
 export function loaders(worker, moduleUrl, dependencies) {
@@ -67,16 +119,36 @@ export function loaders(worker, moduleUrl, dependencies) {
   async function materialX(source, {materialName} = {}) {
     const inline = typeof source === 'object' && source !== null && !(source instanceof URL);
     const url = inline ? moduleUrl : new URL(source, moduleUrl);
-    const xml = inline ? source.source : (await read(url, moduleUrl, dependencies)).toString('utf8');
+    let xml = inline ? source.source : undefined;
+    if (!inline) {
+      const bytes = await readMaterialXAsset(url, moduleUrl, dependencies);
+      try {
+        xml = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
+      } catch (error) {
+        throw new NativeError(`${url.href}: Expected UTF-8 MaterialX. ${error.message}`, 3);
+      }
+    }
     if (typeof xml !== 'string') throw new Error('Supply a MaterialX path, URL or {source: xml}.');
-    const parsed = parseMaterialX(xml, materialName);
-    if (parsed.warnings.length) throw new Error(`${url.href}: ${parsed.warnings.join('; ')}`);
-    if (parsed.displacement?.graph) throw new Error(`${url.href}: use a displacementMap for MaterialX displacement.`);
+    let parsed;
+    try {
+      parsed = parseMaterialX(xml, materialName);
+    } catch (error) {
+      throw new NativeError(`${url.href}: ${error.message}. ${surfaceHint}`, 2);
+    }
+    const warnings = [...parsed.warnings];
+    if (!surfaces.includes(parsed.shader)) {
+      warnings.splice(0, warnings.length, `Unsupported MaterialX surface ${parsed.shader}`);
+    }
+    if (parsed.values.specularIor !== undefined && parsed.values.specularIor < 1) {
+      warnings.push('MaterialX specularIor must be at least 1.');
+    }
+    if (parsed.displacement?.graph) warnings.push('Use a displacementMap for MaterialX displacement.');
+    if (warnings.length) throw materialXDiagnostic(xml, url, materialName, parsed.shader, warnings);
     if (parsed.graph) {
       const used = new Set(normalizeGraph(parsed.graph).nodes.map(node => node.id));
       for (const [id, reference] of parsed.images) {
         if (!used.has(id)) continue;
-        const decoded = await image(await read(reference.file, url, dependencies), false);
+        const decoded = await image(await readMaterialXAsset(reference.file, url, dependencies), false);
         const texture = new Texture(decoded.image);
         texture.colorSpace = reference.srgb ? 'srgb' : 'linear';
         if (reference.wrapS) texture.wrapS = reference.wrapS;

@@ -24,7 +24,7 @@ Set `output.render`, `output.display`, `output.denoise` and
 `output.sampleSequence` using the
 [shot output fields](../native/cli/schema/shot.md#output-and-animation).
 For example, use `display: {toneMapping: "agx", toneMappingExposure: 1.2}`
-for AgX at 1.2 times the linear exposure.
+for AgX with a linear exposure multiplier of 1.2.
 For a Three.js camera, assign `camera.userData.mutracerLens` in `setup()`
 or update it in `frame()`. Use `{fStop: 3.5, focusDistance: 2.1, sensorHeight: 24}`
 or set `focusDistance` to the name of a visible object in the Three.js scene.

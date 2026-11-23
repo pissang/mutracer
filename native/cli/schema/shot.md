@@ -12,8 +12,8 @@ turntables.
 ## Output and animation
 
 Output defaults are 1280 × 720, 24 fps, 32 samples per pixel, fixed seed
-12345, OIDN, the hardware tracer and AgX with a linear exposure of 1. Frames are numbered from 0.
-Frame `i` evaluates the shot at `i / fps` seconds, and
+12345, OIDN, the hardware tracer and AgX with a linear exposure of 1.
+Frames are numbered from 0. Frame `i` evaluates the shot at `i / fps` seconds, and
 `ceil(duration × fps)` frames are produced. Duration excludes its endpoint.
 
 Set `output.render` for bounce depth, caustics, clamping, sampling pattern,
@@ -114,9 +114,10 @@ effects.
 MaterialX selects the first surface in a local UTF-8 `.mtlx` file. It accepts
 OpenPBR, Standard Surface, glTF PBR and USD Preview Surface inputs supported
 by the [material graph](../../../docs/materialx.md). Use `graph/input` to
-disambiguate a named input. Validation reports unsupported nodes and inputs
-with their material and XML locations. Use a shot `displacementMap` for
-displacement.
+disambiguate a named input. Unsupported shaders, nodes and inputs produce
+validation errors (exit code 2) with their material and XML locations.
+File reads and invalid UTF-8 produce asset errors (exit code 3). Use a shot
+`displacementMap` for displacement.
 
 Inline positions, normals and UVs are arrays of triples or pairs. Indices
 are a flat list of zero-based triangle indices. Use inline geometry for up

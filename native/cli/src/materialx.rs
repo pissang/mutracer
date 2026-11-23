@@ -22,12 +22,14 @@ use std::{
 };
 
 const XML_LIMIT: u64 = 8 * 1024 * 1024;
+const SURFACE_HINT: &str = "Use open_pbr_surface, standard_surface, gltf_pbr or UsdPreviewSurface. Bake unsupported graph inputs to texture maps or set uniform material properties.";
 
 struct Element {
     tag: String,
     attributes: BTreeMap<String, String>,
     children: Vec<usize>,
     parent: Option<usize>,
+    offset: usize,
 }
 
 impl Element {
@@ -36,14 +38,54 @@ impl Element {
     }
 }
 
-type Parse<T> = std::result::Result<T, String>;
+type Parse<T> = std::result::Result<T, ParseError>;
+
+#[derive(Debug)]
+enum ParseError {
+    Validation(String),
+    Resource(Error),
+}
+
+impl From<String> for ParseError {
+    fn from(message: String) -> Self {
+        Self::Validation(message)
+    }
+}
+
+impl From<&str> for ParseError {
+    fn from(message: &str) -> Self {
+        message.to_owned().into()
+    }
+}
+
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Validation(message) => formatter.write_str(message),
+            Self::Resource(error) => error.fmt(formatter),
+        }
+    }
+}
+
+fn xml_position(text: &str, offset: usize) -> String {
+    let prefix = &text[..text.floor_char_boundary(offset)];
+    let line = prefix.bytes().filter(|&byte| byte == b'\n').count() + 1;
+    let column = prefix
+        .rsplit('\n')
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .count()
+        + 1;
+    format!("{line}:{column}")
+}
 
 fn read_tree(text: &str) -> Parse<Vec<Element>> {
     let mut reader = Reader::from_str(text);
     let mut stack: Vec<usize> = Vec::new();
     let decoder = reader.decoder();
     let mut result: Vec<Element> = Vec::new();
-    let element = |start: BytesStart<'_>, parent: Option<usize>| -> Parse<Element> {
+    let element = |start: BytesStart<'_>, parent: Option<usize>, offset: usize| -> Parse<Element> {
         let tag = std::str::from_utf8(start.name().as_ref())
             .map_err(|e| e.to_string())?
             .to_owned();
@@ -64,10 +106,17 @@ fn read_tree(text: &str) -> Parse<Vec<Element>> {
             attributes,
             children: Vec::new(),
             parent,
+            offset,
         })
     };
     loop {
-        let event = reader.read_event().map_err(|e| e.to_string())?;
+        let offset = reader.buffer_position() as usize;
+        let event = reader.read_event().map_err(|e| {
+            format!(
+                "{}: {e}",
+                xml_position(text, reader.error_position() as usize)
+            )
+        })?;
         let empty = matches!(&event, Event::Empty(_));
         match event {
             Event::Start(start) | Event::Empty(start) => {
@@ -81,7 +130,10 @@ fn read_tree(text: &str) -> Parse<Vec<Element>> {
                 } else if !result.is_empty() {
                     return Err("Multiple XML roots".into());
                 }
-                result.push(element(start, parent)?);
+                result.push(
+                    element(start, parent, offset)
+                        .map_err(|e| format!("{}: {e}", xml_position(text, offset)))?,
+                );
                 if !empty {
                     stack.push(id);
                 }
@@ -91,7 +143,13 @@ fn read_tree(text: &str) -> Parse<Vec<Element>> {
                     return Err("Unexpected end tag".into());
                 }
             }
-            Event::DocType(_) => return Err("MaterialX DTD declarations are unsupported".into()),
+            Event::DocType(_) => {
+                return Err(format!(
+                    "{}: MaterialX DTD declarations are unsupported",
+                    xml_position(text, offset)
+                )
+                .into());
+            }
             Event::Eof => break,
             _ => {}
         }
@@ -122,7 +180,7 @@ fn port_type(name: &str) -> Parse<u32> {
         "vector4" => pt::VECTOR4,
         "filename" => pt::FILENAME,
         "string" => pt::STRING,
-        _ => return Err(format!("Unsupported type {name:?}")),
+        _ => return Err(format!("Unsupported type {name:?}").into()),
     })
 }
 fn literal(value: &str, ty: u32) -> Parse<[f32; 4]> {
@@ -130,7 +188,7 @@ fn literal(value: &str, ty: u32) -> Parse<[f32; 4]> {
         return match value {
             "true" | "1" => Ok([1., 0., 0., 0.]),
             "false" | "0" => Ok([0.; 4]),
-            _ => Err(format!("Invalid boolean {value:?}")),
+            _ => Err(format!("Invalid boolean {value:?}").into()),
         };
     }
     let parts = value
@@ -142,7 +200,7 @@ fn literal(value: &str, ty: u32) -> Parse<[f32; 4]> {
         || parts.iter().any(|x| !x.is_finite())
         || ty == pt::INTEGER && (parts[0].fract() != 0. || parts[0].abs() > 16_777_216.)
     {
-        return Err(format!("Invalid MaterialX value {value:?}"));
+        return Err(format!("Invalid MaterialX value {value:?}").into());
     }
     let mut packed = [0.; 4];
     packed[..parts.len()].copy_from_slice(&parts);
@@ -208,7 +266,7 @@ fn index(names: &[String], name: &str) -> Parse<u32> {
         .iter()
         .position(|n| n == name)
         .map(|i| i as u32)
-        .ok_or_else(|| format!("Unsupported graph identifier {name:?}"))
+        .ok_or_else(|| format!("Unsupported graph identifier {name:?}").into())
 }
 
 fn default_literal(value: &Value, ty: u32) -> Parse<[f32; 4]> {
@@ -292,6 +350,7 @@ struct Compiler<'a> {
     ambiguous: BTreeSet<String>,
     translation: Option<(usize, usize, usize)>,
     file: &'a Path,
+    text: &'a str,
     pointer: &'a str,
     assets: &'a mut Assets,
     scene: &'a mut Scene,
@@ -335,13 +394,15 @@ impl Compiler<'_> {
         }
     }
 
-    fn located(&self, node: usize, message: impl std::fmt::Display) -> String {
+    fn located(&self, node: usize, message: impl std::fmt::Display) -> ParseError {
         let element = &self.elements[node];
         format!(
-            "{} ({}): {message}",
-            element.attr("name").unwrap_or(&element.tag),
+            "{}: {} (<{}>): {message}",
+            xml_position(self.text, element.offset),
+            self.author_id(node),
             element.tag
         )
+        .into()
     }
     fn reference(&self, node: usize) -> Parse<Option<usize>> {
         let element = &self.elements[node];
@@ -363,7 +424,7 @@ impl Compiler<'_> {
         }
         let e = &self.elements[node];
         if let Some(actual) = e.attr("type") {
-            if port_type(actual)? != ty {
+            if port_type(actual).map_err(|e| self.located(node, e))? != ty {
                 return Err(
                     self.located(node, "connection type differs from the expected port type")
                 );
@@ -481,7 +542,8 @@ impl Compiler<'_> {
         let value = e
             .attr("value")
             .ok_or_else(|| self.located(node, "missing value or source connection"))?;
-        Ok(self.parameter(literal(value, ty)?))
+        let value = literal(value, ty).map_err(|e| self.located(node, e))?;
+        Ok(self.parameter(value))
     }
     fn push(&mut self, cat: u32, ty: u32, id: String, ports: Vec<(u32, u32, Input)>) -> u32 {
         let index = self.graph.nodes.len() as u32;
@@ -558,7 +620,7 @@ impl Compiler<'_> {
             (_, ty) => ty,
         };
         let color_image = type_name.starts_with("color");
-        let ty = index(&shared.types, type_name)?;
+        let ty = index(&shared.types, type_name).map_err(|e| self.located(id, e))?;
         let cat = index(&shared.categories, tag).map_err(|e| self.located(id, e))?;
         let definition = shared
             .definitions
@@ -597,7 +659,7 @@ impl Compiler<'_> {
                     let mut texture = self
                         .assets
                         .image(&resolved, self.pointer, false)
-                        .map_err(|e| e.to_string())?;
+                        .map_err(ParseError::Resource)?;
                     texture.wrap = ["uaddressmode", "vaddressmode"].map(|axis| {
                         match authored
                             .get(axis)
@@ -627,7 +689,10 @@ impl Compiler<'_> {
                                 ));
                         }
                     }
-                    let tex = self.scene.add_texture(texture).map_err(|e| e.to_string())?;
+                    let tex = self
+                        .scene
+                        .add_texture(texture)
+                        .map_err(|e| self.located(input, e))?;
                     let slot = self.graph.textures.len();
                     self.graph.textures.push(Some(tex));
                     self.parameter([slot as f32, 0., 0., 0.])
@@ -672,17 +737,18 @@ impl Compiler<'_> {
         Ok(node)
     }
 
-    fn insert_prototype(&mut self, prototype: &Prototype, parent: usize) -> usize {
+    fn insert_prototype(&mut self, prototype: &Prototype, parent: usize, offset: usize) -> usize {
         let id = self.elements.len();
         self.elements.push(Element {
             tag: prototype.tag.clone(),
             attributes: prototype.attrs.clone(),
             children: Vec::new(),
             parent: Some(parent),
+            offset,
         });
         self.elements[parent].children.push(id);
         for child in &prototype.children {
-            self.insert_prototype(child, id);
+            self.insert_prototype(child, id, offset);
         }
         id
     }
@@ -705,6 +771,7 @@ impl Compiler<'_> {
                 children: Vec::new(),
             },
             parent,
+            self.elements[parent].offset,
         )
     }
 
@@ -802,8 +869,23 @@ impl Compiler<'_> {
                     .iter()
                     .find(|e| e.tag == "nodegraph")
                     .expect("translation graph");
-                let defaults = self.insert_prototype(defaults, 0);
-                let graph = self.insert_prototype(graph, 0);
+                for &id in &self.elements[shader].children {
+                    let input = &self.elements[id];
+                    if input.tag == "input"
+                        && let Some(name) = input.attr("name")
+                        && name != "normal"
+                        && !defaults
+                            .children
+                            .iter()
+                            .any(|p| p.attrs.get("name").is_some_and(|v| v == name))
+                    {
+                        return Err(self
+                            .located(id, format!("Unsupported standard_surface input {name:?}")));
+                    }
+                }
+                let offset = self.elements[shader].offset;
+                let defaults = self.insert_prototype(defaults, 0, offset);
+                let graph = self.insert_prototype(graph, 0, offset);
                 self.translation = Some((graph, defaults, shader));
                 if let Some(normal) = self.input(shader, "input", "normal") {
                     inputs.insert("normal".into(), normal);
@@ -967,10 +1049,10 @@ impl Compiler<'_> {
             .ok_or("Missing surfacematerial")?;
         let shader = self
             .input(surface, "input", "surfaceshader")
-            .ok_or("Missing surfaceshader input")?;
+            .ok_or_else(|| self.located(surface, "Missing surfaceshader input"))?;
         let shader = self
             .reference(shader)?
-            .ok_or("The surfaceshader input needs a nodename")?;
+            .ok_or_else(|| self.located(shader, "The surfaceshader input needs a nodename"))?;
         let mut inputs = self.surface_inputs(shader, material)?;
         let shared = schema();
         for (weight, inactive) in &shared.inactive_lobes {
@@ -1017,7 +1099,8 @@ impl Compiler<'_> {
                         .attr("value")
                         .ok_or_else(|| self.located(id, "missing value"))?,
                     ty,
-                )?;
+                )
+                .map_err(|e| self.located(id, e))?;
                 self.write_uniform(material, id, property, ty, value)?;
             } else {
                 let source = self.resolve(id, ty, 0)?;
@@ -1141,8 +1224,15 @@ pub fn load(
     if text.len() as u64 > XML_LIMIT {
         return Err(Error::budget("MaterialX XML exceeds 8 MiB"));
     }
-    let elements =
-        read_tree(&text).map_err(|e| Error::asset(pointer, format!("{}: {e}", file.display())))?;
+    let validation = |message| {
+        Error::validation(
+            pointer,
+            format!("{}:{message}", file.display()),
+            SURFACE_HINT,
+        )
+    };
+    let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
+    let elements = read_tree(text).map_err(|e| validation(e.to_string()))?;
     let mut compiler = Compiler {
         elements,
         graph: Default::default(),
@@ -1153,14 +1243,16 @@ pub fn load(
         ambiguous: Default::default(),
         translation: None,
         file,
+        text,
         pointer,
         assets,
         scene,
     };
     let mut material = OpenPbrMaterial::default();
-    compiler
-        .surface(&mut material)
-        .map_err(|e| Error::asset(pointer, format!("{}: {e}", file.display())))?;
+    compiler.surface(&mut material).map_err(|e| match e {
+        ParseError::Validation(message) => validation(message),
+        ParseError::Resource(error) => error,
+    })?;
     if !compiler.graph.terminals.is_empty() {
         material.graph = Some(if compiler.translation.is_some() {
             compact_graph(&compiler.graph, &mut compiler.bindings)
@@ -1315,13 +1407,52 @@ mod tests {
             r#"<input name="specular_roughness" type="float" nodename="mystery"/>"#,
         );
         for (xml, expected) in [
-            (shader, "Unsupported MaterialX surface unsupported_shader"),
+            (
+                shader,
+                "3:13: shader (<unsupported_shader>): Unsupported MaterialX surface unsupported_shader",
+            ),
             (node, r#"Unsupported graph identifier "unsupported_node""#),
         ] {
             let Err(error) = compile_xml(&xml) else {
                 panic!("invalid material accepted")
             };
+            assert_eq!(error.code, 2);
+            assert_eq!(error.pointer.as_deref(), Some("/material"));
             assert!(error.message.contains(expected), "{error}");
+            assert!(error.hint.contains("open_pbr_surface"));
+        }
+    }
+
+    #[test]
+    fn distinguishes_invalid_materialx_from_asset_failures() {
+        let xml = surface(
+            "standard_surface",
+            "",
+            r#"<input name="future_extension" type="float" value="1"/>"#,
+        );
+        let Err(error) = compile_xml(&xml) else {
+            panic!("unsupported input accepted")
+        };
+        assert_eq!(error.code, 2);
+        assert!(
+            error.message.contains("shader/future_extension (<input>)"),
+            "{error}"
+        );
+        let Err(error) = compile_xml("<materialx><broken></materialx>") else {
+            panic!("invalid XML accepted")
+        };
+        assert_eq!(error.code, 2);
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.mtlx");
+        for bytes in [None, Some([255])] {
+            if let Some(bytes) = bytes {
+                std::fs::write(&path, bytes).unwrap();
+            }
+            let Err(error) = compile(&path) else {
+                panic!("invalid asset accepted")
+            };
+            assert_eq!(error.code, 3);
         }
     }
 
@@ -1335,6 +1466,7 @@ mod tests {
         let Err(error) = compile_xml(&xml) else {
             panic!("zero IOR accepted")
         };
+        assert_eq!(error.code, 2);
         assert!(error.message.contains("native surface range"), "{error}");
     }
 

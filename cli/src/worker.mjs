@@ -140,7 +140,7 @@ export class Worker {
           continue;
         }
         if (response.type === 'error') {
-          throw new NativeError(`${response.pointer ?? ''} ${response.message}`, response.code);
+          throw new NativeError([response.pointer, response.message, response.hint].filter(Boolean).join(' '), response.code);
         }
         if (response.bytes === undefined) return {header: response};
         const length = (await this.reader.exact(4)).readUInt32LE();

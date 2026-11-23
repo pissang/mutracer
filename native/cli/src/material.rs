@@ -22,6 +22,22 @@ struct Property {
     shot_name: Option<String>,
     #[serde(default, rename = "shotMapAliases")]
     map_aliases: Vec<String>,
+    #[serde(rename = "shotRange")]
+    shot_range: Option<ScalarRange>,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+struct ScalarRange {
+    min: Option<f32>,
+    max: Option<f32>,
+}
+
+impl ScalarRange {
+    fn contains(self, value: f32) -> bool {
+        value.is_finite()
+            && self.min.is_none_or(|min| value >= min)
+            && self.max.is_none_or(|max| value <= max)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Deserialize)]
@@ -135,34 +151,6 @@ pub struct Material {
     pub textures: BTreeMap<u32, (String, String)>,
 }
 
-fn float_range(key: &str) -> (f32, f32) {
-    match key {
-        "baseDiffuseRoughness"
-        | "baseMetalness"
-        | "specularRoughness"
-        | "specularAnisotropy"
-        | "transmissionWeight"
-        | "subsurfaceWeight"
-        | "fuzzWeight"
-        | "fuzzRoughness"
-        | "coatWeight"
-        | "coatRoughness"
-        | "coatAnisotropy"
-        | "coatDarkening"
-        | "thinFilmWeight"
-        | "opacity"
-        | "alphaCutoff" => (0., 1.),
-        "transmissionScatterAnisotropy" | "subsurfaceAnisotropy" => (-1., 1.),
-        "specularIor" | "coatIor" | "thinFilmIor" => (1., f32::MAX),
-        "specularAnisotropyRotation"
-        | "coatAnisotropyRotation"
-        | "displacementScale"
-        | "displacementBias"
-        | "displacementUvProjectionScale" => (f32::MIN, f32::MAX),
-        _ => (0., f32::MAX),
-    }
-}
-
 impl Material {
     pub fn check(&mut self, duration: f64, pointer: &str) -> Result<()> {
         let mut seen = BTreeMap::new();
@@ -200,9 +188,9 @@ impl Material {
                     Kind::Float => {
                         let ch: Channel<f32> =
                             serde_json::from_value(raw.clone()).map_err(|_| wrong_type())?;
-                        let (min, max) = float_range(&p.key);
+                        let range = p.shot_range.expect("shared shot float range");
                         ch.check(&path, duration, "a number in the property's range", |v| {
-                            (min..=max).contains(&v)
+                            range.contains(v)
                         })?;
                         Setting::Float(ch)
                     }
@@ -254,7 +242,10 @@ impl Material {
     }
 
     pub fn has_layered_shading(&self) -> bool {
-        self.settings.contains_key(&10) || self.settings.contains_key(&25)
+        ["transmissionWeight", "coatWeight"].into_iter().any(|key| {
+            let p = property(key, false).expect("OpenPBR lobe weight");
+            self.settings.contains_key(&p.id)
+        })
     }
 
     pub fn apply(&self, material: &mut OpenPbrMaterial, t: f64) {
@@ -276,6 +267,98 @@ impl Material {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shot_schema_covers_supported_properties_and_compatibility_names() {
+        use std::collections::BTreeSet;
+
+        let schema: Value = serde_json::from_str(crate::shot::SCHEMA).unwrap();
+        let definitions = &schema["$defs"];
+        let fields = definitions["material"]["properties"].as_object().unwrap();
+        let maps = fields["maps"]["properties"].as_object().unwrap();
+        let mut expected_fields = BTreeSet::from(["asset", "inputs", "maps"]);
+        let mut expected_maps = BTreeSet::new();
+        for p in properties().iter().filter(|p| p.supported) {
+            assert!(expected_fields.insert(p.shot_name()));
+            let definition = &fields[p.shot_name()];
+            match p.kind {
+                Kind::Float => {
+                    let range = p
+                        .shot_range
+                        .unwrap_or_else(|| panic!("Missing range for {}", p.key));
+                    let reference = definition["$ref"].as_str().unwrap();
+                    let channel =
+                        &definitions[reference.strip_prefix("#/$defs/").unwrap()]["oneOf"];
+                    for scalar in [
+                        &channel[0],
+                        &channel[1]["properties"]["keys"]["items"]["prefixItems"][1],
+                    ] {
+                        assert_eq!(scalar["type"], "number", "{}", p.key);
+                        assert_eq!(
+                            scalar["minimum"].as_f64().map(|v| v as f32),
+                            range.min,
+                            "{}",
+                            p.key
+                        );
+                        assert_eq!(
+                            scalar["maximum"].as_f64().map(|v| v as f32),
+                            range.max,
+                            "{}",
+                            p.key
+                        );
+                    }
+                }
+                Kind::Vec2 => assert_eq!(definition["$ref"], "#/$defs/vec2Channel"),
+                Kind::Color => assert_eq!(definition["$ref"], "#/$defs/colorChannel"),
+                Kind::Bool => assert_eq!(definition["type"], "boolean"),
+                Kind::Enum => assert_eq!(definition["enum"], serde_json::json!(p.values)),
+                Kind::Texture => {
+                    assert_eq!(definition["$ref"], "#/$defs/name");
+                    assert!(expected_maps.insert(p.key.as_str()));
+                    assert_eq!(maps[&p.key], *definition);
+                }
+            }
+            for alias in p.shot_aliases() {
+                assert!(expected_fields.insert(alias));
+                let mut compatibility = fields[alias].clone();
+                assert_eq!(
+                    compatibility.as_object_mut().unwrap().remove("deprecated"),
+                    Some(Value::Bool(true))
+                );
+                assert!(
+                    compatibility
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("description")
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .contains(p.shot_name())
+                );
+                assert_eq!(compatibility, *definition, "{alias}");
+            }
+            for alias in &p.map_aliases {
+                assert!(p.kind == Kind::Texture && expected_maps.insert(alias));
+                assert_eq!(maps[alias]["$ref"], "#/$defs/name");
+                assert_eq!(maps[alias]["deprecated"], true);
+                assert!(
+                    maps[alias]["description"]
+                        .as_str()
+                        .unwrap()
+                        .contains(&p.key)
+                );
+            }
+        }
+        assert_eq!(
+            fields.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            expected_fields
+        );
+        assert_eq!(
+            maps.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            expected_maps
+        );
+        assert_eq!(fields["maps"]["deprecated"], true);
+    }
 
     #[test]
     fn material_uses_shared_property_ids_and_preserves_aliases() {

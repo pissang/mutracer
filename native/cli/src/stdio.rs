@@ -680,6 +680,77 @@ mod tests {
     }
 
     #[test]
+    fn materialx_validation_error_includes_xml_location_and_keeps_session_open() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("bad.mtlx"),
+            r#"<materialx>
+  <mystery name="shader" type="surfaceshader"/>
+  <surfacematerial name="surface" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="shader"/>
+  </surfacematerial>
+</materialx>"#,
+        )
+        .unwrap();
+        let mut shot = json!({
+            "version": 1, "output": {"duration": 1},
+            "objects": [{"name": "subject", "shape": "sphere"}],
+            "camera": {"position": [0, 0, 3], "target": "subject"},
+        });
+        let scene = |id, shot: &Value| {
+            let bytes = serde_json::to_vec(shot).unwrap();
+            Packet {
+                header: json!({
+                    "type":"scene","id":id,"format":"shot-json","bytes":bytes.len(),"baseDir":dir.path(),
+                }),
+                bytes,
+            }
+        };
+        let good = scene(2, &shot);
+        shot["assets"] = json!({"surface": {"materialx": "bad.mtlx"}});
+        shot["objects"][0]["material"] = json!({"asset": "surface"});
+        let mut requests = [
+            Packet {
+                header: json!({"type":"hello","id":1,"protocol":1}),
+                bytes: vec![],
+            },
+            good,
+            scene(3, &shot),
+            Packet {
+                header: json!({"type":"check","id":4,"frame":0}),
+                bytes: vec![],
+            },
+        ]
+        .into_iter();
+        let mut output = Vec::new();
+        run(|| Ok(requests.next()), &mut output).unwrap();
+        let mut output = Cursor::new(output);
+        assert_eq!(
+            read_packet(&mut output).unwrap().unwrap().header["type"],
+            "ok"
+        );
+        assert_eq!(
+            read_packet(&mut output).unwrap().unwrap().header["type"],
+            "ok"
+        );
+        let error = read_packet(&mut output).unwrap().unwrap().header;
+        assert_eq!(error["id"], 3);
+        assert_eq!(error["type"], "error");
+        assert_eq!(error["code"], 2);
+        assert!(
+            error["message"]
+                .as_str()
+                .unwrap()
+                .contains("bad.mtlx:2:3: shader (<mystery>)")
+        );
+        assert!(error["hint"].as_str().unwrap().contains("open_pbr_surface"));
+        assert_eq!(
+            read_packet(&mut output).unwrap().unwrap().header["type"],
+            "ok"
+        );
+    }
+
+    #[test]
     fn hello_and_recoverable_errors_keep_the_session_in_sync() {
         let mut bytes = Cursor::new(b"{\"id\":1,\"type\":\"hello\",\"protocol\":1}\n{\"id\":2,\"type\":\"render\",\"frame\":0}\n");
         let mut output = Vec::new();

@@ -29,8 +29,9 @@ to the shot. Install the optional `numpy` extra to write mesh and instance
 arrays through `Mesh.from_numpy` and `Instances.from_numpy`. These methods
 write little-endian binary sidecars. Use the camelCase
 [shot fields](../cli/schema/shot.md) in material, render and display
-dictionaries. `toneMappingExposure` is a linear multiplier. The `Camera` constructor and `Camera.orbit()` also accept
-`sensor_height` in millimetres. Lens scalars accept `Keys`.
+dictionaries. `toneMappingExposure` is a linear multiplier. The `Camera`
+constructor and `Camera.orbit()` also accept `sensor_height` in millimetres.
+Lens scalars accept `Keys`.
 
 Pass `progress=callback` to receive each decoded JSON progress event. A failed
 command raises `RenderError` with the CLI exit code and stderr. See the
