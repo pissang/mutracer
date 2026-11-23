@@ -291,7 +291,7 @@ fn check_opacity_and_lit(use_graph: bool) {
 }
 #[test]
 #[ignore = "requires a real GPU; run separately"]
-fn material_graph_gpu_transport_fallback_matches_constant_material() {
+fn material_graph_gpu_transport_matches_graph_material() {
     use crate::api::{
         Backend, Camera, CausticSettings, ConvergeOptions, Engine, EngineOptions, PixelKind,
         Render, RenderSettings, RenderSize,
@@ -364,12 +364,7 @@ fn material_graph_gpu_transport_fallback_matches_constant_material() {
             render.converge(ConvergeOptions::new(4)).unwrap();
             let actual = render.read_pixels(PixelKind::Hdr).unwrap().data;
             assert!(
-                engine
-                    .diagnostics()
-                    .renders
-                    .iter()
-                    .flat_map(|r| &r.material_graphs)
-                    .any(|d| d.code == "unsupported-transport"),
+                engine.diagnostics().material_graphs.is_empty(),
                 "{backend:?}/{photons}: {:?}",
                 engine.diagnostics().material_graphs
             );
@@ -385,8 +380,8 @@ fn material_graph_gpu_transport_fallback_matches_constant_material() {
                 .map(|(a, b)| (a - b).abs())
                 .fold(0f32, f32::max);
             assert!(
-                max_error < 0.003,
-                "{backend:?}/photon={photons}: {max_error}"
+                max_error > 0.003,
+                "graph color was not applied for {backend:?}/photon={photons}: {max_error}"
             );
             eprintln!("GRAPH_TRANSPORT {backend:?}/photon={photons}: {max_error}");
         }

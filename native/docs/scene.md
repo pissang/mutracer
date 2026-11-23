@@ -149,11 +149,11 @@ the graph or using an unsupported lit-emission or opacity-projection combination
 selects the constant fallback directly.
 
 Read located errors from `Engine::diagnostics().material_graphs` or
-`mt_engine_material_graph_diagnostics`. Per-render diagnostics also report
-transport restrictions: light tracing and photon mapping use constant material
-fallbacks for graphs. These restrictions match the browser's documented graph
-limits. Author IDs provide diagnostic locations; graph-wide compilation errors
-have an empty node and port.
+`mt_engine_material_graph_diagnostics`. With light tracing or photon mapping,
+graph-driven specular or coverage inputs keep their graph shading on receivers
+but exclude that material from the caustic caster set, matching the browser.
+The existing lit-emission graph fallback still applies. Author IDs provide
+diagnostic locations; graph-wide compilation errors have an empty node and port.
 
 Graph parameters and generated shaders add memory and compilation cost. Graph
 textures share the ordinary texture limits and budget, including the full UDIM

@@ -1,4 +1,4 @@
-import {attachGraphFallbacks,seedGraphFallbacks,releaseGraphFallbacks,nativeGraphPlan,nativeGraphTextures,graphHasTerminal,packNativeGraphs,inheritNativeGraph,swapNativeGraphTextures,type NativeGraphPlan} from './material-graph.js';
+import {attachGraphFallbacks,seedGraphFallbacks,releaseGraphFallbacks,nativeGraphPlan,nativeGraphTextures,nativeGraphAffectsCausticCaster,graphHasTerminal,packNativeGraphs,inheritNativeGraph,swapNativeGraphTextures,type NativeGraphPlan} from './material-graph.js';
 import {materialGraphShaderIR} from '../../src/renderer/materialGraph/specialize.js';
 import {compactKernelEnabled, rememberCompactJobs, releaseCompactKernel} from './compact-kernel.js';
 import {resolveSurfaceHit} from '../../src/renderer/surfaceHit.js';
@@ -6,7 +6,7 @@ import {nativeTangentRequirements} from './scene-tangents.js';
 import {packedVertexChange} from './vertex-updates.js';
 import {preparationMark} from './preparation-profile.js';
 import {compactVertexLayout, packCompactVertices, packTriangleMaterials} from '../../src/renderer/compactVertices.js';
-import {hasStochasticCausticCaster} from '../../src/renderer/caustics.js';
+import {hasStochasticCausticCaster,isCausticSpecular} from '../../src/renderer/caustics.js';
 import {nativeCausticTarget} from './caustics.js';
 import {packAovScene} from '../../src/renderer/aovScene.js';
 import {selectVisibleInstances} from '../../src/renderer/scenePreparation.js';
@@ -123,7 +123,7 @@ function writeTargetTrace(views: ReturnType<typeof makeRayTraceUniform>['views']
 /** Production WGSL: the software shader, or the ray-query shader for hardware scenes. */
 function productionShader(id: number, shader: SceneShader): Uint8Array {
   const {constants, variantFlags, isEmpty, hardware, opaqueClosest} = shader;
-  const features = nativeGraphFeatures(shader.features, shader.graphs, !!shader.features.lightTracing || !!shader.features.photonMapping);
+  const features = nativeGraphFeatures(shader.features, shader.graphs);
   const plan=shader.graphs;
   return nativeShaderVariant(id, constants, features, variantFlags, () => {
     const source=id===RESOURCE.HWRT_SHADER
@@ -132,9 +132,10 @@ function productionShader(id: number, shader: SceneShader): Uint8Array {
     return source;
   },plan?.key??'');
 }
-function nativeGraphFeatures(features: Parameters<typeof wgpuShaderSource>[1], plan: NativeGraphPlan | undefined, unsupportedTransport = false): Parameters<typeof wgpuShaderSource>[1] {
-  return {...features, materialHooks: materialGraphShaderIR(plan?.key && !unsupportedTransport ? plan.structures : [],
-    features.hasAnisotropyDirections || features.hasCoatNormals)};
+function nativeGraphFeatures(features: Parameters<typeof wgpuShaderSource>[1], plan: NativeGraphPlan | undefined): Parameters<typeof wgpuShaderSource>[1] {
+  const caustics=!!features.lightTracing||!!features.photonMapping;
+  return {...features, materialHooks: {...materialGraphShaderIR(plan?.key ? plan.structures : [],
+    features.hasAnisotropyDirections || features.hasCoatNormals, undefined, false, !caustics), causticGraphFlags:caustics&&!!plan?.key}};
 }
 function nativeMaterialConstants(materials:MaterialState[],table:MaterialData,geometry:Geometry,bevel:number):Record<string,boolean|number> {
   const constants=wgpuMaterialConstants(materials,table,geometry,bevel),plan=nativeGraphPlan(materials);
@@ -274,13 +275,14 @@ export function sceneTargetParameters(bytes: Uint8Array, token: number): Uint8Ar
     // Independently traced frame guides use the original PT scene bindings.
     // Their radiance estimate is separate from the merged beauty accumulation.
     let effectiveFlags=frameInputs?0:configuration.causticFlags;
-    if((effectiveFlags&6)&&hasStochasticCausticCaster(state.meshes))effectiveFlags&=~6;
+    if((effectiveFlags&6)&&hasStochasticCausticCaster(state.meshes,m=>!nativeGraphAffectsCausticCaster(m)&&isCausticSpecular(m)))effectiveFlags&=~6;
     const causticConfiguration={...configuration,causticFlags:effectiveFlags};
     const light=effectiveFlags?prepareNativeLightSampling(state.lights,state.table,state.emissive,state.environmentPower):undefined;
     const caustics=light?nativeCausticTarget({meshes:state.meshes,bindings:state.prepared.instanceBindings,materials:state.prepared.materials,lights:state.lights,emissive:state.emissive,environmentPower:state.environmentPower,lighting:light.lightData,cacheKey:state.prepared},causticConfiguration,width,height,bytes.subarray(settingsBytes+8*WORD_BYTES),camera,targetConstants,{...frameFeatures,workgroupSize:shaderId===RESOURCE.HWRT_SHADER?1:8},nativeHits,shaderId===RESOURCE.HWRT_SHADER):undefined;
     if(caustics){
       frameFeatures.workgroupSize=caustics.metadata.workgroupSize;
       frameFeatures.lightTracing=!!(caustics.metadata.flags&2);frameFeatures.photonMapping=!!(caustics.metadata.flags&4);
+      frameFeatures.materialHooks=nativeGraphFeatures(frameFeatures,state.shader.graphs).materialHooks;
       // Use the same first-camera-hit subset generator as the browser. Combined
       // LT/PM emits the original query source and leaves specular prefixes alone.
       frameFeatures.photonDirectSubset=frameFeatures.photonMapping&&!frameFeatures.lightTracing;
@@ -341,7 +343,7 @@ export function sceneMaterialParameters(bytes: Uint8Array, token: number): Uint8
   // Same repacking and layout used by browser MaterialTable updates. Texture
   // indices and atlas mapping remain in the retained MaterialData object.
   state.table.repackParams(state.ordered);
-  const packed = packNativeGraphs(state.table.getBufferArray(),state.ordered,state.table.textures);
+  const packed = packNativeGraphs(state.table.getBufferArray(),state.ordered,state.table.textures,!!sceneConfigurations.get(token)?.causticFlags);
   const result = new Uint8Array(16 + packed.byteLength);
   new Uint32Array(result.buffer).set([1, packed.byteLength, 0, 0]);
   result.set(new Uint8Array(packed.buffer), 16);
@@ -398,7 +400,7 @@ function sceneMaterialRecords(bytes: Uint8Array, token: number): Uint8Array {
     }
     if (u[0] === 3) return new Uint8Array(new Uint32Array([1, 0, 0, 0]).buffer);
     state.table.repackTextureReferences(ordered); state.table.repackParams(ordered); repacked = true;
-    const packed = new Uint8Array(packNativeGraphs(state.table.getBufferArray(),ordered,state.table.textures).buffer);
+    const packed = new Uint8Array(packNativeGraphs(state.table.getBufferArray(),ordered,state.table.textures,!!sceneConfigurations.get(token)?.causticFlags).buffer);
     const records: number[][] = [resourceRecord(RESOURCE.MATERIALS, KIND.BUFFER, packed.length, 0, 0, 0, 0)];
     const parts = [packed];
     const rt = makeRayTraceUniform(); new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
@@ -728,7 +730,7 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   add(RESOURCE.INSTANCES, KIND.BUFFER, new Uint8Array(tlas.instancesBuffer!), 0, 0, 0, 0);
   // Reserve the final packet span instead of allocating/copying another scene-sized array.
   add(RESOURCE.ATTRIBUTES, KIND.BUFFER, new Uint8Array(0), 0, 0, 0, 0);
-  records[records.length - 1][PE.LENGTH] = Math.max(WGPU_SCENE_BUFFER_MIN_BYTES, attributeWords * WORD_BYTES); add(RESOURCE.MATERIALS, KIND.BUFFER, new Uint8Array(packNativeGraphs(table.getBufferArray(),prepared.materials,table.textures).buffer), 0, 0, 0, 0);
+  records[records.length - 1][PE.LENGTH] = Math.max(WGPU_SCENE_BUFFER_MIN_BYTES, attributeWords * WORD_BYTES); add(RESOURCE.MATERIALS, KIND.BUFFER, new Uint8Array(packNativeGraphs(table.getBufferArray(),prepared.materials,table.textures,!!configuration.causticFlags).buffer), 0, 0, 0, 0);
   add(RESOURCE.MAP_INFO, KIND.BUFFER, new Uint8Array(mapInfo.buffer), 0, 0, 0, 0); add(RESOURCE.CAMERA, KIND.BUFFER, cameraUniform, 0, 0, 0, 0);
   add(RESOURCE.TRACE_UNIFORM, KIND.BUFFER, new Uint8Array(rt.buffer), 0, 0, 0, 0); add(RESOURCE.LIGHT_UNIFORM, KIND.BUFFER, new Uint8Array(lightUniform.buffer), 0, 0, 0, 0);
   const atlasFormat = atlas.floatStorage ? FORMAT.RGBA16_FLOAT : FORMAT.RGBA8_UNORM;
@@ -1358,7 +1360,7 @@ export function sceneAtlasParameters(bytes: Uint8Array, token: number): Uint8Arr
     function add(id: number, kind: number, data: Uint8Array, width: number, height: number, format: number, destination: number) {
       records.push(resourceRecord(id, kind, data.length, width, height, kind === KIND.TEXTURE ? 1 : 0, format)); parts.push(data); destinations.push(destination);
     }
-    add(RESOURCE.MATERIALS, KIND.BUFFER, new Uint8Array(packNativeGraphs(table.getBufferArray(),state.ordered,table.textures).buffer), 0, 0, 0, 0);
+    add(RESOURCE.MATERIALS, KIND.BUFFER, new Uint8Array(packNativeGraphs(table.getBufferArray(),state.ordered,table.textures,!!sceneConfigurations.get(token)?.causticFlags).buffer), 0, 0, 0, 0);
     add(RESOURCE.MAP_INFO, KIND.BUFFER, new Uint8Array(packMapInfo(table, Number(after.NUM_MAPS)).buffer), 0, 0, 0, 0);
     add(RESOURCE.TRACE_UNIFORM, KIND.BUFFER, new Uint8Array(rt.buffer), 0, 0, 0, 0);
     add(RESOURCE.LIGHT_UNIFORM, KIND.BUFFER, new Uint8Array(lighting.lightUniform.buffer), 0, 0, 0, 0);

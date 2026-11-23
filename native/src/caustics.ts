@@ -1,5 +1,6 @@
-import {nativeGraphPlan} from './material-graph.js';
-import {causticCasterSphere,causticCasterSpheres} from '../../src/renderer/caustics.js';
+import {nativeGraphPlan,nativeGraphAffectsCausticCaster} from './material-graph.js';
+import {causticCasterSphere,causticCasterSpheres,isCausticSpecular} from '../../src/renderer/caustics.js';
+import {materialGraphShaderIR} from '../../src/renderer/materialGraph/specialize.js';
 import {causticEmissionTable} from '../../src/renderer/causticEmission.js';
 import {packCausticLightUniform} from '../../src/renderer/causticUniform.js';
 import {causticLightCompute,causticAccumulateCompute,causticBufferCompositeCompute} from '../../src/renderer/wgsl/causticLight.compute.js';
@@ -13,9 +14,10 @@ import type {WGPUShaderFeatures} from '../../src/renderer/wgpuShaderSource.js';
 import {decodeCamera} from './camera-core.js';
 export function nativeCausticTarget(input:{meshes:Mesh[];bindings:EmissiveMeshBinding[];materials:Material[];lights:AnalyticLightState[];emissive:EmissiveTriangle[];environmentPower:number;lighting:Float32Array;cacheKey:object},
  settings:{causticFlags:number;lightPhotons:number;photonMapPhotons:number;photonMapRadius:number},width:number,height:number,cameraRecord:Uint8Array,cameraUniform:Uint8Array,constants:Record<string,boolean|number>,features:WGPUShaderFeatures,intersections:string,hardware:boolean){
- const spheres=causticCasterSpheres(input.meshes);if(!settings.causticFlags||!spheres.length)return undefined;
+ const isCaster=(material:Material)=>!nativeGraphAffectsCausticCaster(material)&&isCausticSpecular(material);
+ const spheres=causticCasterSpheres(input.meshes,isCaster);if(!settings.causticFlags||!spheres.length)return undefined;
  let maximumCasterRadius=0;for(const sphere of spheres)maximumCasterRadius=Math.max(maximumCasterRadius,sphere[3]);
- const flags=settings.causticFlags&6,bounds=causticCasterSphere(input.meshes);
+ const flags=settings.causticFlags&6,bounds=causticCasterSphere(input.meshes,isCaster);
  const emission=causticEmissionTable(input.lights,input.emissive,bounds[3],input.environmentPower);
  const texels=Math.max(1,spheres.length+emission.count*2),distributionWidth=Math.min(texels,4096),distributionHeight=Math.ceil(texels/distributionWidth);
  const distribution=new Float32Array(distributionWidth*distributionHeight*4);spheres.forEach((sphere,i)=>distribution.set(sphere,i*4));distribution.set(emission.data,spheres.length*4);
@@ -24,14 +26,13 @@ export function nativeCausticTarget(input:{meshes:Mesh[];bindings:EmissiveMeshBi
  const camera=decodeCamera(cameraRecord),projection=camera.getProjectionMatrix(width/height),inverse=new Float32Array(cameraUniform.buffer,cameraUniform.byteOffset,16),vp=mat4.create();mat4.invert(vp,inverse);
  const uniform=new Uint8Array(packCausticLightUniform({casterSphere:bounds,viewProjection:vp,photons:1,batch:0,cameraScale:Math.abs(projection[0]*projection[5])/4,casterCount:spheres.length,choiceCount:emission.count,orthographic:camera.projection==='orthographic'}));
  const preamble=hardware?'enable wgpu_ray_query;\n':'';
- const graphPlan=nativeGraphPlan(input.materials);
- const materialGraphs=graphPlan.key?[{code:'unsupported-transport',message:'Material graphs currently use the constant material fallback with light tracing or photon mapping.',materialId:0,node:'',port:''}]:[];
- const metadata={materialGraphs,flags,workgroupSize:features.workgroupSize??8,lightWidth,lightHeight,distributionWidth,distributionHeight,
+ const graphPlan=nativeGraphPlan(input.materials),materialHooks={...materialGraphShaderIR(graphPlan.key?graphPlan.structures:[],features.hasAnisotropyDirections||features.hasCoatNormals,undefined,false,false),causticGraphFlags:!!graphPlan.key};
+ const metadata={flags,workgroupSize:features.workgroupSize??8,lightWidth,lightHeight,distributionWidth,distributionHeight,
   lightPhotons:settings.lightPhotons||Math.max(1,Math.round(width*height/4)),photonMapPhotons:settings.photonMapPhotons||defaultPhotonMapPhotons(width,height),
   initialRadius:settings.photonMapRadius||Math.max(bounds[3]*.03,1e-4),
   perCasterRadius:settings.photonMapRadius||Math.max(maximumCasterRadius*.03,1e-4),
-  lightShader:flags&2?preamble+causticLightCompute(constants,features.blasLayoutMask,features.hasDisplacement,'lightTracing',intersections,true,false,!!features.compactVertices,!!features.independentTextures,!!features.analyticLightStorage):'',
-  photonShader:flags&4?preamble+causticLightCompute(constants,features.blasLayoutMask,features.hasDisplacement,'photonMapping',intersections,true,false,!!features.compactVertices,!!features.independentTextures,!!features.analyticLightStorage):'',
+  lightShader:flags&2?preamble+causticLightCompute(constants,features.blasLayoutMask,features.hasDisplacement,'lightTracing',intersections,true,false,!!features.compactVertices,!!features.independentTextures,!!features.analyticLightStorage,materialHooks,true):'',
+  photonShader:flags&4?preamble+causticLightCompute(constants,features.blasLayoutMask,features.hasDisplacement,'photonMapping',intersections,true,false,!!features.compactVertices,!!features.independentTextures,!!features.analyticLightStorage,materialHooks,true):'',
   composeShader:causticBufferCompositeCompute,gridShader:flags&4?photonGridCompute:'',accumulateShader:causticAccumulateCompute};
  return {metadata,uniform,distribution:new Uint8Array(distribution.buffer),lighting:new Uint8Array(lighting.buffer)};
 }
