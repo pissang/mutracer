@@ -273,7 +273,7 @@ impl Session {
                 reply(
                     writer,
                     json!({"type":"ok","id":id,"protocol":1,"shotVersion":1,"descriptorVersions":[8],
-                    "capabilities":["shot-json","descriptor-v8","asset-path","asset-bytes","shot-edit","png","oidn","image-decode","exr","render-settings","display-settings","frame-sample-sequence","check-settings","oidn-clean-aux-large"],
+                    "capabilities":["shot-json","descriptor-v8","asset-path","asset-bytes","shot-edit","png","oidn","image-decode","exr","render-settings","display-settings","frame-sample-sequence","check-settings","oidn-clean-aux-large","structured-warnings"],
                     "maxHeaderBytes":MAX_HEADER,"maxPayloadBytes":MAX_PAYLOAD,"build":env!("MUTRACER_CLI_BUILD_ID")}),
                     None,
                 )
@@ -556,6 +556,13 @@ impl Session {
                             reply_warning(writer, id, frame, settings.spp, &warning)?;
                             request_warnings.push(warning);
                         }
+                    }
+                }
+                if let Some(warning) = settings.render.sampling_warning() {
+                    let warning = warnings::random_sampling(warning);
+                    if seen_warnings.insert(warning.clone()) {
+                        reply_warning(writer, id, frame, settings.spp, &warning)?;
+                        request_warnings.push(warning);
                     }
                 }
                 if check_only {

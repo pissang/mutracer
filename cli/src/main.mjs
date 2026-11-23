@@ -13,6 +13,14 @@ import {strictConversion} from './strict.mjs';
 import {NativeError, Worker, nativeCommand} from './worker.mjs';
 
 const emit = record => process.stdout.write(JSON.stringify(record) + '\n');
+const emittedWarnings = new Set();
+const warn = warning => {
+  const key = JSON.stringify(warning);
+  if (emittedWarnings.has(key)) return;
+  emittedWarnings.add(key);
+  emit({event:'warning', ...warning});
+  console.error(`Warning ${warning.pointer}: ${warning.message} ${warning.hint}`.trim());
+};
 const openWorker = async () => {
   const worker = await Worker.open();
   worker.onWarning = warning => emit({event:'warning', ...warning});
@@ -46,16 +54,16 @@ function args() {
   return {command, file: resolve(file), values};
 }
 
-function canonicalDisplay(input, warn) {
+function canonicalDisplay(input, warnDeprecated) {
   if (!input) return input;
   const display = {...input};
   if (display.tonemap !== undefined && display.toneMapping === undefined) {
     display.toneMapping = display.tonemap === 'none' ? 'linear' : display.tonemap;
     delete display.tonemap;
-    if (warn) console.error('Warning /output/display/tonemap: Deprecated field. Use toneMapping.');
+    if (warnDeprecated) warn({code:'deprecated-field', pointer:'/output/display/tonemap', message:'Deprecated field.', hint:'Use toneMapping.'});
   }
   if (display.exposure !== undefined && display.toneMappingExposure === undefined) {
-    if (warn) console.error('Warning /output/display/exposure: Deprecated field. Use toneMappingExposure in linear units.');
+    if (warnDeprecated) warn({code:'deprecated-field', pointer:'/output/display/exposure', message:'Deprecated field.', hint:'Use toneMappingExposure in linear units.'});
     // A legacy track interpolates in stops. The native worker must evaluate it.
     if (typeof display.exposure === 'number') {
       const linear = Math.fround(2 ** Math.fround(display.exposure));

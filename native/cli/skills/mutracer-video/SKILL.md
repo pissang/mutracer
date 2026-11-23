@@ -25,6 +25,10 @@ or procedural geometry. Keep geometry and textures in external assets.
    Read JSON progress. Rerun the same command to reuse completed frames after
    a device failure. Use a separate frame directory when inputs change.
 
+Handle stdout warning events by their `code`, `pointer`, `message` and `hint`.
+Warnings describe recoverable render behavior and do not change the exit code;
+fix them when their hint applies before relying on the image.
+
 Use `--frames A-B` for a range and `--max-minutes` to bound rendering time.
 For compositing, use `--format exr`. Use `sampleSequence: "frame"` for adjacent
 sampling ranges. Add `--aovs` to use the offline temporal filter. Join

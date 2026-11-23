@@ -327,6 +327,7 @@ impl Input {
 fn warn_sampling(settings: Settings) {
     if let Some(message) = settings.render.sampling_warning() {
         eprintln!("Warning /output/render/samplingPattern: {message}");
+        warnings::emit_file([warnings::random_sampling(message)], &mut HashSet::new());
     }
 }
 
@@ -359,6 +360,10 @@ pub fn validate(file: &Path) -> Result<()> {
     }
     for (pointer, replacement) in &input.shot.deprecated_fields {
         eprintln!("Warning {pointer}: Deprecated field. {replacement}");
+        warnings::emit_file(
+            [warnings::deprecated_field(pointer, replacement)],
+            &mut HashSet::new(),
+        );
     }
     let frames = shot::frame_count(input.shot.output.duration, settings.fps)?;
     progress(

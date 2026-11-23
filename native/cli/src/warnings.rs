@@ -194,6 +194,24 @@ pub fn caustics_enabled(render: RenderOptions) -> bool {
     render.has_caustic_transport()
 }
 
+pub fn random_sampling(message: &str) -> Warning {
+    Warning {
+        code: "native-random-sampling".into(),
+        pointer: "/output/render/samplingPattern".into(),
+        message: message.into(),
+        hint: "Use samplingPattern: \"sobol\" for comparable brightness.".into(),
+    }
+}
+
+pub fn deprecated_field(pointer: &str, replacement: &str) -> Warning {
+    Warning {
+        code: "deprecated-field".into(),
+        pointer: pointer.into(),
+        message: "Deprecated field.".into(),
+        hint: replacement.into(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

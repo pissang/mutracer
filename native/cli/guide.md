@@ -78,6 +78,9 @@ For HDR, render with `--format exr`. Add `--aovs` to capture surface guides
 for `mutracer temporal`. Use `mutracer assemble` to join PNG sequences with
 optional captions.
 
-Progress is JSON lines on stdout. Warnings and errors go to stderr.
+Progress and warning events are JSON lines on stdout. Warnings include a code,
+JSON pointer when available, message and hint; they do not change the exit code.
+Some warnings also appear as readable text on stderr.
+Errors go to stderr.
 Exit codes are 0 for success, 2 for invalid input, 3 for asset or output
 failure, 4 for a budget limit and 5 for a resumable GPU or worker failure.

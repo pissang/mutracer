@@ -30,9 +30,12 @@ there is no length prefix or payload. Read from one buffered stream throughout.
 for `hdr` and `exr`.
 
 A render can emit `progress` with `frame`, `samples` and `targetSamples`
-before its final reply. A `check` or `render` can emit a `progress` message
-with an additional nonfatal `warning` string. A `frame` payload is an encoded
-PNG or EXR image.
+before its final reply. A `check` or `render` can also emit `progress` with a
+nonfatal `warning` object containing `code`, `pointer`, `message` and `hint`.
+The same warnings are listed in the `check` reply's `warnings` array. Warnings
+do not change the operation's exit status. The `structured-warnings`
+capability identifies this format. A `frame` payload is an encoded PNG or EXR
+image.
 Omit `t` to use the shot's frame time. Supply explicit time and settings for
 descriptor input.
 
