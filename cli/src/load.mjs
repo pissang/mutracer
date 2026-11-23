@@ -4,6 +4,10 @@ import {fileURLToPath} from 'node:url';
 import * as THREE from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {MeshoptDecoder} from 'three/addons/libs/meshopt_decoder.module.js';
+import {parseMaterialX} from '../../src/materialx.ts';
+import Texture from '../../src/scene/Texture.ts';
+import {normalizeGraph} from '../../src/renderer/materialGraph/normalize.ts';
+
 
 function toArrayBuffer(bytes) {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
@@ -34,7 +38,31 @@ export function loaders(worker, moduleUrl, dependencies) {
     return texture;
   }
 
+  async function materialX(source, {materialName} = {}) {
+    const inline = typeof source === 'object' && source !== null && !(source instanceof URL);
+    const url = inline ? moduleUrl : new URL(source, moduleUrl);
+    const xml = inline ? source.source : (await read(url, moduleUrl, dependencies)).toString('utf8');
+    if (typeof xml !== 'string') throw new Error('Supply a MaterialX path, URL or {source: xml}.');
+    const parsed = parseMaterialX(xml, materialName);
+    if (parsed.warnings.length) throw new Error(`${url.href}: ${parsed.warnings.join('; ')}`);
+    if (parsed.displacement?.graph) throw new Error(`${url.href}: use a displacementMap for MaterialX displacement.`);
+    if (parsed.graph) {
+      const used = new Set(normalizeGraph(parsed.graph).nodes.map(node => node.id));
+      for (const [id, reference] of parsed.images) {
+        if (!used.has(id)) continue;
+        const decoded = await image(await read(reference.file, url, dependencies), false);
+        const texture = new Texture(decoded.image);
+        texture.colorSpace = reference.srgb ? 'srgb' : 'linear';
+        if (reference.wrapS) texture.wrapS = reference.wrapS;
+        if (reference.wrapT) texture.wrapT = reference.wrapT;
+        parsed.graph.setInput(id, 'file', {type:'filename', value:texture});
+      }
+    }
+    return parsed;
+  }
+
   return {
+    materialX,
     texture: async path => image(await read(path, moduleUrl, dependencies), false),
     hdr: async path => image(await read(path, moduleUrl, dependencies), true),
     gltf: async path => {

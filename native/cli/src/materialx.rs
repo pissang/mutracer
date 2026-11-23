@@ -5,19 +5,20 @@ use crate::{
 };
 use mutracer_native::scene_api::{
     GraphInput, GraphNode, GraphTerminal, MaterialGraph, OpenPbrMaterial, Scene,
-    graph_schema::{
-        category as c, geometry as geo, port as p, port_type as pt, source as src, terminal as term,
-    },
+    graph_schema::{category as c, port as p, port_type as pt, source as src},
 };
 use quick_xml::{
     Reader, XmlVersion,
     events::{BytesStart, Event},
 };
+use serde::Deserialize;
+use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::File,
     io::Read,
     path::Path,
+    sync::{Arc, OnceLock},
 };
 
 const XML_LIMIT: u64 = 8 * 1024 * 1024;
@@ -119,6 +120,8 @@ fn port_type(name: &str) -> Parse<u32> {
         "vector2" => pt::VECTOR2,
         "vector3" => pt::VECTOR3,
         "vector4" => pt::VECTOR4,
+        "filename" => pt::FILENAME,
+        "string" => pt::STRING,
         _ => return Err(format!("Unsupported type {name:?}")),
     })
 }
@@ -146,10 +149,100 @@ fn literal(value: &str, ty: u32) -> Parse<[f32; 4]> {
     Ok(packed)
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GraphSchema {
+    categories: Vec<String>,
+    types: Vec<String>,
+    ports: Vec<String>,
+    terminals: Vec<String>,
+    outputs: Vec<String>,
+    geometry: Vec<String>,
+    terminal_types: BTreeMap<String, String>,
+    definitions: BTreeMap<String, NodeDefinition>,
+    inactive_image_inputs: BTreeMap<String, Value>,
+    inactive_lobes: BTreeMap<String, Vec<String>>,
+    surfaces: BTreeMap<String, BTreeMap<String, (String, String, Option<Value>)>>,
+    standard_surface: Prototype,
+}
+
+#[derive(Deserialize)]
+struct Prototype {
+    tag: String,
+    attrs: BTreeMap<String, String>,
+    children: Vec<Prototype>,
+}
+
+#[derive(Deserialize)]
+struct NodeDefinition {
+    base: BTreeMap<String, PortDefinition>,
+    overrides: BTreeMap<String, BTreeMap<String, PortDefinition>>,
+}
+
+#[derive(Clone, Deserialize)]
+struct PortDefinition {
+    #[serde(rename = "type")]
+    ty: String,
+    value: Option<Value>,
+}
+
+fn schema() -> &'static GraphSchema {
+    static SCHEMA: OnceLock<GraphSchema> = OnceLock::new();
+    SCHEMA.get_or_init(|| {
+        // The Hydra importer and CLI use the same data generated from nodeInputs
+        // and the graph IR. The include stores JSON in adjacent C++ literals.
+        let text: String = include_str!("../../integrations/hydra/materialGraphSchema.inc")
+            .lines()
+            .filter_map(|line| line.strip_prefix("R\"MT_GRAPH("))
+            .map(|line| {
+                line.strip_suffix(")MT_GRAPH\",")
+                    .expect("graph schema chunk")
+            })
+            .collect();
+        serde_json::from_str(&text).expect("generated material graph schema")
+    })
+}
+
+fn index(names: &[String], name: &str) -> Parse<u32> {
+    names
+        .iter()
+        .position(|n| n == name)
+        .map(|i| i as u32)
+        .ok_or_else(|| format!("Unsupported graph identifier {name:?}"))
+}
+
+fn default_literal(value: &Value, ty: u32) -> Parse<[f32; 4]> {
+    if let Some(items) = value.as_array() {
+        return literal(
+            &items
+                .iter()
+                .map(Value::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
+            ty,
+        );
+    }
+    literal(&value.to_string(), ty)
+}
+
+fn camel_case(name: &str) -> String {
+    let mut words = name.split('_');
+    let mut result = words.next().unwrap_or_default().to_owned();
+    for word in words {
+        let mut chars = word.chars();
+        if let Some(first) = chars.next() {
+            result.extend(first.to_uppercase());
+            result.extend(chars);
+        }
+    }
+    result
+}
+
 #[derive(Clone, Copy)]
 struct Binding {
     slot: usize,
     ty: u32,
+    node: u32,
 }
 
 pub struct MaterialBindings {
@@ -197,6 +290,7 @@ struct Compiler<'a> {
     binding_by_element: BTreeMap<usize, Binding>,
     bindings: BTreeMap<String, Binding>,
     ambiguous: BTreeSet<String>,
+    translation: Option<(usize, usize, usize)>,
     file: &'a Path,
     pointer: &'a str,
     assets: &'a mut Assets,
@@ -204,7 +298,6 @@ struct Compiler<'a> {
 }
 
 type Input = (u32, u32, u32);
-struct Port(&'static str, u32, u32, Input);
 
 impl Compiler<'_> {
     fn input(&self, node: usize, tag: &str, name: &str) -> Option<usize> {
@@ -223,6 +316,25 @@ impl Compiler<'_> {
         self.graph.parameters.push(value);
         (src::PARAMETER, index, 0)
     }
+    fn author_id(&self, id: usize) -> String {
+        let element = &self.elements[id];
+        let name = element.attr("name").unwrap_or(&element.tag);
+        match element.parent {
+            Some(parent) if parent != 0 => format!("{}/{name}", self.author_id(parent)),
+            _ => name.to_owned(),
+        }
+    }
+
+    fn inherited(&self, mut id: usize, name: &str) -> Option<&str> {
+        loop {
+            let element = &self.elements[id];
+            if let Some(value) = element.attr(name).filter(|value| !value.is_empty()) {
+                return Some(value);
+            }
+            id = element.parent?;
+        }
+    }
+
     fn located(&self, node: usize, message: impl std::fmt::Display) -> String {
         let element = &self.elements[node];
         format!(
@@ -261,6 +373,17 @@ impl Compiler<'_> {
             let mut scope = e.parent;
             while let Some(id) = scope {
                 if self.elements[id].tag == "nodegraph" {
+                    if let Some((graph, defaults, shader)) = self.translation
+                        && id == graph
+                    {
+                        let input = self
+                            .input(shader, "input", name)
+                            .or_else(|| self.input(defaults, "input", name))
+                            .ok_or_else(|| {
+                                self.located(node, format!("Unknown translation input {name:?}"))
+                            })?;
+                        return self.resolve(input, ty, depth + 1);
+                    }
                     let element = self
                         .input(id, "input", name)
                         .ok_or_else(|| self.located(node, format!("Unknown interface {name:?}")))?;
@@ -268,7 +391,7 @@ impl Compiler<'_> {
                         if b.ty != ty {
                             return Err(self.located(node, "interface type mismatch"));
                         }
-                        return Ok((src::PARAMETER, b.slot as u32, 0));
+                        return Ok((src::NODE, b.node, 0));
                     }
                     let spec = &self.elements[element];
                     if spec
@@ -291,9 +414,21 @@ impl Compiler<'_> {
                         self.elements[id].attr("name").unwrap_or("graph"),
                         name
                     );
-                    let entry = Binding {
-                        slot: self.parameter(value).1 as usize,
+                    let source = self.parameter(value);
+                    let label = self.elements[element]
+                        .attr("uiname")
+                        .unwrap_or(&name)
+                        .replace('/', " ");
+                    let node = self.push(
+                        c::CONSTANT,
                         ty,
+                        format!("{}/interface/{}", self.author_id(id), label.trim()),
+                        vec![(p::VALUE, ty, source)],
+                    );
+                    let entry = Binding {
+                        slot: source.1 as usize,
+                        ty,
+                        node,
                     };
                     self.binding_by_element.insert(element, entry);
                     self.bindings.insert(qualified, entry);
@@ -303,7 +438,7 @@ impl Compiler<'_> {
                         self.bindings.remove(&name);
                         self.ambiguous.insert(name);
                     }
-                    return Ok((src::PARAMETER, entry.slot as u32, 0));
+                    return Ok((src::NODE, entry.node, 0));
                 }
                 scope = self.elements[id].parent;
             }
@@ -325,17 +460,23 @@ impl Compiler<'_> {
             return self.resolve(output, ty, depth + 1);
         }
         if let Some(target) = self.reference(node)? {
-            if e.attr("output").is_some_and(|name| name != "out") || e.attr("channels").is_some() {
-                return Err(self.located(
-                    node,
-                    "named sub-outputs and channel swizzles are unsupported",
-                ));
+            if e.attr("channels").is_some() {
+                return Err(self.located(node, "channel swizzles are unsupported"));
             }
+            let target_tag = self.elements[target].tag.clone();
+            let output = e.attr("output").unwrap_or("out").to_owned();
             let (target, actual) = self.compile_node(target, depth + 1)?;
-            if ty != actual {
+            let output_type = match target_tag.as_str() {
+                "gltf_colorimage" if output == "outcolor" => pt::COLOR3,
+                "gltf_colorimage" if output == "outa" => pt::FLOAT,
+                "separate2" | "separate3" | "separate4" if output != "out" => pt::FLOAT,
+                _ if output == "out" => actual,
+                _ => return Err(self.located(node, "unsupported source output")),
+            };
+            if ty != output_type {
                 return Err(self.located(node, "source node type mismatch"));
             }
-            return Ok((src::NODE, target, 0));
+            return Ok((src::NODE, target, index(&schema().outputs, &output)?));
         }
         let value = e
             .attr("value")
@@ -370,173 +511,451 @@ impl Compiler<'_> {
         if self.graph.nodes.len() >= 4096 || !self.active.insert(id) {
             return Err(self.located(id, "cycle or graph complexity limit"));
         }
+        let shared = schema();
         let node = &self.elements[id];
-        let ty = port_type(node.attr("type").unwrap_or("float"))?;
-        let name = node.attr("name").unwrap_or(&node.tag).to_owned();
-        let tag = node.tag.clone();
-        let zero = [0.; 4];
-        let one = std::array::from_fn(|i| if i < width(ty) { 1. } else { 0. });
-        let value = |value| (src::PARAMETER, u32::MAX, value);
-        let (cat, ports) = match tag.as_str() {
-            "constant" => (c::CONSTANT, vec![Port("value", p::VALUE, ty, value(0))]),
-            "mix" => (
-                c::MIX,
-                vec![
-                    Port("bg", p::BG, ty, value(0)),
-                    Port("fg", p::FG, ty, value(0)),
-                    Port("mix", p::MIX, pt::FLOAT, value(0)),
-                ],
-            ),
-            "add" | "subtract" | "multiply" | "divide" | "min" | "max" | "power" => {
-                let cat = match tag.as_str() {
-                    "add" => c::ADD,
-                    "subtract" => c::SUBTRACT,
-                    "multiply" => c::MULTIPLY,
-                    "divide" => c::DIVIDE,
-                    "min" => c::MIN,
-                    "max" => c::MAX,
-                    _ => c::POWER,
-                };
-                (
-                    cat,
-                    vec![
-                        Port("in1", p::IN1, ty, value(0)),
-                        Port(
-                            "in2",
-                            p::IN2,
-                            ty,
-                            value(u32::from(matches!(
-                                tag.as_str(),
-                                "multiply" | "divide" | "power"
-                            ))),
-                        ),
-                    ],
-                )
+        let mut tag = node.tag.as_str();
+        if tag == "absval" {
+            tag = "abs";
+        }
+        let mut authored = BTreeMap::new();
+        let legacy = self.elements[0]
+            .attr("version")
+            .and_then(|version| version.split('.').nth(1))
+            .and_then(|minor| minor.parse::<u32>().ok())
+            .is_some_and(|minor| minor < 39);
+        for &child in &node.children {
+            let input = &self.elements[child];
+            if input.tag != "input" {
+                continue;
             }
-            "noise2d" | "noise3d" => {
-                let (cat, coord) = if tag == "noise2d" {
-                    (
-                        c::NOISE2D,
-                        Port(
-                            "texcoord",
-                            p::TEXCOORD,
-                            pt::VECTOR2,
-                            (src::GEOMETRY, geo::TEXCOORD, 0),
-                        ),
-                    )
-                } else {
-                    (
-                        c::NOISE3D,
-                        Port(
-                            "position",
-                            p::POSITION,
-                            pt::VECTOR3,
-                            (src::GEOMETRY, geo::OBJECT_POSITION, 0),
-                        ),
-                    )
+            let mut name = input.attr("name").unwrap_or_default();
+            if legacy && tag == "atan2" {
+                name = match name {
+                    "in1" => "iny",
+                    "in2" => "inx",
+                    _ => name,
                 };
-                (
-                    cat,
-                    vec![
-                        coord,
-                        Port("amplitude", p::AMPLITUDE, ty, value(1)),
-                        Port("pivot", p::PIVOT, pt::FLOAT, value(0)),
-                    ],
-                )
             }
-            "image" => (
-                c::IMAGE,
-                vec![
-                    Port("file", p::FILE, pt::FILENAME, value(0)),
-                    Port("default", p::DEFAULT, ty, value(0)),
-                    Port(
-                        "texcoord",
-                        p::TEXCOORD,
-                        pt::VECTOR2,
-                        (src::GEOMETRY, geo::TEXCOORD, 0),
-                    ),
-                    Port("filtertype", p::FILTERTYPE, pt::STRING, value(0)),
-                    Port("uaddressmode", p::UADDRESSMODE, pt::STRING, value(0)),
-                    Port("vaddressmode", p::VADDRESSMODE, pt::STRING, value(0)),
-                ],
-            ),
-            _ => return Err(self.located(id, "unsupported MaterialX node category")),
+            if shared
+                .inactive_image_inputs
+                .get(name)
+                .is_some_and(|default| {
+                    input.attr("value").is_some_and(|value| {
+                        default.as_str() == Some(value) || default.to_string() == value
+                    })
+                })
+            {
+                continue;
+            }
+            authored.insert(name.to_owned(), child);
+        }
+        let type_name = match (tag, node.attr("type").unwrap_or("float")) {
+            ("gltf_colorimage", "multioutput") => "color4",
+            (_, "multioutput") => authored
+                .get("in")
+                .and_then(|&i| self.elements[i].attr("type"))
+                .unwrap_or("vector3"),
+            (_, ty) => ty,
         };
-        let mut inputs = Vec::with_capacity(ports.len());
-        for &input in &self.elements[id].children {
-            if self.elements[input].tag == "input" {
-                let author = self.elements[input].attr("name").unwrap_or_default();
-                if !ports.iter().any(|port| port.0 == author) {
-                    return Err(self.located(id, format!("Unsupported input {author:?}")));
+        let color_image = type_name.starts_with("color");
+        let ty = index(&shared.types, type_name)?;
+        let cat = index(&shared.categories, tag).map_err(|e| self.located(id, e))?;
+        let definition = shared
+            .definitions
+            .get(&format!("{tag}/{type_name}"))
+            .ok_or_else(|| self.located(id, format!("Unsupported node type {tag}/{type_name}")))?;
+        let mut ports = definition.base.clone();
+        for (name, &child) in &authored {
+            if !ports.contains_key(name) {
+                return Err(self.located(child, format!("Unsupported input {name:?}")));
+            }
+            if let Some(ty) = self.elements[child].attr("type") {
+                if tag == "dotproduct" && name == "in2" && authored.contains_key("in1") {
+                    continue;
+                }
+                if let Some(overrides) = definition.overrides.get(&format!("{name}/{ty}")) {
+                    ports.extend(overrides.clone());
                 }
             }
         }
-        for Port(key, port, mut port_type, default) in ports {
-            let input = self.input(id, "input", key);
-            if matches!(key, "amplitude" | "in2" | "mix")
-                && input.is_some_and(|i| self.elements[i].attr("type") == Some("float"))
-            {
-                port_type = pt::FLOAT;
-            }
-            if key == "mix"
-                && input.is_some_and(|i| {
-                    self.elements[i]
-                        .attr("type")
-                        .map(|t| {
-                            matches!(t, "color3" | "vector2" | "vector3" | "vector4" | "color4")
-                        })
-                        .unwrap_or(false)
-                })
-            {
-                port_type = ty;
-            }
-            let source = match (port_type, input) {
-                (pt::FILENAME, Some(input)) => {
+        let mut inputs = Vec::with_capacity(ports.len());
+        for (name, def) in ports {
+            let port = index(&shared.ports, &name)?;
+            let ty = port_type(&def.ty)?;
+            let input = authored.get(&name).copied();
+            let source = match (ty, input, def.value.as_ref()) {
+                (pt::FILENAME, Some(input), _) => {
                     let path = self.elements[input]
                         .attr("value")
                         .ok_or_else(|| self.located(input, "image file must be a literal path"))?;
-                    let resolved = self.file.parent().unwrap_or(Path::new(".")).join(path);
-                    let tex = self
+                    let prefix = self.inherited(input, "fileprefix").unwrap_or_default();
+                    let resolved = self
+                        .file
+                        .parent()
+                        .unwrap_or(Path::new("."))
+                        .join(format!("{prefix}{path}"));
+                    let mut texture = self
                         .assets
                         .image(&resolved, self.pointer, false)
                         .map_err(|e| e.to_string())?;
-                    let tex = self.scene.add_texture(tex).map_err(|e| e.to_string())?;
+                    texture.wrap = ["uaddressmode", "vaddressmode"].map(|axis| {
+                        match authored
+                            .get(axis)
+                            .and_then(|&i| self.elements[i].attr("value"))
+                        {
+                            Some("clamp") => 1,
+                            Some("mirror") => 2,
+                            _ => 0,
+                        }
+                    });
+                    let colorspace = self.inherited(input, "colorspace");
+                    if !color_image
+                        || matches!(
+                            colorspace,
+                            Some("lin_rec709" | "lin_rec709_scene" | "linear")
+                        )
+                    {
+                        if let mutracer_native::scene_api::TexturePixels::Rgba8(pixels) =
+                            texture.pixels
+                        {
+                            texture.pixels =
+                                mutracer_native::scene_api::TexturePixels::Rgba32F(Arc::from(
+                                    pixels
+                                        .iter()
+                                        .map(|&byte| f32::from(byte) / 255.)
+                                        .collect::<Vec<_>>(),
+                                ));
+                        }
+                    }
+                    let tex = self.scene.add_texture(texture).map_err(|e| e.to_string())?;
                     let slot = self.graph.textures.len();
                     self.graph.textures.push(Some(tex));
                     self.parameter([slot as f32, 0., 0., 0.])
                 }
-                (pt::FILENAME, None) => self.parameter([-1., 0., 0., 0.]),
-                (pt::STRING, _) => {
-                    if let Some(input) = input {
-                        let expected = if key == "filtertype" {
-                            "linear"
-                        } else {
-                            "periodic"
-                        };
-                        if self.elements[input].attr("value") != Some(expected) {
-                            return Err(
-                                self.located(input, format!("only {expected} is supported here"))
-                            );
+                (pt::FILENAME, None, _) => self.parameter([-1., 0., 0., 0.]),
+                (pt::STRING, _, default) => {
+                    let value = input
+                        .and_then(|i| self.elements[i].attr("value"))
+                        .or_else(|| default.and_then(Value::as_str))
+                        .unwrap_or_default();
+                    let encoded = match (name.as_str(), value) {
+                        ("space" | "fromspace" | "tospace", "world") => 1.,
+                        ("space" | "fromspace" | "tospace", "object") => 0.,
+                        ("fromspace" | "tospace", "") => -1.,
+                        ("uaddressmode" | "vaddressmode", "periodic" | "clamp" | "mirror") => 0.,
+                        ("filtertype", "linear") | ("note", _) => 0.,
+                        _ => {
+                            return Err(self.located(
+                                input.unwrap_or(id),
+                                format!("Unsupported {name} value {value:?}"),
+                            ));
                         }
-                    }
-                    self.parameter(zero)
+                    };
+                    self.parameter([encoded, 0., 0., 0.])
                 }
-                (_, Some(input)) => self.resolve(input, port_type, depth + 1)?,
-                (_, None) if default.0 == src::GEOMETRY => default,
-                (_, None) => self.parameter(if default.2 == 0 {
-                    zero
-                } else if port_type == ty {
-                    one
-                } else {
-                    [1., 0., 0., 0.]
-                }),
+                (_, Some(input), _) => self.resolve(input, ty, depth + 1)?,
+                (_, None, Some(value)) => self.parameter(default_literal(value, ty)?),
+                (_, None, None) => {
+                    let geometry = if name == "position" {
+                        "objectPosition"
+                    } else {
+                        &name
+                    };
+                    (src::GEOMETRY, index(&shared.geometry, geometry)?, 0)
+                }
             };
-            inputs.push((port, port_type, source));
+            inputs.push((port, ty, source));
         }
-        let node = (self.push(cat, ty, name, inputs), ty);
+        let node = (self.push(cat, ty, self.author_id(id), inputs), ty);
         self.active.remove(&id);
         self.nodes.insert(id, node);
         Ok(node)
+    }
+
+    fn insert_prototype(&mut self, prototype: &Prototype, parent: usize) -> usize {
+        let id = self.elements.len();
+        self.elements.push(Element {
+            tag: prototype.tag.clone(),
+            attributes: prototype.attrs.clone(),
+            children: Vec::new(),
+            parent: Some(parent),
+        });
+        self.elements[parent].children.push(id);
+        for child in &prototype.children {
+            self.insert_prototype(child, id);
+        }
+        id
+    }
+
+    fn default_port(&mut self, parent: usize, ty: &str, default: &Value) -> usize {
+        let value = default.as_array().map_or_else(
+            || default.to_string(),
+            |items| {
+                items
+                    .iter()
+                    .map(Value::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            },
+        );
+        self.insert_prototype(
+            &Prototype {
+                tag: "input".into(),
+                attrs: BTreeMap::from([("type".into(), ty.into()), ("value".into(), value)]),
+                children: Vec::new(),
+            },
+            parent,
+        )
+    }
+
+    fn write_uniform(
+        &self,
+        material: &mut OpenPbrMaterial,
+        id: usize,
+        property: u32,
+        ty: u32,
+        value: [f32; 4],
+    ) -> Parse<()> {
+        let [x, y, z, _] = value;
+        if matches!(property, 4 | 7 | 10 | 25 | 27 | 36) && !(0. ..=1.).contains(&x)
+            || property == 8 && x < 1.
+        {
+            return Err(self.located(id, "MaterialX value exceeds the native surface range"));
+        }
+        let result = if ty == pt::BOOLEAN {
+            material.set_uint(property, x as u32)
+        } else {
+            material.set_float(property, [x, y, z])
+        };
+        result.map_err(|e| self.located(id, e))
+    }
+
+    fn fold(&mut self, source: Input, ty: u32, id: usize) -> Parse<Option<[f32; 4]>> {
+        if source.0 == src::PARAMETER {
+            return Ok(Some(self.graph.parameters[source.1 as usize]));
+        }
+        let probe = match ty {
+            pt::FLOAT | pt::BOOLEAN => "specularRoughness",
+            pt::COLOR3 => "baseColor",
+            _ => return Ok(None),
+        };
+        let mut graph = self.graph.clone();
+        let (node, output) = if ty == pt::BOOLEAN {
+            let index = graph.nodes.len() as u32;
+            graph.nodes.push(GraphNode {
+                category: c::CONVERT,
+                implementation: 1,
+                port_type: pt::FLOAT,
+                first_input: graph.inputs.len() as u32,
+                input_count: 1,
+            });
+            graph
+                .author_ids
+                .push(format!("{}/fold", self.author_id(id)));
+            graph.inputs.push(GraphInput {
+                port: p::IN,
+                port_type: ty,
+                source_kind: source.0,
+                source: source.1,
+                output: source.2,
+            });
+            (index, 0)
+        } else {
+            (source.1, source.2)
+        };
+        graph.terminals = vec![GraphTerminal {
+            port: index(&schema().terminals, probe)?,
+            node,
+            output,
+        }];
+        let folded = graph
+            .fold_constants()
+            .map_err(|error| self.located(id, error))?;
+        Ok(folded.into_iter().next().flatten().map(|values| {
+            let mut value = [0.; 4];
+            value[..values.len()].copy_from_slice(&values);
+            value
+        }))
+    }
+
+    fn surface_inputs(
+        &mut self,
+        shader: usize,
+        material: &mut OpenPbrMaterial,
+    ) -> Parse<BTreeMap<String, usize>> {
+        let shared = schema();
+        let mut inputs = BTreeMap::new();
+        let tag = self.elements[shader].tag.clone();
+        let mut handled = BTreeSet::new();
+        let ports = match tag.as_str() {
+            "open_pbr_surface" => self.elements[shader].children.clone(),
+            "standard_surface" => {
+                let defaults = shared
+                    .standard_surface
+                    .children
+                    .iter()
+                    .find(|e| e.tag == "nodedef")
+                    .expect("translation defaults");
+                let graph = shared
+                    .standard_surface
+                    .children
+                    .iter()
+                    .find(|e| e.tag == "nodegraph")
+                    .expect("translation graph");
+                let defaults = self.insert_prototype(defaults, 0);
+                let graph = self.insert_prototype(graph, 0);
+                self.translation = Some((graph, defaults, shader));
+                if let Some(normal) = self.input(shader, "input", "normal") {
+                    inputs.insert("normal".into(), normal);
+                }
+                self.elements[graph].children.clone()
+            }
+            "gltf_pbr" | "UsdPreviewSurface" => {
+                let gltf = tag == "gltf_pbr";
+                let mapping = &shared.surfaces[if gltf { "gltf" } else { "usd" }];
+                for (key, (name, ty, default)) in mapping {
+                    handled.insert(name.as_str());
+                    if let Some(id) = self.input(shader, "input", name).or_else(|| {
+                        default
+                            .as_ref()
+                            .map(|value| self.default_port(shader, ty, value))
+                    }) {
+                        inputs.insert(key.clone(), id);
+                    }
+                }
+                material
+                    .set_float(29, [1.5, 0., 0.])
+                    .map_err(|e| self.located(shader, e))?;
+                material
+                    .set_float(35, [1., 0., 0.])
+                    .map_err(|e| self.located(shader, e))?;
+                let properties: &[(&str, &str)] = if gltf {
+                    &[
+                        ("alpha_cutoff", "alphaCutoff"),
+                        ("attenuation_color", "transmissionColor"),
+                        ("attenuation_distance", "transmissionDepth"),
+                        ("emissive_strength", "emissionLuminance"),
+                    ]
+                } else {
+                    &[("opacityThreshold", "alphaCutoff")]
+                };
+                for &(name, key) in properties {
+                    handled.insert(name);
+                    if let Some(id) = self.input(shader, "input", name) {
+                        inputs.insert(key.into(), id);
+                    }
+                }
+                if gltf {
+                    let mode = self
+                        .input(shader, "input", "alpha_mode")
+                        .and_then(|id| self.elements[id].attr("value"))
+                        .unwrap_or("0");
+                    let mode = match mode {
+                        "0" => 1,
+                        "1" => 2,
+                        "2" => 3,
+                        _ => return Err(self.located(shader, "unsupported alpha_mode")),
+                    };
+                    material
+                        .set_uint(41, mode)
+                        .map_err(|e| self.located(shader, e))?;
+                    handled.insert("alpha_mode");
+                    if !inputs.contains_key("alphaCutoff") {
+                        material
+                            .set_float(42, [0.5, 0., 0.])
+                            .map_err(|e| self.located(shader, e))?;
+                    }
+                    if let Some(id) = self.input(shader, "input", "thickness") {
+                        let value = self.elements[id]
+                            .attr("value")
+                            .and_then(|n| n.parse::<f32>().ok())
+                            .ok_or_else(|| {
+                                self.located(id, "glTF volume thickness must be uniform")
+                            })?;
+                        material
+                            .set_uint(37, u32::from(value <= 0.))
+                            .map_err(|e| self.located(id, e))?;
+                        handled.insert("thickness");
+                    }
+                    if let Some(id) = self.input(shader, "input", "iridescence_thickness") {
+                        let value = self.elements[id]
+                            .attr("value")
+                            .and_then(|n| n.parse::<f32>().ok())
+                            .ok_or_else(|| {
+                                self.located(id, "glTF iridescence thickness must be uniform")
+                            })?;
+                        material
+                            .set_float(32, [value * 0.001, 0., 0.])
+                            .map_err(|e| self.located(id, e))?;
+                        handled.insert("iridescence_thickness");
+                    }
+                } else {
+                    for name in ["useSpecularWorkflow", "opacityMode"] {
+                        if let Some(id) = self.input(shader, "input", name)
+                            && self.elements[id].attr("value") != Some("0")
+                        {
+                            return Err(self.located(id, format!("Unsupported {name}")));
+                        }
+                        handled.insert(name);
+                    }
+                    handled.insert("specularColor");
+                }
+                for name in ["occlusion", "displacement"] {
+                    if let Some(id) = self.input(shader, "input", name) {
+                        let default = if name == "occlusion" { "1" } else { "0" };
+                        if self.elements[id]
+                            .attr("value")
+                            .and_then(|v| v.parse::<f32>().ok())
+                            == default.parse::<f32>().ok()
+                            && self.elements[id].attr("value").is_some()
+                        {
+                            handled.insert(name);
+                        }
+                    }
+                }
+                for &id in &self.elements[shader].children {
+                    if let Some(name) = self.elements[id].attr("name")
+                        && self.elements[id].tag == "input"
+                        && !handled.contains(name)
+                        && !inputs.values().any(|&i| i == id)
+                    {
+                        return Err(self.located(id, format!("Unsupported {tag} input {name:?}")));
+                    }
+                }
+                return Ok(inputs);
+            }
+            _ => return Err(self.located(shader, format!("Unsupported MaterialX surface {tag}"))),
+        };
+        for id in ports {
+            let input = &self.elements[id];
+            if !matches!(input.tag.as_str(), "input" | "output") {
+                continue;
+            }
+            let author = input.attr("name").unwrap_or_default();
+            let author = if input.tag == "output" {
+                author.trim_end_matches("_out")
+            } else {
+                author
+            };
+            let key = match author {
+                "base" => "baseWeight".into(),
+                "specular" => "specularWeight".into(),
+                "transmission" => "transmissionWeight".into(),
+                "subsurface" => "subsurfaceWeight".into(),
+                "coat" => "coatWeight".into(),
+                "fuzz" => "fuzzWeight".into(),
+                "thin_film" => "thinFilmWeight".into(),
+                "geometry_normal" => "normal".into(),
+                "geometry_opacity" => "opacity".into(),
+                "specular_roughness_anisotropy" => "specularAnisotropy".into(),
+                "coat_roughness_anisotropy" => "coatAnisotropy".into(),
+                _ => camel_case(author),
+            };
+            if inputs.insert(key, id).is_some() {
+                return Err(self.located(id, "duplicate OpenPBR input"));
+            }
+        }
+        Ok(inputs)
     }
 
     fn surface(&mut self, material: &mut OpenPbrMaterial) -> Parse<()> {
@@ -552,84 +971,161 @@ impl Compiler<'_> {
         let shader = self
             .reference(shader)?
             .ok_or("The surfaceshader input needs a nodename")?;
-        if self.elements[shader].tag != "open_pbr_surface" {
-            return Err(self.located(shader, "expected open_pbr_surface"));
-        }
-        for id in self.elements[shader].children.clone() {
-            if self.elements[id].tag != "input" {
-                continue;
+        let mut inputs = self.surface_inputs(shader, material)?;
+        let shared = schema();
+        for (weight, inactive) in &shared.inactive_lobes {
+            let varies = inactive.iter().any(|key| {
+                inputs.get(key).is_some_and(|input| {
+                    ["nodename", "nodegraph", "interfacename"]
+                        .into_iter()
+                        .any(|a| self.elements[*input].attr(a).is_some())
+                })
+            });
+            if varies && let Some(&id) = inputs.get(weight) {
+                let value = self.resolve(id, pt::FLOAT, 0)?;
+                if self
+                    .fold(value, pt::FLOAT, id)?
+                    .is_some_and(|value| value[0] == 0.)
+                {
+                    for key in inactive {
+                        if let Some(input) = inputs.get(key)
+                            && ["nodename", "nodegraph", "interfacename"]
+                                .into_iter()
+                                .any(|attribute| self.elements[*input].attr(attribute).is_some())
+                        {
+                            inputs.remove(key);
+                        }
+                    }
+                }
             }
-            let author = self.elements[id].attr("name").unwrap_or("");
-            let (property, terminal, ty) = surface_port(author)
-                .ok_or_else(|| self.located(id, format!("Unsupported OpenPBR input {author:?}")))?;
-            let link = self.elements[id].attr("nodename").is_some()
-                || self.elements[id].attr("nodegraph").is_some()
-                || self.elements[id].attr("interfacename").is_some();
-            if !link {
+        }
+        for (key, id) in inputs {
+            let input = &self.elements[id];
+            let property = crate::material::numeric_property(&key);
+            let graph_type = shared.terminal_types.get(&key);
+            let type_name = property
+                .map(|(_, ty)| ty)
+                .or(graph_type.map(String::as_str))
+                .ok_or_else(|| self.located(id, format!("Unsupported OpenPBR input {key:?}")))?;
+            let ty = port_type(type_name)?;
+            let linked = ["nodename", "nodegraph", "interfacename"]
+                .into_iter()
+                .any(|key| input.attr(key).is_some());
+            if !linked && let Some((property, _)) = property {
                 let value = literal(
-                    self.elements[id]
+                    input
                         .attr("value")
                         .ok_or_else(|| self.located(id, "missing value"))?,
                     ty,
                 )?;
-                let [x, y, z, _] = value;
-                if ty == pt::BOOLEAN {
-                    material
-                        .set_uint(property, x as u32)
-                        .map_err(|e| e.to_string())?;
-                } else {
-                    material
-                        .set_float(property, [x, y, z])
-                        .map_err(|e| e.to_string())?;
-                }
-                continue;
-            }
-            let terminal = terminal
-                .ok_or_else(|| self.located(id, "this surface field only supports literals"))?;
-            let source = self.resolve(id, ty, 0)?;
-            let node = if source.0 == src::NODE {
-                source.1
+                self.write_uniform(material, id, property, ty, value)?;
             } else {
-                self.push(
-                    c::CONSTANT,
-                    ty,
-                    format!("surface/{id}"),
-                    vec![(p::VALUE, ty, source)],
-                )
-            };
-            self.graph.terminals.push(GraphTerminal {
-                port: terminal,
-                node,
-                output: 0,
-            });
+                let source = self.resolve(id, ty, 0)?;
+                let terminal = index(&shared.terminals, &key).ok();
+                if let Some((property, _)) = property
+                    && (terminal.is_none() || self.translation.is_some())
+                    && let Some(value) = self.fold(source, ty, id)?
+                {
+                    self.write_uniform(material, id, property, ty, value)?;
+                    continue;
+                }
+                let port = terminal.ok_or_else(|| {
+                    self.located(id, "this surface field only supports uniform values")
+                })?;
+                let (node, output) = if source.0 == src::NODE {
+                    (source.1, source.2)
+                } else {
+                    (
+                        self.push(
+                            c::CONSTANT,
+                            ty,
+                            format!("surface/value/{key}"),
+                            vec![(p::VALUE, ty, source)],
+                        ),
+                        0,
+                    )
+                };
+                self.graph
+                    .terminals
+                    .push(GraphTerminal { port, node, output });
+            }
         }
         Ok(())
     }
 }
 
-fn surface_port(name: &str) -> Option<(u32, Option<u32>, u32)> {
-    let (id, terminal, ty) = match name {
-        "base_weight" => (1, Some(term::BASE_WEIGHT), pt::FLOAT),
-        "base_color" => (2, Some(term::BASE_COLOR), pt::COLOR3),
-        "base_diffuse_roughness" => (3, Some(term::BASE_DIFFUSE_ROUGHNESS), pt::FLOAT),
-        "base_metalness" => (4, Some(term::BASE_METALNESS), pt::FLOAT),
-        "specular_weight" => (5, Some(term::SPECULAR_WEIGHT), pt::FLOAT),
-        "specular_color" => (6, Some(term::SPECULAR_COLOR), pt::COLOR3),
-        "specular_roughness" => (7, Some(term::SPECULAR_ROUGHNESS), pt::FLOAT),
-        "specular_ior" => (8, Some(term::SPECULAR_IOR), pt::FLOAT),
-        "transmission_weight" => (10, Some(term::TRANSMISSION_WEIGHT), pt::FLOAT),
-        "transmission_color" => (11, Some(term::TRANSMISSION_COLOR), pt::COLOR3),
-        "coat_weight" => (25, Some(term::COAT_WEIGHT), pt::FLOAT),
-        "coat_color" => (26, Some(term::COAT_COLOR), pt::COLOR3),
-        "coat_roughness" => (27, Some(term::COAT_ROUGHNESS), pt::FLOAT),
-        "coat_ior" => (29, Some(term::COAT_IOR), pt::FLOAT),
-        "emission_color" => (34, Some(term::EMISSION_COLOR), pt::COLOR3),
-        "emission_luminance" => (35, Some(term::EMISSION_LUMINANCE), pt::FLOAT),
-        "geometry_opacity" => (36, Some(term::OPACITY), pt::FLOAT),
-        "geometry_thin_walled" => (37, None, pt::BOOLEAN),
-        _ => return None,
+fn compact_graph(
+    source: &MaterialGraph,
+    bindings: &mut BTreeMap<String, Binding>,
+) -> MaterialGraph {
+    struct Repack<'a> {
+        source: &'a MaterialGraph,
+        output: MaterialGraph,
+        nodes: BTreeMap<u32, u32>,
+        parameters: BTreeMap<u32, u32>,
+    }
+    impl Repack<'_> {
+        fn node(&mut self, old: u32) -> u32 {
+            if let Some(&node) = self.nodes.get(&old) {
+                return node;
+            }
+            let mut record = self.source.nodes[old as usize];
+            let first = record.first_input as usize;
+            let ports = &self.source.inputs[first..first + record.input_count as usize];
+            let mut inputs = Vec::with_capacity(ports.len());
+            for &port in ports {
+                let mut input = port;
+                if input.source_kind == src::NODE {
+                    input.source = self.node(input.source);
+                } else if input.source_kind == src::PARAMETER {
+                    input.source = *self.parameters.entry(input.source).or_insert_with(|| {
+                        let index = self.output.parameters.len() as u32;
+                        self.output
+                            .parameters
+                            .push(self.source.parameters[input.source as usize]);
+                        index
+                    });
+                }
+                inputs.push(input);
+            }
+            record.first_input = self.output.inputs.len() as u32;
+            let node = self.output.nodes.len() as u32;
+            self.output.nodes.push(record);
+            self.output.inputs.extend(inputs);
+            self.output
+                .author_ids
+                .push(self.source.author_ids[old as usize].clone());
+            self.nodes.insert(old, node);
+            node
+        }
+    }
+    let mut out = Repack {
+        source,
+        output: MaterialGraph::default(),
+        nodes: BTreeMap::new(),
+        parameters: BTreeMap::new(),
     };
-    Some((id, terminal, ty))
+    for &terminal in &source.terminals {
+        let node = out.node(terminal.node);
+        out.output
+            .terminals
+            .push(GraphTerminal { node, ..terminal });
+    }
+    out.output.textures.clone_from(&source.textures);
+    bindings.retain(|_, binding| {
+        match (
+            out.nodes.get(&binding.node),
+            out.parameters.get(&(binding.slot as u32)),
+        ) {
+            (Some(&node), Some(&slot)) => {
+                binding.node = node;
+                binding.slot = slot as usize;
+                true
+            }
+            _ => false,
+        }
+    });
+    out.output
 }
 
 pub fn load(
@@ -655,6 +1151,7 @@ pub fn load(
         binding_by_element: Default::default(),
         bindings: Default::default(),
         ambiguous: Default::default(),
+        translation: None,
         file,
         pointer,
         assets,
@@ -665,7 +1162,11 @@ pub fn load(
         .surface(&mut material)
         .map_err(|e| Error::asset(pointer, format!("{}: {e}", file.display())))?;
     if !compiler.graph.terminals.is_empty() {
-        material.graph = Some(compiler.graph);
+        material.graph = Some(if compiler.translation.is_some() {
+            compact_graph(&compiler.graph, &mut compiler.bindings)
+        } else {
+            compiler.graph
+        });
     }
     Ok((
         material,

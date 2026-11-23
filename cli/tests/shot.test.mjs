@@ -70,3 +70,37 @@ test('authored frame updates must be deterministic', {skip: !native}, async () =
     await rm(dir,{recursive:true,force:true});
   }
 });
+
+test('MaterialX can decorate a legacy Three.js material with a named-focus lens', {skip: !native}, async () => {
+  const dir = await mkdtemp(join(tmpdir(),'mutracer-node-'));
+  try {
+    const file = join(dir,'materialx.mjs');
+    await writeFile(file,`
+      export const output = {duration: 1, render: {bounces: 3}, display: {toneMapping: 'linear'},
+        sampleSequence: 'frame', size: [64, 48], spp: 1};
+      export async function setup({THREE, load}) {
+        const scene = new THREE.Scene(), camera = new THREE.PerspectiveCamera(40);
+        camera.position.set(0, 0, 3);
+        const material = new THREE.MeshLambertMaterial();
+        material.userData.mutracerMaterialX = await load.materialX({source: \`
+          <materialx version="1.39"><floor name="steps" type="float"/>
+            <open_pbr_surface name="shader" type="surfaceshader">
+              <input name="specular_roughness" type="float" nodename="steps"/>
+            </open_pbr_surface>
+            <surfacematerial name="material" type="material">
+              <input name="surfaceshader" type="surfaceshader" nodename="shader"/>
+            </surfacematerial>
+          </materialx>\`});
+        const mesh = new THREE.Mesh(new THREE.BoxGeometry(), material);
+        mesh.name = 'Subject';
+        scene.add(mesh);
+        camera.userData.mutracerLens = {fStop: 2, focusDistance: 'Subject', sensorHeight: 30};
+        return {scene, camera};
+      }
+      export function frame() {}
+    `);
+    assert.equal(JSON.parse((await validate(file)).stdout).event, 'validated');
+  } finally {
+    await rm(dir,{recursive:true,force:true});
+  }
+});

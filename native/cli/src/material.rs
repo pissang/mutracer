@@ -71,6 +71,18 @@ fn property(key: &str, in_maps: bool) -> Option<&'static Property> {
     properties().iter().find(|p| p.supported && p.key == key)
 }
 
+pub fn numeric_property(key: &str) -> Option<(u32, &'static str)> {
+    let p = property(key, false)?;
+    let ty = match p.kind {
+        Kind::Float => "float",
+        Kind::Vec2 => "vector2",
+        Kind::Color => "color3",
+        Kind::Bool => "boolean",
+        _ => return None,
+    };
+    Some((p.id, ty))
+}
+
 pub fn editable(key: &str) -> bool {
     property(key, false).is_some_and(|p| p.kind != Kind::Texture)
 }

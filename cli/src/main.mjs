@@ -162,10 +162,29 @@ async function prepare(module, url, worker, settings) {
   if (!scene?.isScene || !camera?.isPerspectiveCamera && !camera?.isOrthographicCamera) throw new Error('setup must return a Three.js Scene and a perspective or orthographic camera.');
   const sink = {};
   const legacy = new WeakMap();
-  const sync = new THREESync(sink,{scene,camera,convertMaterial:approximateLegacy});
+  const graphMaterials = new WeakMap();
+  const sync = new THREESync(sink, {
+    scene, camera, convertMaterial:approximateLegacy,
+    onMeshConverted(mesh, source, group) {
+      const original = Array.isArray(source.material) ? source.material[group.materialIndex ?? 0] : source.material;
+      const materialX = original?.userData.mutracerMaterialX;
+      if (materialX === undefined) return;
+      if (!materialX || typeof materialX !== 'object' || !materialX.values) {
+        throw new Error(`Material "${original.name}": assign the result of await load.materialX() to mutracerMaterialX.`);
+      }
+      const base = mesh.materials[0];
+      let variants = graphMaterials.get(materialX);
+      if (!variants) graphMaterials.set(materialX, variants = new WeakMap());
+      let converted = variants.get(base);
+      if (!converted) variants.set(base, converted = new mutracer.OpenPBRMaterial());
+      Object.assign(converted, base, materialX.values);
+      converted.graph = materialX.graph;
+      mesh.materials = [converted];
+    },
+  });
   const encoder = new NativeSceneEncoder(async () => {throw new Error('Use a loaded HDR texture for the environment.');});
   return {
-    assets: [...dependencies.entries()].sort(([a],[b]) => a.localeCompare(b)),
+    get assets() { return [...dependencies.entries()].sort(([a],[b]) => a.localeCompare(b)); },
     async frame(t, index) {
       await module.frame({t,frame:index,scene,camera});
       camera.aspect = settings.size[0] / settings.size[1];
