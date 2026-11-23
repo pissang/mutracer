@@ -6,7 +6,8 @@ import {normalizeGraph} from '../../src/renderer/materialGraph/normalize.js';
 import {flattenGraph} from '../../src/renderer/materialGraph/flatten.js';
 import {MaterialGraphState} from '../../src/renderer/materialGraph/state.js';
 import {materialGraphFixtures} from '../../native/validation/material-graph-fixtures.js';
-import {NativeMaterial,refreshNativeGraph,packNativeGraphs,nativeGraphPlan,inheritNativeGraph,seedGraphFallbacks,attachGraphFallbacks} from '../../native/src/material-graph.js';
+import {NativeMaterial,refreshNativeGraph,packNativeGraphs,nativeGraphPlan,nativeGraphAffectsCausticCaster,inheritNativeGraph,seedGraphFallbacks,attachGraphFallbacks} from '../../native/src/material-graph.js';
+import {materialLayoutFields} from '../../src/renderer/materialLayoutSchema.js';
 
 function raw(graph:ReturnType<typeof normalizeGraph>,unlit=true) {
     const material=new NativeMaterial({unlit});material.aovId=42;
@@ -31,6 +32,16 @@ describe('native material graph preparation',()=>{
     it('keeps the exact no-graph buffer allocation',()=>{
         const material=new NativeMaterial(),buffer=new MaterialData([material],[],()=>1).getBufferArray();
         expect(packNativeGraphs(buffer,[material],[])).toBe(buffer);
+    });
+    it('marks graph-driven caustic casters without changing ordinary graph packing',()=>{
+        const graph=raw(normalizeGraph(author())),base=new MaterialData([graph],[],()=>1).getBufferArray();
+        const parameterIndex=materialLayoutFields().find(field=>field.name==='_padding2')!.offset/4;
+        expect(nativeGraphAffectsCausticCaster(graph)).toBe(true);
+        const ordinary=packNativeGraphs(base,[graph],[]),withCaustics=packNativeGraphs(base,[graph],[],true);
+        expect(ordinary[parameterIndex]%1).toBe(0);
+        expect(withCaustics[parameterIndex]).toBe(ordinary[parameterIndex]+0.5);
+        const neutral=raw(normalizeGraph(new MaterialGraph({nodes:[{id:'x',category:'constant',type:'float'}],terminal:{baseDiffuseRoughness:{node:'x'}}})));
+        expect(nativeGraphAffectsCausticCaster(neutral)).toBe(false);
     });
     it('retains prior graph data by stable material identity after a validation failure',()=>{
         const first=raw(normalizeGraph(author()));

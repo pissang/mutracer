@@ -69,6 +69,16 @@ export function inheritNativeGraph(next:MaterialState,previous:MaterialState) {
 }
 export function nativeGraphFrame(material:MaterialState):boolean {return material instanceof NativeMaterial && !!material.effectiveGraph?.ir.terminal.length;}
 export function nativeGraphOpacity(material:MaterialState):boolean {return material instanceof NativeMaterial && !!material.effectiveGraph && graphHasTerminal(material.effectiveGraph.ir,'opacity');}
+/** Browser-compatible caster exclusion for the graph terminals actually evaluated by native. */
+export function nativeGraphAffectsCausticCaster(material:MaterialState):boolean {
+    const graph=material instanceof NativeMaterial?material.effectiveGraph?.ir:undefined;
+    if(!graph)return false;
+    for(let i=0;i<graph.terminal.length;i+=3) {
+        const name=graphTerminals[graph.terminal[i]];
+        if(name!=='baseDiffuseRoughness'&&name!=='emissionColor'&&name!=='emissionLuminance')return true;
+    }
+    return false;
+}
 export function nativeGraphTextures(materials:MaterialState[]):TextureState[] {
     const textures:TextureState[]=[];
     for(const material of materials)if(material instanceof NativeMaterial)for(const texture of material.effectiveGraph?.textures??[])if(texture&&!textures.includes(texture))textures.push(texture);
@@ -89,7 +99,7 @@ export function nativeGraphPlan(materials:MaterialState[]):NativeGraphPlan {
 const fields=materialLayoutFields();
 const alpha=fields.find(f=>f.name==='alphaMode')!.offset/4,padding=fields.find(f=>f.name==='_padding1')!.offset/4;
 /** Browser-compatible parameter records; no graph returns the original allocation. */
-export function packNativeGraphs(buffer:Float32Array,materials:MaterialState[],textures:TextureState[]):Float32Array {
+export function packNativeGraphs(buffer:Float32Array,materials:MaterialState[],textures:TextureState[],caustics=false):Float32Array {
     const plan=nativeGraphPlan(materials);
     if(!plan.key)return buffer;
     const keys=plan.structures.map(graphStructureKey),chunks:number[][]=[];
@@ -107,6 +117,7 @@ export function packNativeGraphs(buffer:Float32Array,materials:MaterialState[],t
         if(graphHasTerminal(ir,'opacity')&&material.alphaMode==='auto'&&material.alphaCutoff<=0)buffer[i*MATERIAL_FLOAT_COUNT+alpha]=2;
         buffer[i*MATERIAL_FLOAT_COUNT+padding]=keys.indexOf(graphStructureKey(ir))+1;
         buffer[i*MATERIAL_FLOAT_COUNT+padding+1]=buffer.length/MATERIAL_FLOAT_COUNT+chunks.length;
+        if(caustics&&nativeGraphAffectsCausticCaster(material))buffer[i*MATERIAL_FLOAT_COUNT+padding+1]+=0.5;
         chunks.push(material.emissionColor.slice(),[material.emissionLuminance]);
         for(let j=0;j<generated.parameters.length;j+=4)chunks.push(generated.parameters.slice(j,j+4));
     }
