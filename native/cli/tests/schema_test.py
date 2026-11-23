@@ -56,3 +56,7 @@ class ShotSchemaTest(unittest.TestCase):
         self.assertEqual(struct.unpack_from("<16f", data, offset),
                          tuple(int(i % 5 == 0) for i in range(16)))
         self.assertEqual(offset + 64, len(data))
+
+
+if __name__ == "__main__":
+    unittest.main()
