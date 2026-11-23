@@ -51,7 +51,7 @@ ${uvProjection}
 ${materials.main}
 ${intersect.main}
 ${cameraRay}
-${center ? '' : sampling+bsdf+coatFrame+reflectance}
+${center ? '' : sampling + bsdf + '\n' + coatFrame + reflectance}
 ${surface}
 void main() {
   ${center ? /* glsl */ `
