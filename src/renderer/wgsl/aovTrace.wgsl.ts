@@ -10,7 +10,7 @@ export function createAovTraceWgsl(materialHooks: MaterialShaderHooks = {}, hasC
   const unsupportedFuzz = hasCoatNormals === undefined ? 'material.fuzzWeight > 0.0'
     : unsupportedFuzzReflectanceWgsl;
   const unsupportedAnisotropy = hasCoatNormals === undefined ? 'material.specularAnisotropy > 0.0'
-    : 'material.specularAnisotropy > 0.0 && (material.transmissionWeight > 0.0 || material.coatWeight > 0.0)';
+    : 'material.specularAnisotropy > 0.0 && material.transmissionWeight > 0.0';
   return /* wgsl */ `
 override AOV_REFLECTANCE: bool = true;
 override AOV_PRIMARY: bool = false;

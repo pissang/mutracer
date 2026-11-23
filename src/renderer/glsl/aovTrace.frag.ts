@@ -132,7 +132,7 @@ void main() {
   if(!aovSurface(ray,si,material)) return;
   float depth=max(dot(si.position-viewInv[3].xyz,-normalize(viewInv[2].xyz)),0.0);
   bool unsupportedCoat = material.coatWeight > 0.0 && (material.coatAnisotropy > 0.0 || material.transmissionWeight > 0.0);
-  bool unsupportedAnisotropy = material.specularAnisotropy > 0.0 && (material.transmissionWeight > 0.0 || material.coatWeight > 0.0);
+  bool unsupportedAnisotropy = material.specularAnisotropy > 0.0 && material.transmissionWeight > 0.0;
 #ifdef AOV_FUZZ_REFLECTANCE
   bool unsupportedFuzz = material.fuzzWeight > 0.0 && (material.coatWeight > 0.0 || material.transmissionWeight > 0.0);
 #else

@@ -90,6 +90,9 @@ async function run() {
       {name: 'grazing fuzz only', coat: 0, roughness: .1, metal: 0, cosine, fuzz: .8, fuzzOnly: true},
       {name: 'fuzz over rough dielectric', coat: 0, roughness: .1, metal: 0, cosine, fuzz: .8},
       {name: 'rough dielectric without fuzz', coat: 0, roughness: .1, metal: 0, cosine},
+      {name: 'coated brushed metal tangent', coat: .8, roughness: .2, metal: 1, cosine, anisotropy: .8, rotation: 0},
+      {name: 'coated brushed metal bitangent', coat: .8, roughness: .2, metal: 1, cosine, anisotropy: .8, rotation: Math.PI / 2},
+      {name: 'coated anisotropic dielectric with independent normal', coat: 1, roughness: .2, metal: 0, cosine: .55, anisotropy: .7, coatNormal: coatAway},
     ];
 
     for (const fixture of cases) {
@@ -112,7 +115,8 @@ async function run() {
       material.fuzzColor = [.17, .62, .31];
       engine.update();
       render.aovs = [];
-      const raw = fixture.name === 'coated wood' || fixture.coatNormal || fixture.fuzz ? await frame(4, fixture.name) : undefined;
+      const raw = fixture.name === 'coated wood' || fixture.coatNormal || fixture.fuzz || (fixture.coat && fixture.anisotropy)
+        ? await frame(4, fixture.name) : undefined;
       render.aovs = [...aovs];
       if (raw) check((await frame(4, fixture.name)).every((value, i) => Object.is(value, raw[i])),
         'Enabling layered guides changed fixed-seed beauty');
@@ -153,6 +157,8 @@ async function run() {
       'The independent coat normal must affect substrate attenuation');
     check(rows[12].specular.every((value, c) => value < rows[13].specular[c]),
       'Fuzz must attenuate the substrate specular reflection');
+    check(channelError(rows[14].specular, rows[15].specular) > .01,
+      'An isotropic coat must retain the orientation dependence of the underlying brushed metal');
     return {backend, adapter: info.adapterName, samples: fixtureSamples, sequenceOffset, passed: true, rows};
   } finally {
     render.dispose();
