@@ -129,6 +129,8 @@ pub struct Dlss {
     output_scale: u32,
     optical: Option<OpticalInput>,
     material_guide: Option<MaterialGuideInput>,
+    guide_model: api::TemporalGuideModel,
+    path_depth: bool,
     capture: Option<replay::Capture>,
 }
 fn pipeline(device: &wgpu::Device, name: &str, source: &str) -> wgpu::ComputePipeline {
@@ -188,6 +190,17 @@ impl Dlss {
         );
         let guide = SpecularGuide::from_environment()?;
         let guide_mapping = MaterialGuideMapping::from_environment()?;
+        use api::TemporalGuideModel::{FollowReflections, Layered, Physical};
+        let (guide_model, path_depth) = match std::env::var("MUTRACER_DLSS_GUIDE_MODEL").as_deref()
+        {
+            Ok("physical") | Err(std::env::VarError::NotPresent) => (Physical, false),
+            Ok("layered") => (Layered, false),
+            Ok("reflections") => (FollowReflections, false),
+            Ok("reflections-depth") => (FollowReflections, true),
+            _ => anyhow::bail!(
+                "MUTRACER_DLSS_GUIDE_MODEL accepts physical, layered, reflections or reflections-depth"
+            ),
+        };
         let preset = match std::env::var("MUTRACER_DLSS_PRESET").as_deref() {
             Ok("default") | Err(std::env::VarError::NotPresent) => 0,
             Ok("D") => 4,
@@ -273,6 +286,8 @@ impl Dlss {
             output_scale,
             optical,
             material_guide,
+            guide_model,
+            path_depth,
             capture,
             state: Mutex::new(State::default()),
             trace: std::env::var("MUTRACER_DLSS_TRACE").as_deref() == Ok("1"),
@@ -502,6 +517,7 @@ impl Dlss {
                     "reset": reset, "reasons": reasons, "newTarget": created, "resized": resized,
                     "specularGuide": format!("{guide:?}"), "temporalBytes": temporal.resident_frame_bytes(),
                     "materialGuide": self.material_guide.as_ref().map(|g| format!("{:?}", g.mapping)),
+                    "guideModel": format!("{:?}", self.guide_model), "pathDepth": self.path_depth,
                 }
             })
         });
@@ -581,7 +597,7 @@ impl Dlss {
                 u32::from(!params.reset),
                 u32::from(params.orthographic),
                 u32::from(params.stationary),
-                0,
+                u32::from(self.path_depth),
             ]
             .iter()
             .flat_map(|v| v.to_le_bytes()),
@@ -603,6 +619,7 @@ impl Dlss {
                 tex(&converted[1]),
                 tex(&converted[2]),
                 uniform.as_entire_binding(),
+                tex(&views[1]),
             ],
         );
         let mut producer = device.create_command_encoder(&Default::default());
@@ -786,6 +803,9 @@ impl CustomDenoiser for Dlss {
     }
     fn temporal_output_scale(&self) -> u32 {
         self.output_scale
+    }
+    fn temporal_guide_model(&self) -> api::TemporalGuideModel {
+        self.guide_model
     }
     fn denoise(
         &self,

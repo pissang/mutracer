@@ -418,7 +418,7 @@ pub struct FramePixelRecord {
     pub rng_state: [u32; 4],
     /// Counter, bounce, sample index and seed.
     pub rng_dimensions: [u32; 4],
-    /// Directional reflectance RGB, zero w; REFLECTANCE validity is required.
+    /// Diffuse guide RGB, optional reflected-path depth w; REFLECTANCE validity is required.
     pub diffuse_albedo: [f32; 4],
     /// Directional reflectance RGB, zero w; REFLECTANCE validity is required.
     pub specular_albedo: [f32; 4],

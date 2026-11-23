@@ -4,7 +4,7 @@ struct Camera {
     inverseView: mat4x4f,
     previousViewProjection: mat4x4f,
     jitter: vec4f,
-    history: vec4u, // has history, orthographic, stationary, padding
+    history: vec4u, // has history, orthographic, stationary, use path depth
 }
 @group(0) @binding(0) var sourceDepth: texture_2d<f32>;
 @group(0) @binding(1) var sourceMotion: texture_2d<f32>;
@@ -13,6 +13,7 @@ struct Camera {
 @group(0) @binding(4) var motion: texture_storage_2d<rg32float, write>;
 @group(0) @binding(5) var output: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(6) var<uniform> camera: Camera;
+@group(0) @binding(7) var sourceDiffuse: texture_2d<f32>;
 @compute @workgroup_size(8,8)
 fn main(@builtin(global_invocation_id) id: vec3u) {
     let size = textureDimensions(depth);
@@ -25,6 +26,10 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     var z = 1e30;
     if ((flags & 1u) != 0u) {
         z = textureLoad(sourceDepth, p, 0).x;
+        if (camera.history.w != 0u) {
+            let pathDepth = textureLoad(sourceDiffuse, p, 0).a;
+            if (pathDepth > 0.0 && pathDepth < 1e30) { z = pathDepth; }
+        }
         if ((flags & 2u) != 0u) { mv = textureLoad(sourceMotion, p, 0).xy; }
         else if (camera.history.z != 0u) {
             // Jitter can invalidate the previous sample match at a stationary

@@ -93,6 +93,12 @@ progressive sample budget is separate. Set
 resolve timings. Timestamp readback can affect frame pacing.
 Set `MUTRACER_DLSS_MATERIAL_GUIDE` to `physical` (default), `diffuse-reinhard`,
 or `camera-normal` to compare one material guide conversion at a time.
+Set `MUTRACER_DLSS_GUIDE_MODEL` to `layered` for roughness-weighted material
+guides on opaque paths. `reflections` also follows the sampled path for diffuse
+albedo and normal, and `reflections-depth` submits its weighted segment depth
+to NGX. The default `physical` uses first-surface guides. For replay, capture
+each material guide model separately. `reflections` and `reflections-depth`
+can replay the same reflection capture to isolate the depth input.
 `MUTRACER_DLSS_PRESET` accepts `default`, `D`, `E`, or `F`. The trace
 includes the requested preset for each evaluation.
 `MUTRACER_DLSS_FIXED_PREVIEW=1` uses the configured maximum preview scale

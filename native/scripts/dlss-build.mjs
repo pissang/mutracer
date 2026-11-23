@@ -33,7 +33,9 @@ const notices=resolve(app,'licenses/NVIDIA-DLSS');mkdirSync(notices,{recursive:t
 copyFileSync(resolve(sdk,'LICENSE.txt'),resolve(notices,'LICENSE.txt'));
 writeFileSync(resolve(app,'MuTracer-DLSS.cmd'),'@echo off\r\nset MUTRACER_VIEWER_DLSS=1\r\n"%~dp0mutracer-viewer.exe" %*\r\nif errorlevel 1 pause\r\n');
 const binaries=['mutracer-viewer.exe','mutracer_ngx.dll','nvngx_dlssd.dll'];
-const sources=['native/host/src/api/temporal.rs','native/webview-viewer/src/main.rs','native/webview-viewer/src/wire.rs',
+const sources=['native/host/src/api/temporal.rs','native/host/src/denoiser_inputs/producer.rs',
+ 'native/src/frame-inputs.wgsl.ts','src/renderer/wgsl/aovDenoisingGuide.wgsl.ts',
+ 'native/webview-viewer/src/main.rs','native/webview-viewer/src/wire.rs',
  'native/webview-viewer/src/dlss/mod.rs','native/webview-viewer/src/dlss/ffi.rs','native/webview-viewer/src/dlss/gpu.rs',
  'native/webview-viewer/src/dlss/profile.rs','native/webview-viewer/src/dlss/replay.rs',
  'native/webview-viewer/src/dlss/ngx.cpp','native/webview-viewer/src/dlss/prepare.wgsl','native/webview-viewer/src/dlss/resolve.wgsl','native/scripts/dlss-build.mjs'];

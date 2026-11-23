@@ -745,6 +745,7 @@ struct Denoise {
     temporal_sample_count: u32,
     temporal_output_scale: u32,
     temporal_transmission_motion: bool,
+    temporal_guide_model: super::TemporalGuideModel,
     scaled_capture: Option<Capture>,
     cancel: CancelToken,
     /// Kept across `set_denoiser` calls with the same library and backend.
@@ -2140,6 +2141,7 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
                         camera_revision: key.camera,
                         sample_count: render.denoise.temporal_sample_count,
                         transmission_motion: render.denoise.temporal_transmission_motion,
+                        guide_model: render.denoise.temporal_guide_model,
                     })
                     .map_err(|e| error(Status::Error, e.to_string()))?,
             );
@@ -2766,22 +2768,38 @@ impl Render {
             temporal_sample_count,
             temporal_output_scale,
             temporal_transmission_motion,
+            temporal_guide_model,
         ) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let Some(filter) = filter.0.as_ref() else {
-                return (0, super::DenoiseInputMode::Cpu, 1, 1, false);
+                return (
+                    0,
+                    super::DenoiseInputMode::Cpu,
+                    1,
+                    1,
+                    false,
+                    super::TemporalGuideModel::Physical,
+                );
             };
             let input_mode = filter.input_mode();
-            let (samples, scale, transmission) =
+            let (samples, scale, transmission, guides) =
                 if input_mode == super::DenoiseInputMode::TemporalGpu {
                     (
                         filter.temporal_sample_count(),
                         filter.temporal_output_scale(),
                         filter.temporal_transmission_motion(),
+                        filter.temporal_guide_model(),
                     )
                 } else {
-                    (1, 1, false)
+                    (1, 1, false, super::TemporalGuideModel::Physical)
                 };
-            (filter.aovs(), input_mode, samples, scale, transmission)
+            (
+                filter.aovs(),
+                input_mode,
+                samples,
+                scale,
+                transmission,
+                guides,
+            )
         }))
         .map_err(|_| {
             error(
@@ -2828,6 +2846,7 @@ impl Render {
                 temporal_sample_count,
                 temporal_output_scale,
                 temporal_transmission_motion,
+                temporal_guide_model,
                 ..Default::default()
             };
             Ok(())

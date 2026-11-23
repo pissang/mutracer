@@ -115,6 +115,13 @@ pub trait CustomDenoiser: Send + Sync + 'static {
     fn temporal_transmission_motion(&self) -> bool {
         false
     }
+    /// Selects the material guide model for independently sampled opaque
+    /// surfaces. Default Physical. Unsupported first hits keep physical guides.
+    /// Unsupported continuations keep the first-hit guides.
+    /// Called during registration outside the engine lock, only in TemporalGpu.
+    fn temporal_guide_model(&self) -> super::TemporalGuideModel {
+        super::TemporalGuideModel::Physical
+    }
     /// Default false. True additionally uploads CPU inputs as GPU storage buffers
     /// on the worker. This is a readback+upload path, with extra memory/copy cost.
     /// Applies only to Cpu mode; ResidentGpu already supplies GPU snapshots.

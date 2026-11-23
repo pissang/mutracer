@@ -2,6 +2,7 @@ import {framePixelStruct} from './layout.js';
 import type {RayTraceInputHooks} from '../../src/renderer/wgsl/rayTrace.compute.js';
 import {GROUP} from './layout.js';
 import {unsupportedCoatReflectanceWgsl} from '../../src/renderer/wgsl/aovReflectance.wgsl.js';
+import {createAovDenoisingGuideWgsl, wgslDenoisingPathSupports} from '../../src/renderer/wgsl/aovDenoisingGuide.wgsl.js';
 
 // Internal diagnostic record. It contains resolved first-surface data rather
 // than reusing OIDN's possibly downstream guides. BaseColor and directional
@@ -13,10 +14,14 @@ export function nativeFrameInputHooks(hasCoatNormals: boolean, hasAnisotropyDire
     recordReflection: true,
     begin: '  mtFrameBegin(idx);\n',
     primarySurface: '  mtFrameSurface(si, ma, ray);\n',
+    preparedSurface: (prepared) => `    mtFrameGuideSurface(${prepared}, distance((*path).ray.o, (*si).position));\n`,
     unclampedColor: '  if (mtLeadingSample) { mtFramePixels[mtFrameIndex].unclampedRadiance = vec4f(liAndAlpha.rgb, 1.0); }\n',
     end: '  mtFrameFinish(liAndAlpha.rgb);\n',
     declarations: /* wgsl */ `
 ${framePixelStruct('MtFramePixel')}
+${createAovDenoisingGuideWgsl(hasCoatNormals)}
+${wgslDenoisingPathSupports}
+override MT_DENOISING_GUIDE_MODEL: u32 = 0u;
 @group(${GROUP.OUTPUT}) @binding(4) var<storage, read_write> mtFramePixels: array<MtFramePixel>;
 struct MtReflection {
   endpointDistance: vec4f,
@@ -36,6 +41,10 @@ const OPT_PARALLEL = 0x04000000u;
 const OPT_TRANSMISSION_INSTANCE_MASK = 0x03ffffffu;
 var<private> mtFrameIndex: u32;
 var<private> mtFrameCaptured: bool;
+var<private> mtGuidePath: AovDenoisingPathGuide;
+var<private> mtGuideFirst: AovDenoisingGuide;
+var<private> mtGuideHits: u32;
+var<private> mtGuideUsable: bool;
 
 fn mtFrameBegin(index: u32) {
   mtFrameIndex = index;
@@ -48,9 +57,40 @@ fn mtFrameBegin(index: u32) {
     mtReflections[index] = MtReflection();
     mtFramePixels[index].normalRoughness.w = 1.0;
   }
+  if (MT_DENOISING_GUIDE_MODEL != 0u) {
+    mtGuidePath = AovDenoisingPathGuide(vec3f(1.0), vec3f(0.0), vec3f(0.0), 0.0);
+    mtGuideHits = 0u;
+    mtGuideUsable = true;
+  }
+}
+fn mtFrameGuideSurface(prepared: OpenPbrPreparedBsdf, segmentLength: f32) {
+  if (MT_DENOISING_GUIDE_MODEL == 0u || !mtLeadingSample || SPECTRAL ||
+      (mtFramePixels[mtFrameIndex].identity.w & 161u) != 129u) { return; }
+  if (!mtGuideUsable || all(mtGuidePath.throughput <= vec3f(0.0)) ||
+      (MT_DENOISING_GUIDE_MODEL == 1u && mtGuideHits != 0u)) { return; }
+  if (!aovDenoisingPathSupports(prepared.material)) {
+    mtGuideUsable = false;
+    return;
+  }
+  let surfaceGuide = aovDenoisingGuide(prepared, mtFrameReflectance(prepared));
+  if (mtGuideHits == 0u) { mtGuideFirst = surfaceGuide; }
+  if (MT_DENOISING_GUIDE_MODEL == 2u) {
+    var updated = mtGuidePath;
+    aovFollowDenoisingPath(&updated, surfaceGuide, segmentLength);
+    mtGuidePath = updated;
+  }
+  mtGuideHits++;
 }
 fn mtFrameFinish(radiance: vec3f) {
   if (mtLeadingSample) {
+    if (MT_DENOISING_GUIDE_MODEL != 0u && mtGuideHits != 0u) {
+      let follow = MT_DENOISING_GUIDE_MODEL == 2u && mtGuideUsable;
+      let diffuse = select(mtGuideFirst.diffuse, mtGuidePath.diffuse, follow);
+      let normal = select(mtGuideFirst.normalRoughness.xyz, mtGuidePath.normal, follow);
+      mtFramePixels[mtFrameIndex].diffuseAlbedo = vec4f(diffuse, select(0.0, mtGuidePath.depth, follow));
+      mtFramePixels[mtFrameIndex].specularAlbedo = vec4f(mtGuideFirst.specular, 0.0);
+      mtFramePixels[mtFrameIndex].normalRoughness = vec4f(normal, mtGuideFirst.normalRoughness.w);
+    }
     mtFramePixels[mtFrameIndex].noisyColor = vec4f(radiance, 1.0);
     mtFramePixels[mtFrameIndex].rngState = s0;
     mtFramePixels[mtFrameIndex].rngDimensions = vec4u(hashedCounter, samplingBounce, pixelSampleIndex, rtUniform.sequenceSeed);

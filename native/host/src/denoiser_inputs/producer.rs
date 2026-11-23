@@ -35,9 +35,33 @@ pub(crate) struct FrameProducer {
 }
 impl FrameProducer {
     pub fn new(scene: &GpuScene, source: String) -> Result<Self> {
-        Self::new_snapshot(&ProducerScene::snapshot(scene), source)
+        Self::new_snapshot(
+            &ProducerScene::snapshot(scene),
+            source,
+            GuideModel::Physical,
+        )
     }
-    pub fn new_snapshot(scene: &ProducerScene, source: String) -> Result<Self> {
+    pub fn new_snapshot(
+        scene: &ProducerScene,
+        source: String,
+        guide_model: GuideModel,
+    ) -> Result<Self> {
+        let source = if guide_model == GuideModel::Physical {
+            source
+        } else {
+            const GUIDE_OVERRIDE: &str = "override MT_DENOISING_GUIDE_MODEL: u32 = 0u;";
+            if !source.contains(GUIDE_OVERRIDE) {
+                return Err("Temporal shader does not support the requested guide model".into());
+            }
+            source.replacen(
+                GUIDE_OVERRIDE,
+                &format!(
+                    "const MT_DENOISING_GUIDE_MODEL: u32 = {}u;",
+                    guide_model as u32
+                ),
+                1,
+            )
+        };
         let mut description = scene.scene.clone();
         description.bind_groups[layout::group::OUTPUT]
             .layout

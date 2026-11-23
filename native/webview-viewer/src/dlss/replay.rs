@@ -256,6 +256,8 @@ fn configuration(filter: &Dlss) -> serde_json::Value {
         "driver": gpu.driver_info,
         "preset": filter.preset,
         "materialMapping": filter.material_guide.as_ref().map(|g| format!("{:?}", g.mapping)),
+        "guideModel": format!("{:?}", filter.guide_model),
+        "pathDepth": filter.path_depth,
         "specular": format!("{:?}", filter.optical.as_ref().map_or(SpecularGuide::Off, |g| g.kind)),
         "inputSamples": filter.input_samples,
     })

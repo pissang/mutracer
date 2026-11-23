@@ -20,6 +20,20 @@ pub(crate) use producer::*;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// Material guide model requested by a resident temporal denoiser.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u32)]
+pub enum GuideModel {
+    /// Physical directional reflectance and first-surface guides. Default.
+    #[default]
+    Physical = 0,
+    /// Partition opaque diffuse, substrate specular and coat by roughness.
+    Layered = 1,
+    /// Additionally follow the sampled opaque path for diffuse albedo and normal.
+    /// Diffuse-albedo alpha contains weighted ray-segment depth when available.
+    FollowReflections = 2,
+}
+
 pub(crate) fn identity() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     NEXT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))

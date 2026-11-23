@@ -128,8 +128,8 @@ mod temporal;
 pub use temporal::{
     TemporalCamera, TemporalCapabilities, TemporalFrame, TemporalGlassCapabilities,
     TemporalGlassCapability, TemporalGlassKind, TemporalGlassMotion, TemporalGuide,
-    TemporalMetadata, TemporalPixelRecord, TemporalProjection, TemporalResetReason,
-    TemporalSupport, temporal_validity,
+    TemporalGuideModel, TemporalMetadata, TemporalPixelRecord, TemporalProjection,
+    TemporalResetReason, TemporalSupport, temporal_validity,
 };
 
 #[cfg(test)]

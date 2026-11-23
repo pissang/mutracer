@@ -5,8 +5,9 @@ pub use crate::denoiser_inputs::{
     CameraSnapshot as TemporalCamera, FrameMetadata as TemporalMetadata,
     GlassCapabilities as TemporalGlassCapabilities, GlassCapability as TemporalGlassCapability,
     GlassKind as TemporalGlassKind, GlassMotion as TemporalGlassMotion, Guide as TemporalGuide,
-    InputCapabilities as TemporalCapabilities, Projection as TemporalProjection,
-    ResetReason as TemporalResetReason, Support as TemporalSupport,
+    GuideModel as TemporalGuideModel, InputCapabilities as TemporalCapabilities,
+    Projection as TemporalProjection, ResetReason as TemporalResetReason,
+    Support as TemporalSupport,
 };
 use std::sync::Arc;
 use std::time::Instant;
@@ -90,12 +91,14 @@ pub(crate) struct Request<'a> {
     pub camera_revision: u64,
     pub sample_count: u32,
     pub transmission_motion: bool,
+    pub guide_model: TemporalGuideModel,
 }
 pub(crate) struct State {
     history: frame::GpuFrameHistory,
     pending: Option<frame::FrameSubmission<frame::GpuFrameResources>>,
     producer: Option<frame::FrameProducer>,
     source: String,
+    guide_model: TemporalGuideModel,
     sequence: u32,
     sample_cursor: u32,
     last: Option<Instant>,
@@ -108,6 +111,7 @@ impl State {
             pending: None,
             producer: None,
             source: String::new(),
+            guide_model: TemporalGuideModel::Physical,
             sequence: 0,
             sample_cursor: 0,
             last: None,
@@ -143,12 +147,20 @@ impl State {
             true,
         )?;
         let source = packet.shader.ok_or("Missing temporal frame shader")?;
-        if self.producer.is_none() || self.source != source {
+        if self.producer.is_none()
+            || self.source != source
+            || self.guide_model != request.guide_model
+        {
             self.producer = Some(frame::FrameProducer::new_snapshot(
                 &snapshot,
                 source.clone(),
+                request.guide_model,
             )?);
+            if self.guide_model != request.guide_model {
+                self.reset();
+            }
             self.source = source;
+            self.guide_model = request.guide_model;
         }
         let camera_values: Vec<_> = bytemuck::pod_collect_to_vec::<u8, f32>(&packet.camera);
         let raw = Camera::from_bytes(request.camera).ok_or("Invalid temporal camera")?;

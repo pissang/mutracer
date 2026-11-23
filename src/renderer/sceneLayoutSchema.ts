@@ -114,6 +114,6 @@ export const framePixelFields = [
   ['unclampedRadiance', 'unclamped_radiance', 'vec4f', 'Radiance before per-sample clamping, alpha 1.'],
   ['rngState', 'rng_state', 'vec4u', 'Final RNG words for reproducibility, opaque to consumers.'],
   ['rngDimensions', 'rng_dimensions', 'vec4u', 'Counter, bounce, sample index and seed.'],
-  ['diffuseAlbedo', 'diffuse_albedo', 'vec4f', 'Directional reflectance RGB, zero w; REFLECTANCE validity is required.'],
+  ['diffuseAlbedo', 'diffuse_albedo', 'vec4f', 'Diffuse guide RGB, optional reflected-path depth w; REFLECTANCE validity is required.'],
   ['specularAlbedo', 'specular_albedo', 'vec4f', 'Directional reflectance RGB, zero w; REFLECTANCE validity is required.'],
 ] as const;

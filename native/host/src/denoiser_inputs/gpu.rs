@@ -11,13 +11,17 @@ use std::sync::{
 pub enum Guide {
     /// Linear HDR radiance, alpha 1, before display exposure.
     NoisyColor,
-    /// Oriented world shading normal xyz and perceptual specular roughness w.
-    /// Clearcoat and base specular reflectance weight the roughness. With
-    /// independent coat and base normals, their total reflectances weight the normal.
+    /// Oriented world normal xyz and perceptual roughness w.
+    /// The physical model weights clearcoat and base specular roughness by
+    /// reflectance. The layered model also weights the diffuse contribution.
+    /// The reflection model can weight the normal by opaque path contributions.
     NormalRoughness,
-    /// Directional diffuse reflectance RGB; validity is in the validity texture.
+    /// Diffuse guide RGB; validity is in the validity texture. Alpha is zero
+    /// by default and is positive weighted path depth when a requested
+    /// `GuideModel::FollowReflections` path was recorded.
     DiffuseAlbedo,
-    /// Directional specular reflectance RGB; validity is in the validity texture.
+    /// Specular guide RGB of the selected model. The default is directional
+    /// specular reflectance. Validity is in the validity texture.
     SpecularAlbedo,
     /// Camera-forward distance in scene units, zero on miss.
     LinearDepth,
