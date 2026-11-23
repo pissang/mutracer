@@ -374,8 +374,12 @@ export class NativeSceneEncoder {
                 ls.f[o + L.SPREAD_OR_OUTER] = light.spread;
                 ls.u[o + L.TEXTURE] = light.texture ? textureId(light.texture as Texture) + 1 : 0;
             }
-            if ('radius' in light)
-                ls.f[o + L.SIZE] = ls.f[o + L.RADIUS] = light.radius;
+            if (light.type === 'SphereLight' || light.type === 'SpotLight')
+                ls.f[o + L.SIZE] = light.radius;
+            if (light.type === 'DiskLight' || light.type === 'CylinderLight') {
+                ls.f[o + L.RADIUS] = light.radius;
+                ls.u[o + L.NORMALIZE] = Number(light.normalize);
+            }
             if (light.type === 'SpotLight') {
                 ls.f[o + L.HEIGHT_OR_INNER] = light.innerAngle;
                 ls.f[o + L.SPREAD_OR_OUTER] = light.outerAngle;
@@ -386,8 +390,6 @@ export class NativeSceneEncoder {
                     ls.u[o + L.IES_BYTES] = text.length;
                 }
             }
-            if ('normalize' in light)
-                ls.u[o + L.NORMALIZE] = Number(light.normalize);
             if (light.type === 'CylinderLight') {
                 ls.f[o + L.LENGTH] = light.length;
                 ls.u[o + L.TREAT_AS_LINE] = Number(light.treatAsLine);

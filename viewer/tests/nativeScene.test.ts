@@ -3,8 +3,8 @@ import { describe, it, expect } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { NativeSceneEncoder, cameraWords, descriptorDelta, descriptorDeltaParts } from '../src/engine/nativeScene';
-import { Camera, Geometry, Mesh, InstancedMesh, OpenPBRMaterial, Texture, MaterialGraph, RectLight, EnvironmentLight } from '../../src/main';
-import { HEADER as H, MATERIAL as M, GEOMETRY as G, TEXTURE as T } from '../../native/src/layout';
+import { Camera, Geometry, Mesh, InstancedMesh, OpenPBRMaterial, Texture, MaterialGraph, RectLight, EnvironmentLight, SphereLight, SpotLight, DiskLight, CylinderLight } from '../../src/main';
+import { HEADER as H, MATERIAL as M, GEOMETRY as G, TEXTURE as T, LIGHT as L } from '../../native/src/layout';
 import { decodeMaterial, decodeGeometry, decodeTexture } from '../../native/src/scene-records';
 import { Attribute } from '../../src/scene/Geometry';
 import properties from '../../native/schemas/material-properties.json';
@@ -47,6 +47,21 @@ describe('native scene v8 boundary', () => {
         expect(words[H.LENGTH]).toBe(words.length);
         expect(words[H.GEOMETRY_OFFSET] + G.WORDS).toBe(words[H.MESH_OFFSET]);
         save('basic', words);
+    });
+    it('round trips analytic light radii in their versioned fields', async () => {
+        const { scene, camera } = fixture();
+        const lights = [
+            new SphereLight({radius: .25}), new SpotLight({radius: .125, innerAngle: 12, outerAngle: 24}),
+            new DiskLight({radius: .5, normalize: true}), new CylinderLight({radius: .375, length: 3, treatAsLine: true})
+        ];
+        const words = await encoder().encode({...scene, lights}, camera, [32, 32]);
+        const floats = new Float32Array(words.buffer);
+        const start = words[H.LIGHT_OFFSET];
+        expect(lights.map((_, i) => floats[start + i * L.WORDS + L.SIZE])).toEqual([.25, .125, 0, 0]);
+        expect(lights.map((_, i) => floats[start + i * L.WORDS + L.RADIUS])).toEqual([0, 0, .5, .375]);
+        expect(words[start + 2 * L.WORDS + L.NORMALIZE]).toBe(1);
+        expect(words[start + 3 * L.WORDS + L.TREAT_AS_LINE]).toBe(1);
+        expect(floats[start + 3 * L.WORDS + L.LENGTH]).toBe(3);
     });
     it('preserves graph IR, UTF-8 author IDs, instances and camera lens data', async () => {
         const { scene, camera, material, geometry } = fixture();

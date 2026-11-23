@@ -27,6 +27,32 @@ async function read(source, base, dependencies) {
 }
 
 export function loaders(worker, moduleUrl, dependencies) {
+  function pixels(width, height, data, {colorSpace, environment = false} = {}) {
+    const float = data instanceof Float32Array;
+    if (!float && !(data instanceof Uint8Array) && !(data instanceof Uint8ClampedArray)) {
+      throw new TypeError('load.pixels expects an RGBA Uint8Array, Uint8ClampedArray or Float32Array.');
+    }
+    if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0 ||
+        width > 16384 || height > 16384 || data.length !== width * height * 4) {
+      throw new RangeError('load.pixels expects positive dimensions up to 16384 and four values per pixel.');
+    }
+    if (environment && (!float || colorSpace && colorSpace !== 'linear')) {
+      throw new TypeError('An HDR environment needs linear Float32Array pixels.');
+    }
+    if (colorSpace !== undefined && colorSpace !== 'srgb' && colorSpace !== 'linear') {
+      throw new TypeError('Use srgb or linear for colorSpace.');
+    }
+    const rgba = data instanceof Uint8ClampedArray
+      ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength) : data;
+    const texture = new THREE.DataTexture(rgba, width, height, THREE.RGBAFormat,
+        float ? THREE.FloatType : THREE.UnsignedByteType);
+    const encoding = colorSpace ?? (float ? 'linear' : 'srgb');
+    texture.colorSpace = encoding === 'srgb' ? THREE.SRGBColorSpace : THREE.LinearSRGBColorSpace;
+    if (environment) texture.mapping = THREE.EquirectangularReflectionMapping;
+    texture.needsUpdate = true;
+    return texture;
+  }
+
   async function image(bytes, hdr) {
     const {header, bytes: pixels} = await worker.request('decode', {format: hdr ? 'hdr' : 'image'}, bytes);
     const data = hdr ? new Float32Array(toArrayBuffer(pixels)) : Uint8Array.from(pixels);
@@ -62,6 +88,7 @@ export function loaders(worker, moduleUrl, dependencies) {
   }
 
   return {
+    pixels,
     materialX,
     texture: async path => image(await read(path, moduleUrl, dependencies), false),
     hdr: async path => image(await read(path, moduleUrl, dependencies), true),

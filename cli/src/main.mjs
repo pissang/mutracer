@@ -135,6 +135,7 @@ function applyLens(target, camera, scene) {
   const {fStop = 0, sensorHeight = 24} = lens;
   let {focusDistance = 10} = lens;
   if (typeof focusDistance === 'string') {
+    if (!scene) throw new Error('A named focusDistance requires a Three.js Scene.');
     const matches = [];
     scene.traverseVisible(node => { if (node.name === focusDistance) matches.push(node); });
     if (matches.length !== 1) throw new Error(`focusDistance must name one visible object. Found ${matches.length} named "${focusDistance}".`);
@@ -159,11 +160,16 @@ async function prepare(module, url, worker, settings) {
   const dependencies = new Map();
   const setup = await module.setup({THREE, load:loaders(worker,url,dependencies), mutracer, rng:rng(settings.seedValue)});
   const {scene,camera} = setup ?? {};
-  if (!scene?.isScene || !camera?.isPerspectiveCamera && !camera?.isOrthographicCamera) throw new Error('setup must return a Three.js Scene and a perspective or orthographic camera.');
+  const threeScene = scene?.isScene;
+  const threeCamera = camera?.isPerspectiveCamera || camera?.isOrthographicCamera;
+  const nativeScene = !threeScene && Array.isArray(scene?.meshes) && Array.isArray(scene?.lights);
+  if (!(threeScene && threeCamera || nativeScene && (threeCamera || camera instanceof mutracer.Camera))) {
+    throw new Error('setup must return a Three.js Scene and camera, or a MuTracer scene with a Three.js or MuTracer camera.');
+  }
   const sink = {};
   const legacy = new WeakMap();
   const graphMaterials = new WeakMap();
-  const sync = new THREESync(sink, {
+  const sync = threeScene ? new THREESync(sink, {
     scene, camera, convertMaterial:approximateLegacy,
     onMeshConverted(mesh, source, group) {
       const original = Array.isArray(source.material) ? source.material[group.materialIndex ?? 0] : source.material;
@@ -181,14 +187,20 @@ async function prepare(module, url, worker, settings) {
       converted.graph = materialX.graph;
       mesh.materials = [converted];
     },
-  });
+  }) : undefined;
   const encoder = new NativeSceneEncoder(async () => {throw new Error('Use a loaded HDR texture for the environment.');});
   return {
     get assets() { return [...dependencies.entries()].sort(([a],[b]) => a.localeCompare(b)); },
     async frame(t, index) {
       await module.frame({t,frame:index,scene,camera});
-      camera.aspect = settings.size[0] / settings.size[1];
-      camera.updateProjectionMatrix();
+      if (threeCamera) {
+        camera.aspect = settings.size[0] / settings.size[1];
+        camera.updateProjectionMatrix();
+      }
+      if (!sync) {
+        const lens = threeCamera ? applyLens(fromTHREECamera(camera),camera,undefined) : camera;
+        return normalizeAovIds(await encoder.encode(scene,lens,settings.size));
+      }
       scene.traverseVisible(node => {
         const materials = Array.isArray(node.material) ? node.material : [node.material];
         for (const material of materials) {
@@ -206,7 +218,7 @@ async function prepare(module, url, worker, settings) {
       nativeCamera.sensorHeight = 24;
       return normalizeAovIds(await encoder.encode(sink.scene, applyLens(nativeCamera,camera,scene),settings.size));
     },
-    dispose() {sync.dispose();},
+    dispose() {sync?.dispose();},
   };
 }
 
