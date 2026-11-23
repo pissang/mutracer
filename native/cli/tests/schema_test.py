@@ -21,6 +21,20 @@ class ShotSchemaTest(unittest.TestCase):
             with self.subTest(file=file.name):
                 self.validator.validate(json.loads(file.read_text()))
 
+    def test_temporal_shot(self):
+        shot = json.loads((CLI / "examples" / "turntable.json").read_text())
+        output = shot["output"]
+        output.update(denoise="temporal", sampleSequence="frame", temporal={"cuts": [0, {"time": 0.5}]})
+        self.validator.validate(shot)
+        for key, value in [("mode", "interactive"), ("postRadius", 4), ("cuts", [-1])]:
+            with self.subTest(key=key):
+                original = output["temporal"]
+                output["temporal"] = {key: value}
+                self.assertFalse(self.validator.is_valid(shot))
+                output["temporal"] = original
+        output["sampleSequence"] = "fixed"
+        self.assertFalse(self.validator.is_valid(shot))
+
     def test_bad_keys_and_alignment(self):
         for name, path in [
             ("unknown-key.json", ("output",)),

@@ -275,6 +275,7 @@ pub enum Denoise {
     Oidn,
     #[value(name = "cleanAuxLarge", alias = "clean-aux-large")]
     CleanAuxLarge,
+    Temporal,
     None,
 }
 
@@ -394,6 +395,8 @@ pub struct Output {
     pub render: RenderOptions,
     #[serde(default)]
     pub denoise: Denoise,
+    #[serde(default)]
+    pub temporal: crate::temporal::Config,
     #[serde(default)]
     pub tracer: Tracer,
     #[serde(default)]
@@ -774,6 +777,9 @@ impl Shot {
             frames - 1,
             "/output/sampleSequenceOffset",
         )?;
+        self.output
+            .temporal
+            .validate("/output/temporal", Some(duration), self.output.fps)?;
         self.output.render.check("/output/render")?;
         let mut names = BTreeSet::new();
         if self.objects.is_empty() || self.objects.len() > 65_536 {

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Neighbors in each direction. Offline defaults to adaptive 8 through 16.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(untagged, deny_unknown_fields)]
 pub enum HistoryRadius {
     Fixed(u32),
@@ -23,7 +23,7 @@ pub enum HistoryInvalidation {
 }
 
 /// Offline history and stabilization options.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct TemporalOptions {
     /// Window size in each direction, from 0 through 32.

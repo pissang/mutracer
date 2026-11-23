@@ -180,6 +180,7 @@ impl Settings {
             }
             error
         };
+        crate::temporal::validate_settings(self, pointer)?;
         shot::check_size(self.size).map_err(relocate)?;
         shot::check_samples(self.spp, self.sample_sequence_offset).map_err(relocate)?;
         self.render.check(&format!("{pointer}/render"))?;
@@ -297,6 +298,9 @@ impl Input {
         {
             manifest["denoiserWeights"] = json!(weights);
         }
+        if settings.denoise == Denoise::Temporal {
+            manifest["temporal"] = json!(self.shot.output.temporal);
+        }
         Ok(manifest)
     }
 
@@ -316,11 +320,22 @@ impl Input {
             })
             .count();
         let material_factor = 1. + 0.75 * complex as f64 / self.shot.objects.len() as f64;
-        json!({
+        let mut cost = json!({
             "frames": frames, "pixelsPerFrame": pixels, "spp": settings.spp,
             "pixelSamples": workload, "materialFactor": material_factor,
             "weightedPixelSamples": workload as f64 * material_factor
-        })
+        });
+        if settings.denoise == Denoise::Temporal {
+            if let Ok(plan) = self.shot.output.temporal.options.plan(
+                settings.size,
+                self.shot.objects.len(),
+                &Default::default(),
+            ) {
+                cost["temporalGpuBytes"] = json!(plan.bytes);
+                cost["latency"] = json!(plan.latency());
+            }
+        }
+        cost
     }
 }
 
@@ -398,13 +413,18 @@ impl Renderer {
             settings.render.apply(api::RenderSettings {
                 size: api::RenderSize::Fixed { width, height },
                 max_samples: settings.spp,
-                aovs: if settings.aovs { quality::AOV_MASK } else { 0 },
+                aovs: (if settings.aovs { quality::AOV_MASK } else { 0 })
+                    | (if settings.denoise == Denoise::Temporal {
+                        api::TemporalDenoiser::AOVS
+                    } else {
+                        0
+                    }),
                 seed: settings.seed_value,
                 ..Default::default()
             }),
         )
         .map_err(|e| Error::gpu(e.to_string()))?;
-        if settings.denoise != Denoise::None {
+        if matches!(settings.denoise, Denoise::Oidn | Denoise::CleanAuxLarge) {
             render
                 .set_denoiser(Some(api::DenoiserOptions {
                     backend: api::DENOISE_OIDN_WEBGPU,
@@ -441,6 +461,16 @@ impl Renderer {
         t: f64,
         display: Option<api::DisplaySettings>,
     ) -> Result<Vec<u8>> {
+        self.prepare_shot(input, settings, t, display)?;
+        self.capture(settings, frame)
+    }
+    pub fn prepare_shot(
+        &mut self,
+        input: &mut Input,
+        settings: Settings,
+        t: f64,
+        display: Option<api::DisplaySettings>,
+    ) -> Result<()> {
         let (camera, shot_display) = input.prepared.evaluate(&input.shot, t, settings.size)?;
         self.engine
             .set_scene_object(&input.prepared.scene)
@@ -458,10 +488,17 @@ impl Renderer {
         self.engine
             .update()
             .map_err(|e| Error::gpu(e.to_string()))?;
-        self.capture(settings, frame)
+        Ok(())
     }
 
     pub fn capture(&self, settings: Settings, frame: u32) -> Result<Vec<u8>> {
+        self.converge(settings, frame)?;
+        match settings.format {
+            Format::Exr => quality::hdr(&self.render),
+            Format::Png => self.png(),
+        }
+    }
+    pub fn converge(&self, settings: Settings, frame: u32) -> Result<()> {
         let mut options = self
             .render
             .settings()
@@ -478,7 +515,7 @@ impl Renderer {
         self.render
             .converge(converge)
             .map_err(|e| Error::gpu(e.to_string()))?;
-        if settings.denoise != Denoise::None {
+        if matches!(settings.denoise, Denoise::Oidn | Denoise::CleanAuxLarge) {
             match self.render.denoise_report() {
                 Some(report) if report.samples == settings.spp && report.error.is_none() => {}
                 Some(report) => {
@@ -489,10 +526,7 @@ impl Renderer {
                 None => return Err(Error::gpu("OIDN did not return a result")),
             }
         }
-        match settings.format {
-            Format::Exr => quality::hdr(&self.render),
-            Format::Png => self.png(),
-        }
+        Ok(())
     }
 
     pub(crate) fn graph_warnings(&self, targets: &[MaterialGraphTarget]) -> Vec<Warning> {
@@ -549,7 +583,25 @@ pub fn still(args: Still, worker: bool) -> Result<()> {
         );
     }
     let mut renderer = Renderer::new(settings)?;
-    let image = renderer.shot_frame(&mut input, settings, frame, args.t)?;
+    let image = if settings.denoise == Denoise::Temporal {
+        warnings::emit_file(
+            crate::temporal::fallback(settings.denoise, "/output/denoise"),
+            &mut seen_warnings,
+        );
+        let mut stream = input.shot.output.temporal.start(&renderer.engine)?;
+        renderer.prepare_shot(&mut input, settings, args.t, None)?;
+        renderer.converge(settings, frame)?;
+        stream
+            .push(frame, &renderer.render)
+            .map_err(crate::temporal::gpu)?;
+        let finished = stream
+            .flush()
+            .map_err(crate::temporal::gpu)?
+            .ok_or_else(|| Error::gpu("Missing still frame"))?;
+        crate::temporal::encode(&finished, settings.format)?
+    } else {
+        renderer.shot_frame(&mut input, settings, frame, args.t)?
+    };
     warnings::emit_file(renderer.graph_warnings(&graph_targets), &mut seen_warnings);
     let guide = settings
         .aovs
@@ -721,6 +773,9 @@ pub fn sequence(args: Sequence, preview: bool, worker: bool) -> Result<()> {
         // finished publishing its last frame and released this lock.
         let _worker_lock = lock(&directory.join("worker.lock"), true)?;
         verify_manifest(&directory, &manifest, false)?;
+        if settings.denoise == Denoise::Temporal {
+            return temporal_sequence(&mut input, settings, &directory, first, last, count);
+        }
         let mut renderer = None;
         let mut seen = 0u32;
         let mut render_ms = 0.;
@@ -788,6 +843,10 @@ pub fn sequence(args: Sequence, preview: bool, worker: bool) -> Result<()> {
     progress(
         json!({"event":"plan","frames":directory,"cost":input.estimate(settings, indices.len() as u32)}),
     );
+    warnings::emit_file(
+        crate::temporal::fallback(settings.denoise, "/output/denoise"),
+        &mut seen_warnings,
+    );
     drop(input);
     run_worker(deadline)?;
     if let Some(path) = &args.contact_sheet {
@@ -809,6 +868,100 @@ pub fn sequence(args: Sequence, preview: bool, worker: bool) -> Result<()> {
         let message = "ffmpeg was unavailable. PNG frames are ready to encode.";
         eprintln!("{message}");
         progress(json!({"event":"sequence","path":directory,"message":message}));
+    }
+    Ok(())
+}
+
+fn temporal_sequence(
+    input: &mut Input,
+    settings: Settings,
+    directory: &Path,
+    first: u32,
+    last: u32,
+    count: u32,
+) -> Result<()> {
+    let mut missing = std::collections::BTreeSet::new();
+    for i in first..=last {
+        let path = frame_path(directory, i);
+        if reusable(&path, settings.size)
+            && (settings.format != Format::Exr
+                || reusable(&path.with_extension("exr"), settings.size))
+            && (!settings.aovs || quality::guide_valid(&path.with_extension("aov"), settings.size))
+        {
+            progress(json!({"event":"reused","frame":i,"path":path}));
+        } else {
+            missing.insert(i);
+        }
+    }
+    let Some(&start) = missing.first() else {
+        return Ok(());
+    };
+    progress(json!({"event":"worker","pid":std::process::id()}));
+    let mut renderer = Renderer::new(settings)?;
+    let config = input.shot.output.temporal.clone();
+    let mut stream = config.start(&renderer.engine)?;
+    let latency = stream.latency();
+    let end = missing
+        .last()
+        .unwrap()
+        .saturating_add(latency)
+        .min(count - 1);
+    let targets = input.prepared.material_graph_targets(&input.shot);
+    let mut seen = HashSet::new();
+    let publish = |frame: api::OfflineFrame| -> Result<()> {
+        if !missing.contains(&frame.index) {
+            return Ok(());
+        }
+        let path = frame_path(directory, frame.index);
+        let png = crate::temporal::encode(&frame, Format::Png)?;
+        let exr = (settings.format == Format::Exr)
+            .then(|| crate::temporal::encode(&frame, Format::Exr))
+            .transpose()?;
+        lifetime::publish(|| {
+            if let Some(bytes) = exr {
+                encode::atomic_bytes(&path.with_extension("exr"), |f| f.write_all(&bytes))
+                    .map_err(|e| encode::failure(e.to_string()))?;
+            }
+            encode::atomic_bytes(&path, |f| f.write_all(&png))
+                .map_err(|e| encode::failure(e.to_string()))
+        })?;
+        progress(
+            json!({"event":"frame","frame":frame.index,"t":f64::from(frame.index)/f64::from(settings.fps),"path":path,"samples":settings.spp}),
+        );
+        Ok(())
+    };
+    // One preceding camera primes the motion field at the edge of the history window.
+    let begin = start.saturating_sub(latency + 1);
+    for i in begin..=end {
+        renderer.prepare_shot(
+            input,
+            settings,
+            f64::from(i) / f64::from(settings.fps),
+            None,
+        )?;
+        renderer.converge(settings, i)?;
+        if config.cuts_at(i, settings.fps) {
+            stream.cut();
+        }
+        stream
+            .push(i, &renderer.render)
+            .map_err(crate::temporal::gpu)?;
+        if i == begin {
+            progress(
+                json!({"event":"temporal","latency":stream.latency(),"gpuBytes":stream.plan().unwrap().bytes}),
+            );
+        }
+        warnings::emit_file(renderer.graph_warnings(&targets), &mut seen);
+        if settings.aovs && missing.contains(&i) {
+            let guide = quality::capture_guide(&renderer.render)?;
+            lifetime::publish(|| guide(&frame_path(directory, i).with_extension("aov")))?;
+        }
+        while let Some(frame) = stream.drain() {
+            publish(frame)?;
+        }
+    }
+    while let Some(frame) = stream.flush().map_err(crate::temporal::gpu)? {
+        publish(frame)?;
     }
     Ok(())
 }

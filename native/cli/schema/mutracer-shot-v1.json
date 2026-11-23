@@ -537,6 +537,7 @@
     },
     "output": {
       "type": "object",
+      "allOf": [{"if": {"required": ["denoise"], "properties": {"denoise": {"const": "temporal"}}}, "then": {"required": ["sampleSequence"], "properties": {"sampleSequence": {"const": "frame"}}}}],
       "properties": {
         "size": {
           "type": "array",
@@ -559,7 +560,88 @@
         "seedValue": {"type": "integer", "minimum": 0, "maximum": 4294967295, "default": 12345},
         "sampleSequenceOffset": {"type": "integer", "minimum": 0, "maximum": 4294967295, "default": 0},
         "sampleSequence": {"enum": ["fixed", "frame"], "default": "fixed"},
-        "denoise": {"enum": ["oidn", "cleanAuxLarge", "none"], "default": "oidn"},
+        "temporal": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "offline"
+            },
+            "historyRadius": {
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 32
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "min",
+                    "max"
+                  ],
+                  "properties": {
+                    "min": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 32
+                    },
+                    "max": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 32
+                    }
+                  }
+                }
+              ]
+            },
+            "postRadius": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 3
+            },
+            "stabilizeSparkle": {
+              "type": "boolean"
+            },
+            "historyInvalidation": {
+              "enum": [
+                "auto",
+                "manual"
+              ]
+            },
+            "memoryBudget": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "cuts": {
+              "type": "array",
+              "items": {
+                "oneOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "time"
+                    ],
+                    "properties": {
+                      "time": {
+                        "type": "number",
+                        "minimum": 0
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "denoise": {"enum": ["oidn", "cleanAuxLarge", "none", "temporal"], "default": "oidn"},
         "render": {"$ref": "#/$defs/render"},
         "tracer": {
           "enum": ["hardware", "software"],

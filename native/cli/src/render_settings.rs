@@ -184,6 +184,11 @@ const LARGE_WEIGHTS: [&str; 3] = [
 ];
 
 pub fn denoiser_library(model: Denoise, pointer: &str) -> Result<Option<PathBuf>> {
+    if model == Denoise::Temporal {
+        return Ok(denoiser_library(Denoise::CleanAuxLarge, pointer)
+            .ok()
+            .flatten());
+    }
     if model != Denoise::CleanAuxLarge {
         return Ok(None);
     }
