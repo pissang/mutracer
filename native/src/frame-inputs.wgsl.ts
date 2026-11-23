@@ -1,7 +1,7 @@
 import {framePixelStruct} from './layout.js';
 import type {RayTraceInputHooks} from '../../src/renderer/wgsl/rayTrace.compute.js';
 import {GROUP} from './layout.js';
-import {unsupportedCoatReflectanceWgsl} from '../../src/renderer/wgsl/aovReflectance.wgsl.js';
+import {unsupportedCoatReflectanceWgsl, unsupportedFuzzReflectanceWgsl} from '../../src/renderer/wgsl/aovReflectance.wgsl.js';
 import {createAovDenoisingGuideWgsl, wgslDenoisingPathSupports} from '../../src/renderer/wgsl/aovDenoisingGuide.wgsl.js';
 
 // Internal diagnostic record. It contains resolved first-surface data rather
@@ -207,7 +207,7 @@ fn mtFrameSurface(si: SurfaceInteraction, material: OpenPbrResolvedMaterial, ray
   // Surface data can be inspected even when complete temporal/RR inputs have
   // not been validated. Do not silently reinterpret these material layers.
   if ((material.materialType != STANDARD) | (material.alpha < 1.0) |
-      (${unsupportedCoatReflectanceWgsl}) | (material.fuzzWeight > 0.0) |
+      (${unsupportedCoatReflectanceWgsl}) | (${unsupportedFuzzReflectanceWgsl}) |
       unsupportedAnisotropy | (material.subsurfaceWeight > 0.0) |
       (dot(material.mediumScattering, material.mediumScattering) > 0.0) |
       (material.bevel > 0.0) | (material.thinFilmWeight > 0.0) |

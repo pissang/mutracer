@@ -1271,7 +1271,7 @@ ${pathDiagnostic ? '  mtPathEnd(outAux.normal, outAux.albedo);\n' : ''}${inputHo
   // skip the unused BSDF lobes.
   const layeredReflectance = options.displayAovStorage || inputHooks?.layeredReflectance;
   let specializedSource = source + createDepthQueryWgsl(materialHooks) + createAovReflectanceWgsl(
-    layeredReflectance, !!layeredReflectance && hasCoatNormals, options.displayAovStorage)
+    layeredReflectance, !!layeredReflectance && hasCoatNormals)
     + (options.displayAovStorage ? createAovTraceDisplayWgsl(materialHooks, hasCoatNormals, hasAnisotropyDirections) : createAovTraceWgsl(materialHooks));
   const backgroundBits: Record<string, number> = {
     USE_BACKGROUND: 1,
