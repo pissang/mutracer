@@ -1,3 +1,12 @@
+export const wgslDenoisingPathSupports = /* wgsl */ `
+fn aovDenoisingPathSupports(material: OpenPbrResolvedMaterial) -> bool {
+  return material.materialType == STANDARD && material.alpha >= 1.0 && material.transmissionWeight == 0.0 &&
+    material.subsurfaceWeight == 0.0 && material.fuzzWeight == 0.0 && material.thinFilmWeight == 0.0 &&
+    material.coatAnisotropy == 0.0 && (material.coatWeight == 0.0 || material.specularAnisotropy == 0.0) &&
+    material.bevel == 0.0;
+}
+`;
+
 /** Builds opaque denoising guides from the OpenPBR reflectance components. */
 export function createAovDenoisingGuideWgsl(hasCoatNormals: boolean) {
   // Follow the closure weighting in Cycles 5.3's kernel/film/denoising_passes.h.

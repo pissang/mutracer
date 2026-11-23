@@ -25,6 +25,7 @@ import { canUseBvhWorker, BvhWorkerPool, resolveBvhWorkerCount } from './rendere
 import { DEFAULT_MAX_TEXTURE_ARRAY_BYTES } from './renderer/MaterialTable.js';
 import { packDepthSampleArea, type DepthSampleArea } from './renderer/depthQuery.js';
 import { makeWGPURenderTargets } from './renderer/WGPURenderingPipeline.js';
+import type {DenoisingGuideCapture} from './renderer/denoisingGuideCapture.js';
 import type { WebGLDevice as WebGLRenderer } from './renderer/webgl.js';
 import type { RenderPipeline, RenderTarget } from './renderer/renderPipeline.js';
 import type { RenderingDiagnostics } from './renderer/RenderingPipeline.js';
@@ -157,6 +158,7 @@ export default class Engine {
   private readonly _textureBinding: 'atlas' | 'auto';
   private readonly _shaderPrefetch: 'off' | 'editing';
   private _initPromise?: Promise<EngineInfo>;
+  private _denoisingGuideCapture?: DenoisingGuideCapture;
   private _info?: EngineInfo;
   private _pipelineInitError?: Error;
   private _webgpuFallbackReason?: string;
@@ -215,6 +217,12 @@ export default class Engine {
     this._sceneChangeDetector = new SceneChangeDetector();
     this.display = Display._create(this, params.canvas ?? createCanvas());
   }
+  /** @internal Selects the auxiliary readback for an isolated GPU diagnostic before initialization. */
+  _captureDenoisingGuides(mode: DenoisingGuideCapture): void {
+    if (this._initPromise) throw new Error('Guide capture must be selected before engine initialization');
+    this._denoisingGuideCapture = mode;
+  }
+
   /** Initializes once; concurrent/repeated calls share the result. Loads the energy table. Initialization failures reject and emit an error. */
   init(): Promise<EngineInfo> {
     return this._initPromise ??= (async () => {
@@ -467,7 +475,8 @@ export default class Engine {
           this._gpuAdapterInfo = gpuAdapterInfo ?? undefined;
           this._gpuDevice = gpuDevice;
           this._pipeline = makeWGPURenderTargets(this.display.canvas, gpuDevice, {
-            presentationFormat: gpu?.getPreferredCanvasFormat() ?? 'bgra8unorm', materialTextures, shaderPrefetch: this._shaderPrefetch
+            presentationFormat: gpu?.getPreferredCanvasFormat() ?? 'bgra8unorm', materialTextures, shaderPrefetch: this._shaderPrefetch,
+            denoisingGuideCapture: this._denoisingGuideCapture
           });
           this._watchDevice(gpuDevice);
           gpuCreated = true;
@@ -504,7 +513,7 @@ export default class Engine {
         // Query before compiling programs: getParameter may flush pending driver work.
         this._webglAdapterName = undefined;
         this._adapterName();
-        this._pipeline = makeWebGLRenderTargets(this._webglRenderer);
+        this._pipeline = makeWebGLRenderTargets(this._webglRenderer, this._denoisingGuideCapture);
         if (!this._webglListening) {
           this._webglListening = true;
           this.display.canvas.addEventListener('webglcontextlost', this._onContextLost);

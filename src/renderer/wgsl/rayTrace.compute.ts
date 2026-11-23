@@ -33,11 +33,12 @@ import envMapWgsl from './chunks/envMap.wgsl.js';
 import uvProjectionWgsl from './chunks/uvProjection.wgsl.js';
 export const WORKGROUP_SIZE = 8;
 
-/** Native input instrumentation; omitted hooks preserve the production source. */
+/** Optional trace input instrumentation. */
 export interface RayTraceInputHooks {
   declarations: string;
   begin: string;
   primarySurface: string;
+  preparedSurface?: (prepared: string) => string;
   unclampedColor: string;
   end: string;
   uniformJitter: boolean;
@@ -289,7 +290,7 @@ ${enabled || lightTracing || photonMapping ? causticPartitionWGSL(enabled, light
 const CAUSTIC_MNEE=${enabled};
 const CAUSTIC_MNEE_MAX_DEPTH=${partitionDepth}u;
 const CAUSTIC_PHOTON_MAX_DEPTH=${photonMaxDepth}u;
-`+photonQuerySource(debugGroup, !lightTracing && (options.photonDirectSubset ?? true)):''}${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals, enabled || lightTracing || photonMapping, research?.contribution,photonMapping,options.channelIndependentRis,materialHooks.graph?.precomputed !== undefined, queryPoints, earlyScattering, inputHooks?.recordReflection)}
+`+photonQuerySource(debugGroup, !lightTracing && (options.photonDirectSubset ?? true)):''}${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals, enabled || lightTracing || photonMapping, research?.contribution,photonMapping,options.channelIndependentRis,materialHooks.graph?.precomputed !== undefined, queryPoints, earlyScattering, inputHooks?.recordReflection, inputHooks?.preparedSurface)}
 ${createSampleShadowCatcherWgsl(queryPoints, earlyScattering)}
 ${queryPoints ? createQueryPointsWgsl(earlyScattering) + '\n' : ''}
 // Output

@@ -1,3 +1,12 @@
+export const glslDenoisingPathSupports = /* glsl */ `
+bool aovDenoisingPathSupports(OpenPbrResolvedMaterial material) {
+  return material.materialType == STANDARD && material.alpha >= 1.0 && material.transmissionWeight == 0.0 &&
+    material.subsurfaceWeight == 0.0 && material.fuzzWeight == 0.0 && material.thinFilmWeight == 0.0 &&
+    material.coatAnisotropy == 0.0 && (material.coatWeight == 0.0 || material.specularAnisotropy == 0.0) &&
+    material.bevel == 0.0;
+}
+`;
+
 /** GLSL mirror of the opaque OpenPBR denoising guides. */
 export default /* glsl */ `
 struct AovDenoisingGuide {
