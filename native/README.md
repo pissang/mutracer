@@ -289,7 +289,10 @@ Automatic replay requires an SDK-observed Metal queue, such as the one used by
 an SDK-created device or `Engine::from_metal`. A detected miss on an unobserved
 host queue returns an error. If a beauty shader is incompatible with the
 sampling checks, the SDK logs a warning and renders that shader without
-silent-miss protection. Caustics rendering has no checkpoint replay.
+silent-miss protection. Metal HWRT caustics can replay a flight after a reported
+GPU error. They do not check for silent misses. Later flights retain four extra
+RGBA32F images, or six with light tracing (64 or 96 bytes per pixel). Concurrent
+light splats and photon gathering can change the last bits of replayed HDR values.
 
 Checkpointing can retain an extra copy of the four accumulation buffers.
 Budget about 2% additional render time for scenes on the scale of SanMiguel,

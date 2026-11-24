@@ -109,6 +109,16 @@ fn buffer(device: &wgpu::Device, size: u64, uniform: bool) -> wgpu::Buffer {
         mapped_at_creation: false,
     })
 }
+fn accumulation_buffer(device: &wgpu::Device, pixels: u32) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Caustic accumulation"),
+        size: u64::from(pixels) * 16,
+        usage: wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_DST
+            | wgpu::BufferUsages::COPY_SRC,
+        mapped_at_creation: false,
+    })
+}
 fn texture(
     gpu: &GpuDevice,
     width: u32,
@@ -648,13 +658,13 @@ impl State {
             entries: &emission_entries,
         });
         let pt_color = if m.flags & 2 != 0 {
-            Some(buffer(device, u64::from(pixels) * 16, false))
+            Some(accumulation_buffer(device, pixels))
         } else {
             None
         };
         let light = if let Some(pt) = &pt_color {
             let splats = buffer(device, u64::from(pixels) * 12, false);
-            let accumulation = buffer(device, u64::from(pixels) * 16, false);
+            let accumulation = accumulation_buffer(device, pixels);
             let resolve = pipeline(device, &m.accumulate_shader, "main", None);
             let resolve_group = buffer_group(
                 device,
@@ -714,6 +724,12 @@ impl State {
             _lighting: lighting,
         })
     }
+    pub(super) fn light_accumulations(&self) -> impl Iterator<Item = &wgpu::Buffer> {
+        self.pt_color
+            .iter()
+            .chain(self.light.iter().map(|l| &l.accumulation))
+    }
+
     pub fn before(
         &self,
         gpu: &GpuDevice,

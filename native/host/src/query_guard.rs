@@ -768,7 +768,7 @@ pub fn repair(
         )
     })
 }
-fn wait(scene: &GpuScene, deadline: std::time::Instant) -> Result<()> {
+pub(super) fn wait(scene: &GpuScene, deadline: std::time::Instant) -> Result<()> {
     let remaining = deadline
         .checked_duration_since(std::time::Instant::now())
         .ok_or("Checkpoint operation exceeded its deadline")?;

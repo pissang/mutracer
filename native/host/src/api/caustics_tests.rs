@@ -109,9 +109,7 @@ fn light_tracing_covers_images_beyond_one_dispatch_row() {
     }
 }
 
-#[test]
-#[ignore = "requires a real GPU"]
-fn caustics_shared_wgsl_modes_render_and_restart() {
+fn caustic_plane() -> (Scene, Camera) {
     let mut scene = Scene::new();
     let mut geometry = Geometry::new(
         vec![-1., 0., -1., -1., 0., 1., 1., 0., -1., 1., 0., 1.],
@@ -164,6 +162,13 @@ fn caustics_shared_wgsl_modes_render_and_restart() {
         .inverse()
         .to_cols_array();
     scene.set_default_camera(Some(camera));
+    (scene, camera)
+}
+
+#[test]
+#[ignore = "requires a real GPU"]
+fn caustics_shared_wgsl_modes_render_and_restart() {
+    let (scene, camera) = caustic_plane();
     if let Ok(out) = std::env::var("MUTRACER_CAUSTICS_EVIDENCE") {
         std::fs::create_dir_all(&out).unwrap();
         std::fs::write(
@@ -311,4 +316,94 @@ fn caustic_target_packet_preserves_plain_independent_frame_guides() {
     assert!(guides.caustics.is_none());
     assert_eq!(guides.shader, plain.shader);
     assert_eq!(guides.trace, plain.trace);
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+#[ignore = "requires a real Metal GPU"]
+fn partial_caustic_flights_match_clean_hdr_and_guides() {
+    let (scene, camera) = caustic_plane();
+    let engine = Engine::new(EngineOptions {
+        backend: Backend::Hardware,
+    })
+    .unwrap();
+    engine.set_scene_object(&scene).unwrap();
+    engine.set_camera(Some(camera)).unwrap();
+    engine.update().unwrap();
+    for photon_mapping in [false, true] {
+        let render = Render::new(
+            &engine,
+            RenderSettings {
+                size: RenderSize::Fixed {
+                    width: 64,
+                    height: 48,
+                },
+                bounces: 8,
+                max_samples: 8,
+                caustics: CausticSettings {
+                    light_tracing: true,
+                    photon_mapping,
+                    light_photons: 16384,
+                    photon_map_photons: 16384,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let run = || {
+            let mut options = ConvergeOptions::new(8);
+            options.samples_per_batch = 4;
+            options.sample_sequence_offset = 17;
+            render.converge(options).unwrap();
+            [PixelKind::Hdr, PixelKind::Normal, PixelKind::Albedo].map(|kind| {
+                render
+                    .read_pixels(kind)
+                    .unwrap()
+                    .data
+                    .into_iter()
+                    .map(f32::to_bits)
+                    .collect::<Vec<_>>()
+            })
+        };
+        let expected = run();
+        for partial in [None, Some(2), Some(6)] {
+            engine
+                .inner
+                .gpu
+                .recovery_test
+                .lock()
+                .unwrap()
+                .partial_sample = partial;
+            let actual = run();
+            for (plane, (actual, expected)) in actual.iter().zip(&expected).enumerate() {
+                let differences = actual.iter().zip(expected).filter(|(a, b)| a != b).count();
+                let max_abs = actual
+                    .iter()
+                    .zip(expected)
+                    .map(|(a, b)| (f32::from_bits(*a) - f32::from_bits(*b)).abs())
+                    .fold(0f32, f32::max);
+                eprintln!(
+                    "photon_mapping={photon_mapping} partial={partial:?} plane={plane} differences={differences} max_abs={max_abs}"
+                );
+                if plane != 0 {
+                    assert_eq!(differences, 0);
+                } else {
+                    // Concurrent light splats and photon insertion can change RGB sum order.
+                    assert!(
+                        actual
+                            .chunks_exact(4)
+                            .zip(expected.chunks_exact(4))
+                            .all(|(a, b)| a[3] == b[3])
+                    );
+                    assert!(
+                        actual
+                            .iter()
+                            .zip(expected)
+                            .all(|(a, b)| (f32::from_bits(*a) - f32::from_bits(*b)).abs() < 1e-5)
+                    );
+                }
+            }
+        }
+    }
 }

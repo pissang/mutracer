@@ -55,6 +55,7 @@ pub(crate) struct Batch {
     #[cfg(test)]
     pub(crate) injected_error: Option<String>,
     pub(crate) health: Option<crate::query_guard::Receipt>,
+    pub(crate) caustic_checkpoint: Option<Box<crate::recovery::CausticCheckpoint>>,
     pub(crate) repaired_prefix: bool,
     pub(crate) deadline: Option<std::time::Instant>,
     pub(crate) sampling_started: Option<std::time::Instant>,
@@ -434,6 +435,11 @@ impl Batch {
                 ));
             }
             if complete {
+                if let Some(checkpoint) = &self.caustic_checkpoint {
+                    if !checkpoint.proof.check("caustic checkpoint")? {
+                        return Ok(false);
+                    }
+                }
                 if let Some(checkpoint) = &self.checkpoint {
                     if !checkpoint.check()? {
                         self.check_deadline()?;
@@ -492,6 +498,7 @@ mod tests {
             sampling_done: None,
             sampling: Vec::new(),
             health: None,
+            caustic_checkpoint: None,
             repaired_prefix: false,
             deadline: None,
             sampling_started: None,

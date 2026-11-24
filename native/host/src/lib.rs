@@ -1684,6 +1684,23 @@ impl GpuScene {
         {
             return self.dispatch_target_batched(target, start, additional, timer);
         }
+        let checkpoint = target
+            .caustics
+            .as_ref()
+            .filter(|_| self.hwrt_shader && self.gpu.queue.observed.available())
+            .map(|caustics| recovery::CausticCheckpoint::capture(self, target, caustics, start));
+        let mut batch = self.dispatch_single_samples(target, start, end, timer)?;
+        batch.caustic_checkpoint = checkpoint.map(Box::new);
+        Ok(batch)
+    }
+
+    fn dispatch_single_samples(
+        &self,
+        target: &Target,
+        start: u32,
+        end: u32,
+        timer: Option<&profiling::GpuTimer>,
+    ) -> Result<native_completion::Batch> {
         let device = &self.gpu.device;
         let queue = &self.gpu.queue;
         let samples = start..end;
@@ -1848,10 +1865,11 @@ impl GpuScene {
         Ok(bytemuck::pod_collect_to_vec(&bytes))
     }
     fn reset_target(&self, target: &mut Target) -> Result<()> {
-        let proof = target
-            .query_guard
-            .as_ref()
-            .map(|_| native_completion::Recording::new());
+        let proof = (target.query_guard.is_some()
+            || (target.caustics.is_some()
+                && self.hwrt_shader
+                && self.gpu.queue.observed.available()))
+        .then(native_completion::Recording::new);
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
         for id in layout::resource::COLOR..=layout::resource::SHADOW_CATCHER {
             encoder.clear_buffer(&target.buffers[&id], 0, None);
