@@ -140,7 +140,7 @@ fn mtComplete(ray: Ray, si: ptr<function, SurfaceInteraction>, hit: MtHit) {
     hit.instance, hit.normal, o + hit.t * d, -1);
 }
 fn intersectScene(ray: Ray, si: ptr<function, SurfaceInteraction>, bounces: i32, doubleSided: bool, isRefractionRay: bool) {
-  let hit = mtTrace(ray, RAY_MAX_DISTANCE, false, -1, select(-1, (*si).triangleIndex, bounces > 0), (*si).instanceIndex, doubleSided, isRefractionRay);
+  let hit = mtTrace(ray, RAY_MAX_DISTANCE, false, -1, select(-1, (*si).triangleIndex, bounces > 0 || isRefractionRay), (*si).instanceIndex, doubleSided, isRefractionRay);
 ${pathDiagnostic ? `  mtPathRecord(ray, (*si).albedoSampled, hit.kind != 0u, hit.instance, hit.record, hit.t, hit.barycentric, bounces, doubleSided, isRefractionRay, (*si).triangleIndex);` : ''}
   mtComplete(ray, si, hit);
 }

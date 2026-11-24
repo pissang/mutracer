@@ -1,0 +1,15 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Nested medium absorption</title>
+<pre id="result">Rendering…</pre>
+<script type="module">
+  import {nestedMediumContract} from './nestedMedium.ts';
+  const backend = new URLSearchParams(location.search).has('webgl') ? 'webgl' : 'webgpu';
+  const result = document.querySelector('#result');
+  try {
+    result.textContent = JSON.stringify(await nestedMediumContract(backend), null, 2);
+  } catch (error) {
+    result.textContent = String(error);
+    throw error;
+  }
+</script>

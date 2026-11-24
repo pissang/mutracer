@@ -57,7 +57,7 @@ import createRayTraceFragmentShader from './glsl/rayTrace.frag.js';
 import shadowCatcherFrag from './glsl/shadowCatcher.frag.js';
 import MaterialTable, {
   DEFAULT_MAX_TEXTURE_ARRAY_BYTES,
-  materialUsesMedium
+  hasAdjacentMedia, materialUsesMedium
 } from './MaterialTable.js';
 import OpenPBRMaterial, {
   resolveMaterialAlphaMode
@@ -769,6 +769,7 @@ class WebGLRayTracePass {
         HAS_GLTF_ANISOTROPY: materials.some(m => m.specularAnisotropyModel === 'gltf' && m.specularAnisotropy > 0),
         HAS_BEVEL,
         HAS_MEDIUM,
+        HAS_ADJACENT_MEDIA: hasAdjacentMedia(materials),
         HAS_ALPHA: this._hasAlpha,
 
         BEVEL_SAMPLES: this._bevelSamples,

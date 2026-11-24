@@ -66,7 +66,8 @@ export function wgpuShaderPreamble(constants: Record<string, boolean | number>, 
     const value = constants[key];
     return `${bake ? 'const' : 'override'} ${key} = ${typeof value === 'boolean' ? (value ? 'true' : 'false') : value.toString()};`;
   }).join('\n');
-  return `\n${defineCode}\n${constantsCode}\n`;
+  const adjacentMediaDefault = constants.HAS_ADJACENT_MEDIA === undefined ? 'const HAS_ADJACENT_MEDIA = false;\n' : '';
+  return `\n${defineCode}\n${adjacentMediaDefault}${constantsCode}\n`;
 }
 export function wgpuShaderSource(constants: Record<string, boolean | number>, features: WGPUShaderFeatures, bake = false, sceneIntersections = '', pathDiagnostic = false, inputHooks?: RayTraceInputHooks): string {
   constants = researchTransport()?.constants(constants, features) ?? constants;

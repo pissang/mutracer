@@ -470,12 +470,15 @@ ${caustics ? /* wgsl */ `    causticAdvance(path, *ma, isNextRefraction, true);
 
     crossedBoundary = isNextRefraction & !(*ma).thinWalled;
     (*path).isNextRefraction = isNextRefraction;
-    // TODO prefer the opaque surface when transmission surface and opaque surface are overlapped.
-    // Or the ray go out from transmission material will miss the opque surface.
+    let incomingOrigin = (*path).ray.o;
     (*path).ray.o = (*si).position + EPS * scatterDir;
 ${hasCoatNormals ? /* wgsl */ `
     if ((*ma).coatNormalEnabled) { (*path).ray.o = (*si).position + EPS * select(-${originalFace}, ${originalFace}, dot(${originalFace}, scatterDir) >= 0.0); }
 ` : ''}
+    // A fixed forward step can cross the next surface of a filled glass.
+    if (HAS_ADJACENT_MEDIA && isNextRefraction) {
+      (*path).ray.o = transmissionRayOrigin((*si).position, scatterDir, incomingOrigin);
+    }
   }
   (*path).scatteringPdf = scatteringPdf;
   (*path).ray.d = scatterDir;
@@ -491,13 +494,14 @@ ${hasCoatNormals ? /* wgsl */ `
     // BSDF actually sampled transmission through a medium boundary.
     if (!${mediumSampled} & crossedBoundary & ((*ma).mediumType > 0)) {
       if (${ndv1} >= 0.0) {
-        (*si).mediumType = (*ma).mediumType;
+        // Store the owner: touching entry and exit hits can arrive in either order.
+        (*si).mediumType = (*si).materialIndex + 1;
         (*si).mediumExtinction = (*ma).mediumExtinction;
         (*si).mediumScattering = (*ma).mediumScattering;
         (*path).scatteringMediumEntered = (*path).scatteringMediumEntered || any((*ma).mediumScattering > vec3f(0.0));
         (*si).mediumAnisotropy = (*ma).mediumAnisotropy;
       }
-      else {
+      else if ((*si).mediumType == (*si).materialIndex + 1) {
         (*si).mediumType = 0;
         (*si).mediumExtinction = vec3f(0.0);
         (*si).mediumScattering = vec3f(0.0);

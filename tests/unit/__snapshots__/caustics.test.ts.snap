@@ -1,17 +1,17 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`caustic contracts > preserves published light and photon transport sources > camera false/false 1`] = `"b14a476a7ea2c3a6830fcb5e33ac3f3037239444f727b3d9c9ab6325ee656dcf"`;
+exports[`caustic contracts > preserves published light and photon transport sources > camera false/false 1`] = `"176eb942eadfc7cc377c6ac2cea4446f95adc12cea215f0efc9a2ec8f3852af9"`;
 
-exports[`caustic contracts > preserves published light and photon transport sources > camera false/true 1`] = `"619469b88eec3d186d237ababc288b093b174489ae782606c7963c4bb9d9b254"`;
+exports[`caustic contracts > preserves published light and photon transport sources > camera false/true 1`] = `"18ae83cdb041fb70bf75e137ca2973ad1d3ce353851eb108d88b78be619940b0"`;
 
-exports[`caustic contracts > preserves published light and photon transport sources > camera true/false 1`] = `"baa1714f12ce12420eae6a40e39a6810faede975e6d823061006d8b5f5814aef"`;
+exports[`caustic contracts > preserves published light and photon transport sources > camera true/false 1`] = `"a5721bb3c5768a4039b282fb4bf953fd5b42139ca46d9309ddecb8b3180a2d77"`;
 
-exports[`caustic contracts > preserves published light and photon transport sources > camera true/true 1`] = `"e4d6deb0d5a5bcba0b7046d9f1471b56d9ea924eb86e0056deec7e92fc136671"`;
+exports[`caustic contracts > preserves published light and photon transport sources > camera true/true 1`] = `"d694515b60ec3cc93ef1c1288c721ab448563f3d1f18d6610e7cbe15b2ca6b8a"`;
 
-exports[`caustic contracts > preserves published light and photon transport sources > lightTracing 1`] = `"5837da8fa631f5ac693c8c231b6520a2106c0edb141eeb88c6224bcb30b1ae6a"`;
+exports[`caustic contracts > preserves published light and photon transport sources > lightTracing 1`] = `"3f4cf768793bf5b2e26d26993ea4500880a359b3582a061a6c2460ac8ea4c0a7"`;
 
-exports[`caustic contracts > preserves published light and photon transport sources > photonMapping 1`] = `"8f9b22a86dda4cef4fffd23e82d9a82028a09bec9f07725dd3867b1f32f0cee9"`;
+exports[`caustic contracts > preserves published light and photon transport sources > photonMapping 1`] = `"4ccf19294a577175824ebb26649d79265ab1577cd030729126e361b1f0067464"`;
 
-exports[`caustic contracts > preserves the disabled shader across caustic switch settings > GLSL off 1`] = `"01026e4630e220ccaabd0f87c42c1daca28c6439176d51e13d6cc2b38b1d3b98"`;
+exports[`caustic contracts > preserves the disabled shader across caustic switch settings > GLSL off 1`] = `"d4feeda3ac51a252b8763e14921f29436a02e745dc42f8c53a685fc4dac58738"`;
 
-exports[`caustic contracts > preserves the disabled shader across caustic switch settings > WGSL off 1`] = `"b14a476a7ea2c3a6830fcb5e33ac3f3037239444f727b3d9c9ab6325ee656dcf"`;
+exports[`caustic contracts > preserves the disabled shader across caustic switch settings > WGSL off 1`] = `"176eb942eadfc7cc377c6ac2cea4446f95adc12cea215f0efc9a2ec8f3852af9"`;

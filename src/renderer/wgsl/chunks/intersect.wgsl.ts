@@ -225,7 +225,8 @@ function getBVHTraverseCode(
       for (var k = 0; k < primitiveCount; k++) {
         let triangleIndex = primitiveOffset + k;
         ${skipTriangleCode}
-        if (bounces > 0 && triangleIndex == currentTriangleIndex && insIdx == currentInstanceIndex) {
+        // The first continuation still has depth zero until its hit is completed.
+        if ((bounces > 0 || isRefractionRay) && triangleIndex == currentTriangleIndex && insIdx == currentInstanceIndex) {
           continue;
         }
         
