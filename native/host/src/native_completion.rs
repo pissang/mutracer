@@ -461,6 +461,39 @@ impl Batch {
         }
     }
 
+    /// Blocking frame boundaries can publish their CPU state only after their
+    /// own observed command buffers succeed. Empty polls do not wait for the GPU.
+    #[allow(unused_mut)]
+    pub(crate) fn verify_stage(
+        mut self,
+        gpu: &crate::GpuDevice,
+        stage: &'static str,
+    ) -> crate::Result<()> {
+        #[cfg(target_os = "macos")]
+        if self.buffers.is_empty() {
+            return Ok(());
+        }
+        #[cfg(test)]
+        {
+            let mut hook = gpu.recovery_test.lock().unwrap();
+            if hook.failed_stage == Some(stage) {
+                hook.failed_stage = None;
+                self.injected_error = Some("controlled Metal execution failure".into());
+                self.injected_kind = Some(FailureKind::Retry);
+            }
+        }
+        if !self.is_retired() {
+            crate::GpuDevice::wait(&gpu.device).map_err(|e| {
+                crate::status::fail(
+                    crate::Status::ContextFailed,
+                    format!("GPU completion failed ({stage}): {e}"),
+                )
+            })?;
+        }
+        gpu.loss.check()?;
+        self.require_success(stage)
+    }
+
     pub(crate) fn require_success(&self, identity: &str) -> crate::Result<()> {
         if !self.check(identity)? {
             return Err(crate::status::fail(

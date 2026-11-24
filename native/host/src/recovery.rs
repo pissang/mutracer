@@ -14,6 +14,7 @@ pub(super) const MAX_RETRIES: u32 = 12;
 #[cfg(test)]
 #[derive(Default)]
 pub(crate) struct Injection {
+    pub failed_stage: Option<&'static str>,
     pub partial_sample: Option<u32>,
     pub silent_sample: Option<u32>,
     pub query_window: bool,

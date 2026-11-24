@@ -326,3 +326,59 @@ fn render_offline_sequence() {
         save(&output, f);
     }
 }
+
+#[cfg(target_os = "macos")]
+fn recovery_fixture() -> (Engine, Render) {
+    use crate::api::{Backend, RenderSettings, RenderSize};
+    let engine = super::super::aov_tests::aov_engine(Backend::Hardware);
+    engine.set_scene(&super::super::tests::lit_scene()).unwrap();
+    engine.update().unwrap();
+    let render = Render::new(
+        &engine,
+        RenderSettings {
+            size: RenderSize::Fixed {
+                width: 32,
+                height: 24,
+            },
+            max_samples: 2,
+            aovs: TemporalDenoiser::AOVS,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    (engine, render)
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "requires a real Metal GPU"]
+fn converge_rejects_failed_auxiliary_submissions() {
+    use crate::api::{ConvergeOptions, DENOISE_OIDN_WEBGPU, DenoiserOptions};
+    for stage in [
+        "surface AOV",
+        "display capture",
+        "converge denoising",
+        "display readback",
+    ] {
+        let (engine, render) = recovery_fixture();
+        if stage == "converge denoising" {
+            render
+                .set_viewer_denoiser(Some(DenoiserOptions {
+                    backend: DENOISE_OIDN_WEBGPU,
+                    ..Default::default()
+                }))
+                .unwrap();
+        }
+        engine.inner.gpu.recovery_test.lock().unwrap().failed_stage = Some(stage);
+        let result = render
+            .converge(ConvergeOptions::new(2))
+            .and_then(|_| engine.display().encode_png(&render));
+        let error = result.unwrap_err();
+        assert_eq!(error.status, crate::Status::ContextFailed, "{error}");
+        assert!(error.to_string().contains(stage), "{error}");
+        if stage != "display readback" {
+            assert!(!render.converged());
+            assert!(render.read_pixels(crate::api::PixelKind::Denoised).is_err());
+        }
+    }
+}
