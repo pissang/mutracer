@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import {execFile} from 'node:child_process';
-import {mkdtemp, rm, writeFile} from 'node:fs/promises';
+import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {createInterface} from 'node:readline';
 import {test} from 'node:test';
 import {fileURLToPath} from 'node:url';
 import {promisify} from 'node:util';
@@ -139,5 +140,57 @@ test('MaterialX distinguishes located validation errors from file failures', {sk
       /surface.mtlx:3:\d+: shader\/future_input.*Unsupported OpenPBR graph input futureInput/.test(error.stderr));
   } finally {
     await rm(dir, {recursive: true, force: true});
+  }
+});
+
+test('temporal retry rebuilds history and publishes each frame once', {
+  skip: !native || process.platform === 'win32',
+  timeout: 120_000,
+}, async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'mutracer-temporal-retry-'));
+  try {
+    const file = join(dir, 'shot.mjs');
+    await writeFile(file, `
+      export const output = {size:[32,24],fps:10,duration:0.8,spp:2,denoise:'temporal',
+        sampleSequence:'frame',temporal:{historyRadius:2,postRadius:1}};
+      export function setup({THREE}) {
+        const scene = new THREE.Scene(), camera = new THREE.PerspectiveCamera(40);
+        camera.position.z = 3;
+        scene.background = new THREE.Color(0.5,0.6,0.7);
+        scene.add(new THREE.Mesh(new THREE.BoxGeometry(),new THREE.MeshStandardMaterial()));
+        return {scene,camera};
+      }
+      export function frame({scene,t}) { scene.children[0].rotation.y = t; }
+    `);
+    const render = (name, env) => run(process.execPath, [binary,'render',file,'-o',join(dir,name+'.mp4')], {env});
+    await render('reference', process.env);
+    const wrapper = join(dir, 'worker');
+    await writeFile(wrapper, '#!/bin/sh\nif [ "$1" = serve ]; then echo $$ > "$MT_TEST_PID"; fi\nexec "$MT_TEST_NATIVE" "$@"\n', {mode:0o755});
+    const pid = join(dir,'pid');
+    const replay = render('replay', {...process.env, MUTRACER_BIN:wrapper, MT_TEST_NATIVE:native, MT_TEST_PID:pid});
+    const lines = createInterface({input:replay.child.stdout});
+    let killed = false;
+    const inspect = async () => {
+      for await (const line of lines) {
+        const event = JSON.parse(line);
+        if (!killed && event.event === 'frame' && event.frame === 1) {
+          process.kill(Number(await readFile(pid,'utf8')), 'SIGKILL');
+          killed = true;
+        }
+      }
+    };
+    const [{stdout}] = await Promise.all([replay, inspect()]);
+    const events = stdout.trim().split('\n').map(line => JSON.parse(line));
+    assert.ok(killed);
+    assert.equal(events.filter(e => e.event === 'retry').length, 1);
+    const published = events.filter(e => e.event === 'frame').map(e => e.frame);
+    assert.deepEqual(published, [0,1,2,3,4,5,6,7]);
+    for (const i of published) {
+      const name = 'frame_'+String(i).padStart(6,'0')+'.png';
+      assert.deepEqual(await readFile(join(dir,'replay.mp4.frames',name)),
+        await readFile(join(dir,'reference.mp4.frames',name)));
+    }
+  } finally {
+    await rm(dir,{recursive:true,force:true});
   }
 });

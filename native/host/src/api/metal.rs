@@ -217,8 +217,10 @@ impl Engine {
         let raw = unsafe { Retained::retain(device.cast::<ProtocolObject<dyn MTLDevice>>()) }
             .ok_or_else(|| invalid("Null Metal device"))?;
         let native_queue = if queue.is_null() {
-            raw.newCommandQueueWithMaxCommandBufferCount(4096)
-                .ok_or_else(unavailable)?
+            raw.newCommandQueueWithMaxCommandBufferCount(
+                crate::native_completion::METAL_COMMAND_BUFFER_CAPACITY,
+            )
+            .ok_or_else(unavailable)?
         } else {
             unsafe { Retained::retain(queue.cast::<ProtocolObject<dyn MTLCommandQueue>>()) }
                 .ok_or_else(|| invalid("Null Metal queue"))?

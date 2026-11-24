@@ -7,7 +7,7 @@ use crate::{
 };
 use mutracer_native::api;
 use serde::{Deserialize, Serialize};
-use std::io::Cursor;
+use std::{io::Cursor, sync::mpsc, thread, time::Duration};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
@@ -115,8 +115,46 @@ pub fn fallback(model: Denoise, pointer: &str) -> Option<Warning> {
 pub fn gpu(e: impl std::fmt::Display) -> Error {
     Error::gpu(e.to_string())
 }
+// Metal can block inside command-buffer creation before a device poll or
+// deadline check is possible. This guard runs only in the render worker, and
+// only during a temporal GPU operation. Sampling and disk I/O are outside it.
+fn watched<T>(timeout: Duration, stage: &str, operation: impl FnOnce() -> T) -> T {
+    thread::scope(|scope| {
+        let (done, completed) = mpsc::channel::<()>();
+        scope.spawn(move || {
+            if completed.recv_timeout(timeout) == Err(mpsc::RecvTimeoutError::Timeout) {
+                eprintln!(
+                    "GPU timeout during {stage} after {} seconds",
+                    timeout.as_secs_f64()
+                );
+                std::process::exit(5);
+            }
+        });
+        let result = operation();
+        drop(done);
+        result
+    })
+}
+
+// Match the convergence budget for a single operation, including cold pipelines.
+const TEMPORAL_TIMEOUT: Duration = Duration::from_secs(600);
+
+pub fn push(filter: &mut api::TemporalDenoiser, index: u32, render: &api::Render) -> Result<()> {
+    watched(TEMPORAL_TIMEOUT, "temporal input", || {
+        filter.push(index, render)
+    })
+    .map_err(gpu)
+}
+
+pub fn flush(filter: &mut api::TemporalDenoiser) -> Result<Option<api::OfflineFrame>> {
+    watched(TEMPORAL_TIMEOUT, "temporal flush", || filter.flush()).map_err(gpu)
+}
+
 pub fn encode(frame: &api::OfflineFrame, format: Format) -> Result<Vec<u8>> {
-    let image = frame.read_pixels(false).map_err(gpu)?;
+    let image = watched(TEMPORAL_TIMEOUT, "temporal readback", || {
+        frame.read_pixels(false)
+    })
+    .map_err(gpu)?;
     if format == Format::Exr {
         return crate::quality::encode_hdr(image);
     }
@@ -139,4 +177,39 @@ pub fn encode(frame: &api::OfflineFrame, format: Format) -> Result<Vec<u8>> {
         .write_to(&mut out, image::ImageFormat::Png)
         .map_err(gpu)?;
     Ok(out.into_inner())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stalled_temporal_operation_exits_with_retryable_gpu_status() {
+        const CHILD: &str = "MT_TEST_STALLED_TEMPORAL_OPERATION";
+        if std::env::var_os(CHILD).is_some() {
+            watched(Duration::from_millis(20), "test temporal operation", || {
+                // Finite fallback bounds the parent test if the guard regresses.
+                thread::sleep(Duration::from_secs(2));
+            });
+            return;
+        }
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "temporal::tests::stalled_temporal_operation_exits_with_retryable_gpu_status",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert_eq!(result.status.code(), Some(5));
+        assert!(
+            String::from_utf8_lossy(&result.stderr)
+                .contains("GPU timeout during test temporal operation")
+        );
+        assert_eq!(
+            watched(Duration::from_secs(1), "healthy operation", || 42),
+            42
+        );
+    }
 }

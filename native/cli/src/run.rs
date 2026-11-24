@@ -606,12 +606,8 @@ pub fn still(args: Still, worker: bool) -> Result<()> {
         let mut stream = input.shot.output.temporal.start(&renderer.engine)?;
         renderer.prepare_shot(&mut input, settings, args.t, None)?;
         renderer.converge(settings, frame)?;
-        stream
-            .push(frame, &renderer.render)
-            .map_err(crate::temporal::gpu)?;
-        let finished = stream
-            .flush()
-            .map_err(crate::temporal::gpu)?
+        crate::temporal::push(&mut stream, frame, &renderer.render)?;
+        let finished = crate::temporal::flush(&mut stream)?
             .ok_or_else(|| Error::gpu("Missing still frame"))?;
         crate::temporal::encode(&finished, settings.format)?
     } else {
@@ -962,9 +958,7 @@ fn temporal_sequence(
         ) {
             stream.cut();
         }
-        stream
-            .push(i, &renderer.render)
-            .map_err(crate::temporal::gpu)?;
+        crate::temporal::push(&mut stream, i, &renderer.render)?;
         if i == begin {
             progress(
                 json!({"event":"temporal","latency":stream.latency(),"gpuBytes":stream.plan().unwrap().bytes}),
@@ -979,7 +973,7 @@ fn temporal_sequence(
             publish(frame)?;
         }
     }
-    while let Some(frame) = stream.flush().map_err(crate::temporal::gpu)? {
+    while let Some(frame) = crate::temporal::flush(&mut stream)? {
         publish(frame)?;
     }
     Ok(())

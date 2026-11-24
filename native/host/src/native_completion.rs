@@ -126,6 +126,11 @@ impl Drop for Recording {
     }
 }
 
+// wgpu-hal 30's Metal encoder uses this budget for not-yet-submitted
+// command buffers. A replacement must support the same multi-pass encoders.
+#[cfg(target_os = "macos")]
+pub(crate) const METAL_COMMAND_BUFFER_CAPACITY: usize = 4096;
+
 #[cfg(target_os = "macos")]
 type MetalQueue =
     objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLCommandQueue>>;
@@ -237,10 +242,16 @@ impl ObservedQueue {
         #[cfg(target_os = "macos")]
         if let Some(queue) = &self.queue {
             unsafe extern "C" {
-                fn mt_native_renew_metal_queue(queue: *mut std::ffi::c_void) -> bool;
+                fn mt_native_renew_metal_queue(
+                    queue: *mut std::ffi::c_void,
+                    capacity: usize,
+                ) -> bool;
             }
             if unsafe {
-                mt_native_renew_metal_queue(objc2::rc::Retained::as_ptr(queue).cast_mut().cast())
+                mt_native_renew_metal_queue(
+                    objc2::rc::Retained::as_ptr(queue).cast_mut().cast(),
+                    METAL_COMMAND_BUFFER_CAPACITY,
+                )
             } {
                 return Ok(());
             }
