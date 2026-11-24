@@ -1559,6 +1559,11 @@ impl GpuScene {
             };
             buffers.insert(id, buffer);
         }
+        // A discarded camera upload or reused-buffer clear would invalidate
+        // both independent replays even if their images agreed.
+        let caustic_setup =
+            (caustic_packet.is_some() && self.hwrt_shader && queue.observed.available())
+                .then(native_completion::Recording::new);
         queue.write_buffer(&buffers[&res::CAMERA], 0, &packet.camera);
         queue.write_buffer(&buffers[&res::TRACE_UNIFORM], 0, &packet.trace);
         if !clear.is_empty() {
@@ -1583,6 +1588,12 @@ impl GpuScene {
                 )
             })
             .transpose()?;
+        if let Some(recording) = caustic_setup {
+            queue.submit([]);
+            recording
+                .finish()
+                .verify_stage(&self.gpu, "caustic target initialization")?;
+        }
         let group = |index: usize, entries: &[(usize, &wgpu::Buffer)]| {
             let mut entries: Vec<_> = entries
                 .iter()

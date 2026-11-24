@@ -330,7 +330,7 @@ fn partial_caustic_flights_match_clean_hdr_and_guides() {
     engine.set_scene_object(&scene).unwrap();
     engine.set_camera(Some(camera)).unwrap();
     engine.update().unwrap();
-    for photon_mapping in [false, true] {
+    for (light_photons, photon_mapping) in [(1, false), (16384, false), (16384, true)] {
         let render = Render::new(
             &engine,
             RenderSettings {
@@ -343,7 +343,7 @@ fn partial_caustic_flights_match_clean_hdr_and_guides() {
                 caustics: CausticSettings {
                     light_tracing: true,
                     photon_mapping,
-                    light_photons: 16384,
+                    light_photons,
                     photon_map_photons: 16384,
                     ..Default::default()
                 },
@@ -386,7 +386,7 @@ fn partial_caustic_flights_match_clean_hdr_and_guides() {
                 eprintln!(
                     "photon_mapping={photon_mapping} partial={partial:?} plane={plane} differences={differences} max_abs={max_abs}"
                 );
-                if plane != 0 {
+                if plane != 0 || light_photons == 1 {
                     assert_eq!(differences, 0);
                 } else {
                     // Concurrent light splats and photon insertion can change RGB sum order.
@@ -405,5 +405,18 @@ fn partial_caustic_flights_match_clean_hdr_and_guides() {
                 }
             }
         }
+        let mut hook = engine.inner.gpu.recovery_test.lock().unwrap();
+        hook.partial_sample = Some(2);
+        hook.corrupt_caustic_replay = true;
+        drop(hook);
+        let error = render.converge(ConvergeOptions::new(8)).unwrap_err();
+        assert_eq!(error.status, crate::Status::ContextFailed);
+        assert!(
+            error
+                .message
+                .contains("Independent caustic replays disagree"),
+            "{error}"
+        );
+        assert!(!render.converged());
     }
 }
