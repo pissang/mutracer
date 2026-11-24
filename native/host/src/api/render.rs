@@ -3267,12 +3267,23 @@ impl Render {
         engine: &Engine,
         auto: bool,
     ) -> crate::Result<super::offline::Capture> {
-        if !Arc::ptr_eq(&engine.inner, &self.engine.inner) || !self.converged() {
+        if !Arc::ptr_eq(&engine.inner, &self.engine.inner) {
             return Err("Temporal push needs a converged render on the same engine".into());
         }
         Ok(self.with(|state, id| {
             use super::offline::TemporalDenoiser;
             let r = state.renders.get_mut(&id).unwrap();
+            if state.device_failed
+                || r.busy
+                || r.error
+                || !r.current(state.scene_revision, state.camera_revision)
+                || r.samples < r.settings.max_samples
+            {
+                return Err(error(
+                    Status::InvalidState,
+                    "Temporal push requires a finished, converged render",
+                ));
+            }
             if r.settings.aovs & TemporalDenoiser::AOVS != TemporalDenoiser::AOVS
                 || r.settings.aov_resolution == AovResolution::Display
             {

@@ -382,3 +382,79 @@ fn converge_rejects_failed_auxiliary_submissions() {
         }
     }
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "requires a real Metal GPU"]
+fn cached_temporal_frames_survive_rejected_inputs_and_exclude_failed_outputs() {
+    use crate::api::ConvergeOptions;
+    let (engine, render) = recovery_fixture();
+    let shot = || {
+        TemporalDenoiser::new(
+            &engine,
+            TemporalOptions {
+                history_radius: HistoryRadius::Fixed(2),
+                post_radius: 1,
+                ..Default::default()
+            },
+            TemporalSpatial::None,
+        )
+        .unwrap()
+    };
+    let (mut reference, mut history, mut damaged, mut tail) = (shot(), shot(), shot(), shot());
+    for i in 0..3 {
+        let mut options = ConvergeOptions::new(2);
+        options.sample_sequence_offset = i * 2;
+        render.converge(options).unwrap();
+        for denoiser in [&mut reference, &mut history, &mut damaged, &mut tail] {
+            denoiser.push(i, &render).unwrap();
+        }
+    }
+    let fail = |stage| engine.inner.gpu.recovery_test.lock().unwrap().failed_stage = Some(stage);
+    fail("temporal input capture");
+    assert!(
+        history
+            .push(3, &render)
+            .unwrap_err()
+            .to_string()
+            .contains("temporal input capture")
+    );
+    fail("temporal window");
+    assert!(
+        damaged
+            .push(3, &render)
+            .unwrap_err()
+            .to_string()
+            .contains("temporal window")
+    );
+    assert!(damaged.drain().is_none());
+    assert!(damaged.flush().is_err());
+    fail("temporal flush");
+    assert!(tail.flush().is_err());
+    assert!(tail.drain().is_none());
+
+    {
+        let mut hook = engine.inner.gpu.recovery_test.lock().unwrap();
+        hook.partial_sample = Some(0);
+        hook.repair_failures = 13;
+    }
+    assert!(render.converge(ConvergeOptions::new(2)).is_err());
+    assert!(history.push(3, &render).is_err());
+    for i in 0..3 {
+        let a = reference.flush().unwrap().unwrap();
+        let b = history.flush().unwrap().unwrap();
+        assert_eq!((a.index, b.index), (i, i));
+        for accumulated in [true, false] {
+            let bits = |f: &OfflineFrame| {
+                f.read_pixels(accumulated)
+                    .unwrap()
+                    .data
+                    .into_iter()
+                    .map(f32::to_bits)
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(bits(&a), bits(&b));
+        }
+    }
+    assert!(history.flush().unwrap().is_none());
+}

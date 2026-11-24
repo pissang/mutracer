@@ -188,3 +188,8 @@ the first push. Wider windows delay output and use more GPU memory. Moving
 reflections and shadows can leave trails, and newly visible surfaces have
 less history. The [shot options](../cli/schema/shot.md#output-and-animation)
 describe the radii, byte budget and spatial weights used for video.
+
+A failed convergence leaves previously pushed frames available to flush. On
+an observed Metal queue, a failed input capture also leaves the window usable.
+If processing the window or its tail fails, recreate the denoiser and feed it
+the input frames needed for the pending outputs.
