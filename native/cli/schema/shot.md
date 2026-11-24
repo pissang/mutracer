@@ -19,9 +19,9 @@ Frames are numbered from 0. Frame `i` evaluates the shot at `i / fps` seconds, a
 Set `output.render` for bounce depth, caustics, clamping, sampling pattern,
 direct-light candidates, dispersion, bevel and alpha blending. An omitted
 `bounces` retains the video CLI default of 6. Set `bounces: 3` to match the
-browser's default. Set `directLightCandidates` to an integer from 1 to 16
-(default 4), or use `"auto"` to select 1, 4 or 8 from the lights sampled in
-each frame.
+browser's default. `directLightCandidates` defaults to `"auto"`, which selects
+1, 4 or 8 from the lights sampled in each frame. Set an integer from 1 to 16
+to fix the count.
 
 `seed: "frame"` uses `seedValue + i` modulo 2³². With
 `sampleSequence: "frame"`, frame `i` uses `sampleSequenceOffset + i × spp`

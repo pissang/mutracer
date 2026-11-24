@@ -75,9 +75,8 @@ enum AlphaBlend {
 
 impl RenderOptions {
     pub fn direct_light_candidates(self) -> DirectLightCandidates {
-        self.direct_light_candidates.unwrap_or_else(|| {
-            DirectLightCandidates::Count(api::RenderSettings::default().direct_light_candidates)
-        })
+        self.direct_light_candidates
+            .unwrap_or(DirectLightCandidates::Auto)
     }
 
     pub fn has_caustic_transport(self) -> bool {
@@ -316,7 +315,7 @@ mod tests {
         use serde_json::{from_value, json, to_value};
         assert_eq!(
             RenderOptions::default().direct_light_candidates(),
-            DirectLightCandidates::Count(4)
+            DirectLightCandidates::Auto
         );
         for value in [json!("auto"), json!(1), json!(16)] {
             let request: RenderOptions =
