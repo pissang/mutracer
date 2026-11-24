@@ -92,6 +92,21 @@ fn context_result<T>(result: crate::Result<T>) -> Result<T> {
         )
     })
 }
+/// Verify only submissions on this thread, excluding nested sampling recordings.
+fn checked_gpu<T, E: From<Error>>(
+    gpu: &crate::GpuDevice,
+    stage: &'static str,
+    operation: impl FnOnce() -> std::result::Result<T, E>,
+) -> std::result::Result<T, E> {
+    if !gpu.queue.observed.available() {
+        return operation();
+    }
+    let recording = crate::native_completion::Recording::new();
+    let value = operation()?;
+    context_result(recording.finish().verify_stage(gpu, stage))?;
+    Ok(value)
+}
+
 /// Blocking callers retry the same registry Busy result as the C boundary.
 fn context_blocking<T>(operation: impl FnMut() -> crate::Result<T>) -> Result<T> {
     context_result(crate::context::blocking(operation))

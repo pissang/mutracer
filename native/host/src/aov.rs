@@ -162,7 +162,7 @@ pub(crate) struct Layout {
 }
 pub(crate) struct Query {
     pipelines: PipelineCache,
-    gpu: GpuDevice,
+    pub(crate) gpu: GpuDevice,
     shader: wgpu::ShaderModule,
     layouts: Vec<wgpu::BindGroupLayout>,
     groups: Vec<wgpu::BindGroup>,

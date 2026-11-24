@@ -7,6 +7,9 @@ use crate::{
 };
 use std::time::{Duration, Instant};
 
+mod caustics;
+pub(crate) use caustics::CausticCheckpoint;
+
 const ADAPTIVE_TARGETS: usize = 26;
 pub(super) const TIME_LIMIT: Duration = Duration::from_secs(10);
 pub(super) const MAX_RETRIES: u32 = 12;
@@ -14,6 +17,8 @@ pub(super) const MAX_RETRIES: u32 = 12;
 #[cfg(test)]
 #[derive(Default)]
 pub(crate) struct Injection {
+    pub failed_stage: Option<&'static str>,
+    pub corrupt_caustic_replay: bool,
     pub partial_sample: Option<u32>,
     pub silent_sample: Option<u32>,
     pub query_window: bool,
@@ -36,11 +41,19 @@ impl GpuScene {
         failed: &Batch,
         original: Box<dyn std::error::Error>,
     ) -> Result<()> {
-        if target.caustics.is_some()
-            || !self.gpu.queue.observed.available()
+        if !self.gpu.queue.observed.available()
             || failed.failure_kind() == FailureKind::Unrecoverable
         {
             return Err(original);
+        }
+        if let Some(checkpoint) = &failed.caustic_checkpoint {
+            return checkpoint.replay(self, target, start, end, failed, original);
+        }
+        if target.caustics.is_some() {
+            return Err(crate::status::fail(
+                crate::Status::ContextFailed,
+                format!("{original}; no verified caustic checkpoint"),
+            ));
         }
         if failed.checkpoint.is_some() {
             return crate::query_guard::repair(self, target, start, end, failed, original);

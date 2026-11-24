@@ -47,10 +47,11 @@ impl OfflineFrame {
         } else {
             &self.denoised
         };
-        let bytes = self
-            .gpu
-            .queue
-            .read_buffer(&self.gpu.device, buffer.buffer().slice(..))?;
+        let bytes = super::checked_gpu(&self.gpu, "temporal frame readback", || {
+            self.gpu
+                .queue
+                .read_buffer(&self.gpu.device, buffer.buffer().slice(..))
+        })?;
         let mut data: Vec<f32> = bytemuck::pod_collect_to_vec(&bytes);
         if !accumulated && self.codes {
             for pixel in data.chunks_exact_mut(4) {
@@ -238,10 +239,12 @@ impl TemporalDenoiser {
     /// Push a converged render from this engine. Index gaps start a new history epoch.
     pub fn push(&mut self, index: u32, render: &Render) -> Result<()> {
         self.check_push()?;
-        let capture = render.offline_capture(
-            &self.engine,
-            self.options.history_invalidation == HistoryInvalidation::Auto,
-        )?;
+        let capture = super::checked_gpu(&self.engine.inner.gpu, "temporal input capture", || {
+            render.offline_capture(
+                &self.engine,
+                self.options.history_invalidation == HistoryInvalidation::Auto,
+            )
+        })?;
         self.push_capture(index, capture)
     }
     fn check_push(&self) -> Result<()> {
@@ -258,6 +261,20 @@ impl TemporalDenoiser {
     }
     pub(super) fn push_capture(&mut self, index: u32, capture: Capture) -> Result<()> {
         self.check_push()?;
+        let gpu = self.engine.inner.gpu.clone();
+        let ready = self.finished.len();
+        let result = super::checked_gpu(&gpu, "temporal window", || {
+            self.insert_capture(index, capture)
+        });
+        if result.is_err() {
+            self.finished.truncate(ready);
+        } else {
+            self.failed = false;
+        }
+        result
+    }
+
+    fn insert_capture(&mut self, index: u32, capture: Capture) -> Result<()> {
         self.prepare(capture.size, capture.revisions.len())?;
         self.failed = true;
         let p = self.passes.as_ref().unwrap();
@@ -306,9 +323,7 @@ impl TemporalDenoiser {
             },
         );
         self.count += 1;
-        self.process(false)?;
-        self.failed = false;
-        Ok(())
+        self.process(false)
     }
     fn neighbors(&self, i: u32, count: u32, radius: u32) -> Vec<u32> {
         (1..=radius)
@@ -455,7 +470,11 @@ impl TemporalDenoiser {
         self.flushing = true;
         if self.finished.is_empty() {
             self.failed = true;
-            self.process(true)?;
+            let gpu = self.engine.inner.gpu.clone();
+            if let Err(error) = super::checked_gpu(&gpu, "temporal flush", || self.process(true)) {
+                self.finished.clear();
+                return Err(error);
+            }
             self.failed = false;
         }
         if let Some(f) = self.drain() {

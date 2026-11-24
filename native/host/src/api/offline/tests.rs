@@ -159,6 +159,7 @@ fn render_offline_sequence() {
     use crate::api::{
         Backend, Camera, CausticSettings, ConvergeOptions, RenderSettings, RenderSize,
     };
+    crate::logging::stderr();
     let dir = PathBuf::from(std::env::var_os("MUTRACER_TEMPORAL_SCENE").unwrap());
     let output = PathBuf::from(std::env::var_os("MUTRACER_TEMPORAL_OUTPUT").unwrap());
     std::fs::create_dir_all(&output).unwrap();
@@ -256,6 +257,7 @@ fn render_offline_sequence() {
         if spp > 32 && !(18..44).contains(&i) {
             continue;
         }
+        eprintln!("Rendering input frame {i}");
         if dining {
             let bytes = std::fs::read(dir.join(format!("frame_{i:04}.camera"))).unwrap();
             engine
@@ -325,4 +327,136 @@ fn render_offline_sequence() {
     while let Some(f) = denoiser.flush().unwrap() {
         save(&output, f);
     }
+}
+
+#[cfg(target_os = "macos")]
+fn recovery_fixture() -> (Engine, Render) {
+    use crate::api::{Backend, RenderSettings, RenderSize};
+    let engine = super::super::aov_tests::aov_engine(Backend::Hardware);
+    engine.set_scene(&super::super::tests::lit_scene()).unwrap();
+    engine.update().unwrap();
+    let render = Render::new(
+        &engine,
+        RenderSettings {
+            size: RenderSize::Fixed {
+                width: 32,
+                height: 24,
+            },
+            max_samples: 2,
+            aovs: TemporalDenoiser::AOVS,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    (engine, render)
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "requires a real Metal GPU"]
+fn converge_rejects_failed_auxiliary_submissions() {
+    use crate::api::{ConvergeOptions, DENOISE_OIDN_WEBGPU, DenoiserOptions};
+    for stage in [
+        "surface AOV",
+        "display capture",
+        "converge denoising",
+        "display readback",
+    ] {
+        let (engine, render) = recovery_fixture();
+        if stage == "converge denoising" {
+            render
+                .set_viewer_denoiser(Some(DenoiserOptions {
+                    backend: DENOISE_OIDN_WEBGPU,
+                    ..Default::default()
+                }))
+                .unwrap();
+        }
+        engine.inner.gpu.recovery_test.lock().unwrap().failed_stage = Some(stage);
+        let result = render
+            .converge(ConvergeOptions::new(2))
+            .and_then(|_| engine.display().encode_png(&render));
+        let error = result.unwrap_err();
+        assert_eq!(error.status, crate::Status::ContextFailed, "{error}");
+        assert!(error.to_string().contains(stage), "{error}");
+        if stage != "display readback" {
+            assert!(!render.converged());
+            assert!(render.read_pixels(crate::api::PixelKind::Denoised).is_err());
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "requires a real Metal GPU"]
+fn cached_temporal_frames_survive_rejected_inputs_and_exclude_failed_outputs() {
+    use crate::api::ConvergeOptions;
+    let (engine, render) = recovery_fixture();
+    let shot = || {
+        TemporalDenoiser::new(
+            &engine,
+            TemporalOptions {
+                history_radius: HistoryRadius::Fixed(2),
+                post_radius: 1,
+                ..Default::default()
+            },
+            TemporalSpatial::None,
+        )
+        .unwrap()
+    };
+    let (mut reference, mut history, mut damaged, mut tail) = (shot(), shot(), shot(), shot());
+    for i in 0..3 {
+        let mut options = ConvergeOptions::new(2);
+        options.sample_sequence_offset = i * 2;
+        render.converge(options).unwrap();
+        for denoiser in [&mut reference, &mut history, &mut damaged, &mut tail] {
+            denoiser.push(i, &render).unwrap();
+        }
+    }
+    let fail = |stage| engine.inner.gpu.recovery_test.lock().unwrap().failed_stage = Some(stage);
+    fail("temporal input capture");
+    assert!(
+        history
+            .push(3, &render)
+            .unwrap_err()
+            .to_string()
+            .contains("temporal input capture")
+    );
+    fail("temporal window");
+    assert!(
+        damaged
+            .push(3, &render)
+            .unwrap_err()
+            .to_string()
+            .contains("temporal window")
+    );
+    assert!(damaged.drain().is_none());
+    assert!(damaged.flush().is_err());
+    fail("temporal flush");
+    assert!(tail.flush().is_err());
+    assert!(tail.drain().is_none());
+
+    {
+        let mut hook = engine.inner.gpu.recovery_test.lock().unwrap();
+        hook.partial_sample = Some(0);
+        hook.repair_failures = 13;
+    }
+    assert!(render.converge(ConvergeOptions::new(2)).is_err());
+    assert!(history.push(3, &render).is_err());
+    for i in 0..3 {
+        let a = reference.flush().unwrap().unwrap();
+        let b = history.flush().unwrap().unwrap();
+        assert_eq!((a.index, b.index), (i, i));
+        for accumulated in [true, false] {
+            let bits = |f: &OfflineFrame| {
+                f.read_pixels(accumulated)
+                    .unwrap()
+                    .data
+                    .into_iter()
+                    .map(f32::to_bits)
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(bits(&a), bits(&b));
+        }
+    }
+    assert!(history.flush().unwrap().is_none());
 }

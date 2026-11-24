@@ -704,7 +704,7 @@ impl Display {
     /// or at the final size of sized display passes: straight-alpha RGBA8, top row
     /// first. Leaves the presentation texture unchanged.
     pub fn read_rgba8(&self, render: &Render) -> Result<(u32, u32, Vec<u8>)> {
-        let result = (|| {
+        let result = super::checked_gpu(&self.engine.inner.gpu, "display readback", || {
             let composed = self.compose(render, false)?.unwrap();
             let state = self.engine.live()?;
             if composed.settings.channel.aov_kind().is_some() {
@@ -726,7 +726,7 @@ impl Display {
                 [composed.texture.width(), composed.texture.height()]
             };
             Ok((size[0], size[1], rgba))
-        })();
+        });
         self.engine.flush();
         result
     }
@@ -746,12 +746,14 @@ impl Display {
     /// binary16, top row first. Errors before a complete image. Uses GPU readback;
     /// consumes eight bytes per pixel plus a padded staging buffer.
     pub fn read_rgba16f(&self, render: &Render) -> Result<(u32, u32, Vec<u8>)> {
-        let image = self
-            .compose_hdr(render)?
-            .ok_or_else(|| error(Status::InvalidState, "Render has no complete image"))?;
-        let bytes = crate::display::read_image(&self.engine.inner.gpu, &image)
-            .map_err(|e| error(Status::Error, e.to_string()))?;
-        Ok((image.width(), image.height(), bytes))
+        super::checked_gpu(&self.engine.inner.gpu, "HDR display readback", || {
+            let image = self
+                .compose_hdr(render)?
+                .ok_or_else(|| error(Status::InvalidState, "Render has no complete image"))?;
+            let bytes = crate::display::read_image(&self.engine.inner.gpu, &image)
+                .map_err(|e| error(Status::Error, e.to_string()))?;
+            Ok((image.width(), image.height(), bytes))
+        })
     }
     /// [`Display::read_rgba8`] encoded as PNG.
     pub fn encode_png(&self, render: &Render) -> Result<Vec<u8>> {

@@ -1559,6 +1559,11 @@ impl GpuScene {
             };
             buffers.insert(id, buffer);
         }
+        // A discarded camera upload or reused-buffer clear would invalidate
+        // both independent replays even if their images agreed.
+        let caustic_setup =
+            (caustic_packet.is_some() && self.hwrt_shader && queue.observed.available())
+                .then(native_completion::Recording::new);
         queue.write_buffer(&buffers[&res::CAMERA], 0, &packet.camera);
         queue.write_buffer(&buffers[&res::TRACE_UNIFORM], 0, &packet.trace);
         if !clear.is_empty() {
@@ -1583,6 +1588,12 @@ impl GpuScene {
                 )
             })
             .transpose()?;
+        if let Some(recording) = caustic_setup {
+            queue.submit([]);
+            recording
+                .finish()
+                .verify_stage(&self.gpu, "caustic target initialization")?;
+        }
         let group = |index: usize, entries: &[(usize, &wgpu::Buffer)]| {
             let mut entries: Vec<_> = entries
                 .iter()
@@ -1684,6 +1695,23 @@ impl GpuScene {
         {
             return self.dispatch_target_batched(target, start, additional, timer);
         }
+        let checkpoint = target
+            .caustics
+            .as_ref()
+            .filter(|_| self.hwrt_shader && self.gpu.queue.observed.available())
+            .map(|caustics| recovery::CausticCheckpoint::capture(self, target, caustics, start));
+        let mut batch = self.dispatch_single_samples(target, start, end, timer)?;
+        batch.caustic_checkpoint = checkpoint.map(Box::new);
+        Ok(batch)
+    }
+
+    fn dispatch_single_samples(
+        &self,
+        target: &Target,
+        start: u32,
+        end: u32,
+        timer: Option<&profiling::GpuTimer>,
+    ) -> Result<native_completion::Batch> {
         let device = &self.gpu.device;
         let queue = &self.gpu.queue;
         let samples = start..end;
@@ -1809,7 +1837,7 @@ impl GpuScene {
         #[cfg(test)]
         if partial.is_some() {
             batch.injected_error = Some("controlled partial flight failure".into());
-            batch.injected_kind = Some(crate::native_completion::FailureKind::Retry);
+            batch.injected_kind = Some(native_completion::injected_metal_errors(&[2, 1]));
         }
         Ok(batch)
     }
@@ -1848,10 +1876,11 @@ impl GpuScene {
         Ok(bytemuck::pod_collect_to_vec(&bytes))
     }
     fn reset_target(&self, target: &mut Target) -> Result<()> {
-        let proof = target
-            .query_guard
-            .as_ref()
-            .map(|_| native_completion::Recording::new());
+        let proof = (target.query_guard.is_some()
+            || (target.caustics.is_some()
+                && self.hwrt_shader
+                && self.gpu.queue.observed.available()))
+        .then(native_completion::Recording::new);
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
         for id in layout::resource::COLOR..=layout::resource::SHADOW_CATCHER {
             encoder.clear_buffer(&target.buffers[&id], 0, None);

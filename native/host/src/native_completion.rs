@@ -55,6 +55,7 @@ pub(crate) struct Batch {
     #[cfg(test)]
     pub(crate) injected_error: Option<String>,
     pub(crate) health: Option<crate::query_guard::Receipt>,
+    pub(crate) caustic_checkpoint: Option<Box<crate::recovery::CausticCheckpoint>>,
     pub(crate) repaired_prefix: bool,
     pub(crate) deadline: Option<std::time::Instant>,
     pub(crate) sampling_started: Option<std::time::Instant>,
@@ -248,7 +249,8 @@ impl ObservedQueue {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// In a mixed batch a permanent failure wins, followed by queue replacement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum FailureKind {
     Retry,
     SubmissionsIgnored,
@@ -350,23 +352,16 @@ impl Batch {
         #[cfg(target_os = "macos")]
         {
             use objc2_metal::{MTLCommandBuffer, MTLCommandBufferStatus};
-            let mut kind = FailureKind::Unrecoverable;
-            for buffer in &self.buffers {
-                if buffer.status() != MTLCommandBufferStatus::Error {
-                    continue;
-                }
-                let Some(error) = buffer.error() else {
-                    return FailureKind::Unrecoverable;
-                };
-                let next = classify_metal_error(&error.domain().to_string(), error.code());
-                match next {
-                    FailureKind::Unrecoverable => return next,
-                    FailureKind::SubmissionsIgnored => kind = next,
-                    FailureKind::Retry if kind != FailureKind::SubmissionsIgnored => kind = next,
-                    _ => {}
-                }
-            }
-            return kind;
+            return batch_failure(
+                self.buffers
+                    .iter()
+                    .filter(|buffer| buffer.status() == MTLCommandBufferStatus::Error)
+                    .map(|buffer| {
+                        buffer.error().map_or(FailureKind::Unrecoverable, |error| {
+                            classify_metal_error(&error.domain().to_string(), error.code())
+                        })
+                    }),
+            );
         }
         #[cfg(not(target_os = "macos"))]
         FailureKind::Unrecoverable
@@ -386,7 +381,7 @@ impl Batch {
         {
             use objc2_metal::{MTLCommandBuffer, MTLCommandBufferStatus};
             let mut complete = true;
-            let mut failure = None;
+            let mut failures = Vec::new();
             let diagnostic = std::env::var_os("MUTRACER_NATIVE_COMMAND_STATUS").as_deref()
                 == Some(std::ffi::OsStr::new("1"));
             if diagnostic && self.buffers.is_empty() {
@@ -419,7 +414,7 @@ impl Batch {
                     );
                 }
                 if status == MTLCommandBufferStatus::Error {
-                    failure = Some(format!(
+                    failures.push(format!(
                         "Metal buffer {index} status={} error={error:?}",
                         status.0
                     ));
@@ -427,13 +422,19 @@ impl Batch {
                     complete = false;
                 }
             }
-            if let Some(error) = failure {
+            if !failures.is_empty() {
+                let error = failures.join("; ");
                 return Err(crate::status::fail(
                     crate::Status::ContextFailed,
                     format!("GPU execution failed ({identity}): {error}"),
                 ));
             }
             if complete {
+                if let Some(checkpoint) = &self.caustic_checkpoint {
+                    if !checkpoint.proof.check("caustic checkpoint")? {
+                        return Ok(false);
+                    }
+                }
                 if let Some(checkpoint) = &self.checkpoint {
                     if !checkpoint.check()? {
                         self.check_deadline()?;
@@ -460,6 +461,39 @@ impl Batch {
         }
     }
 
+    /// Blocking frame boundaries can publish their CPU state only after their
+    /// own observed command buffers succeed. Empty polls do not wait for the GPU.
+    #[allow(unused_mut)]
+    pub(crate) fn verify_stage(
+        mut self,
+        gpu: &crate::GpuDevice,
+        stage: &'static str,
+    ) -> crate::Result<()> {
+        #[cfg(target_os = "macos")]
+        if self.buffers.is_empty() {
+            return Ok(());
+        }
+        #[cfg(test)]
+        {
+            let mut hook = gpu.recovery_test.lock().unwrap();
+            if hook.failed_stage == Some(stage) {
+                hook.failed_stage = None;
+                self.injected_error = Some("controlled Metal execution failure".into());
+                self.injected_kind = Some(FailureKind::Retry);
+            }
+        }
+        if !self.is_retired() {
+            crate::GpuDevice::wait(&gpu.device).map_err(|e| {
+                crate::status::fail(
+                    crate::Status::ContextFailed,
+                    format!("GPU completion failed ({stage}): {e}"),
+                )
+            })?;
+        }
+        gpu.loss.check()?;
+        self.require_success(stage)
+    }
+
     pub(crate) fn require_success(&self, identity: &str) -> crate::Result<()> {
         if !self.check(identity)? {
             return Err(crate::status::fail(
@@ -469,6 +503,20 @@ impl Batch {
         }
         Ok(())
     }
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn batch_failure(errors: impl Iterator<Item = FailureKind>) -> FailureKind {
+    errors.max().unwrap_or(FailureKind::Unrecoverable)
+}
+
+#[cfg(test)]
+pub(super) fn injected_metal_errors(codes: &[isize]) -> FailureKind {
+    batch_failure(
+        codes
+            .iter()
+            .map(|&code| classify_metal_error("MTLCommandBufferErrorDomain", code)),
+    )
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -492,6 +540,7 @@ mod tests {
             sampling_done: None,
             sampling: Vec::new(),
             health: None,
+            caustic_checkpoint: None,
             repaired_prefix: false,
             deadline: None,
             sampling_started: None,
@@ -509,6 +558,17 @@ mod tests {
 
     #[test]
     fn metal_error_classification_uses_domain_and_code() {
+        for codes in [[1, 2], [2, 1]] {
+            assert_eq!(injected_metal_errors(&codes), FailureKind::Retry);
+        }
+        assert_eq!(
+            injected_metal_errors(&[2, 4, 1]),
+            FailureKind::SubmissionsIgnored
+        );
+        assert_eq!(
+            injected_metal_errors(&[3, 2, 1]),
+            FailureKind::Unrecoverable
+        );
         assert_eq!(
             classify_metal_error("MTLCommandBufferErrorDomain", 4),
             FailureKind::SubmissionsIgnored

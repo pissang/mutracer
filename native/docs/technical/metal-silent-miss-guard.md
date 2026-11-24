@@ -41,7 +41,9 @@ HWRT targets. Paths below are relative to `native/host/src/`.
   repeatedly within one 10-second deadline. Explicit, recoverable execution
   errors allow at most 12 retries inside that deadline; `SubmissionsIgnored`
   renews the observed queue. Device loss and failures that cannot be verified
-  are returned. The result is byte-identical to an undisturbed render.
+  are returned. Injected and detected misses replay byte-identically on the
+  test scene. A missed query between checks can change the image until a
+  later replay recomputes that sample.
 - **Submission.** Each device has at most one sampling command buffer in
   flight. Short batches prepare the next buffer while the GPU runs and commit
   it once the previous one retires; long batches keep the four-dispatch
@@ -74,7 +76,8 @@ fragment stage avoids the related Hang but was rejected for the product.
 - A window shorter than the interval between workgroup checks can pass
   undetected. Injected windows that escaped changed at most a few dozen pixels
   in a single sample.
-- Caustics targets, surface AOV/depth/picking passes, frame-input producers and
+- Caustics targets have separate flight checkpoints for explicit errors only.
+  Surface AOV/depth/picking passes, frame-input producers and
   host queues that the SDK does not observe have no checkpoint replay. A
   detected miss on an unobserved queue returns an error.
 

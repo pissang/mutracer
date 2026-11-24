@@ -1664,6 +1664,19 @@ fn aov_layout(render: &RenderState, mask: u32) -> crate::aov::Layout {
 }
 fn render_aovs(render: &mut RenderState, mask: u32, samples: u32) -> Result<()> {
     let query = context_result(context::aov_query(render.context))?;
+    if !render.busy {
+        return render_query_aovs(render, mask, samples, &query);
+    }
+    let operation = || render_query_aovs(render, mask, samples, &query);
+    super::checked_gpu(&query.gpu, "surface AOV", operation)
+}
+
+fn render_query_aovs(
+    render: &mut RenderState,
+    mask: u32,
+    samples: u32,
+    query: &crate::aov::Query,
+) -> Result<()> {
     let mut layout = aov_layout(render, mask);
     if !layout.display {
         layout.size = query.size();
@@ -1690,7 +1703,7 @@ fn render_aovs(render: &mut RenderState, mask: u32, samples: u32) -> Result<()> 
         };
         render.aov = Some(
             crate::aov::Output::new(
-                &query,
+                query,
                 render.input_generation,
                 &words,
                 render.aov.as_ref(),
@@ -1703,7 +1716,7 @@ fn render_aovs(render: &mut RenderState, mask: u32, samples: u32) -> Result<()> 
         .aov
         .as_mut()
         .unwrap()
-        .render(&query, samples, mask)
+        .render(query, samples, mask)
         .map_err(|e| error(Status::Error, e.to_string()))
 }
 /// Polls the batch and accounts completed samples.
@@ -2915,7 +2928,9 @@ impl Render {
     }
     /// Renders exactly `options.samples` samples, blocking until they complete.
     /// Progress callbacks may use the API; refine on this render is rejected meanwhile.
-    /// Execution-error reporting and recovery follow [`Render::refine`].
+    /// Sampling recovery follows [`Render::refine`]. On an observed Metal queue,
+    /// a failed surface AOV, display capture or GPU denoising submission returns
+    /// [`Status::ContextFailed`].
     pub fn converge(&self, mut options: ConvergeOptions) -> Result<ConvergeResult> {
         self.engine.poll_device();
         if !(1..=MAX_TOTAL_SAMPLES).contains(&options.samples) {
@@ -2963,7 +2978,12 @@ impl Render {
                     state.report(e.message.clone());
                     let render = state.renders.get_mut(&id).unwrap();
                     render.error = true;
-                    render.output.invalidate();
+                    render.capture = None;
+                    render.samples = 0;
+                    cancel_denoise(render);
+                    render.capture_key = None;
+                    render.captured = 0;
+                    render.aov = None;
                     render.needs_capture = false;
                 }
             }
@@ -2997,26 +3017,6 @@ impl Render {
             }
             Ok(())
         });
-        if result.is_ok() {
-            // Converge is a blocking call: wait here for display AOV pipelines
-            // that compile on a worker, then complete the AOVs.
-            let deadline = Instant::now() + Duration::from_secs(120);
-            while self.with(|state, id| {
-                let render = state.renders.get_mut(&id).unwrap();
-                if render.aov_pending {
-                    update_aovs(render)?;
-                }
-                Ok(render.aov_pending)
-            })? {
-                if Instant::now() > deadline {
-                    return Err(error(
-                        Status::Timeout,
-                        "Display AOV pipelines did not compile",
-                    ));
-                }
-                std::thread::sleep(Duration::from_millis(1));
-            }
-        }
         result
     }
     fn run_converge(
@@ -3093,7 +3093,9 @@ impl Render {
                         && render.samples > 0
                         && render.job.is_none()
                     {
-                        capture(render)?;
+                        super::checked_gpu(&self.engine.inner.gpu, "display capture", || {
+                            capture(render)
+                        })?;
                         captured_at = Instant::now();
                     }
                     if render.job.is_none() && render.samples < target {
@@ -3131,7 +3133,9 @@ impl Render {
         loop {
             let captured = self.with(|state, id| {
                 check(state)?;
-                capture(state.renders.get_mut(&id).unwrap())
+                super::checked_gpu(&self.engine.inner.gpu, "display capture", || {
+                    capture(state.renders.get_mut(&id).unwrap())
+                })
             })?;
             if captured {
                 break;
@@ -3151,7 +3155,9 @@ impl Render {
                 self.engine.poll_device();
                 let done = self.with(|state, id| {
                     check(state)?;
-                    denoise(state, id, true)?;
+                    super::checked_gpu(&self.engine.inner.gpu, "converge denoising", || {
+                        denoise(state, id, true)
+                    })?;
                     let render = &state.renders[&id];
                     if let Some(message) =
                         render.denoise.report.as_ref().and_then(|r| r.error.clone())
@@ -3178,6 +3184,24 @@ impl Render {
                     }
                 }
             }
+        }
+        // Converge is a blocking call: wait here for display AOV pipelines
+        // that compile on a worker, then complete the AOVs.
+        let deadline = Instant::now() + Duration::from_secs(120);
+        while self.with(|state, id| {
+            let render = state.renders.get_mut(&id).unwrap();
+            if render.aov_pending {
+                update_aovs(render)?;
+            }
+            Ok(render.aov_pending)
+        })? {
+            if Instant::now() > deadline {
+                return Err(error(
+                    Status::Timeout,
+                    "Display AOV pipelines did not compile",
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(1));
         }
         Ok(ConvergeResult { samples: target })
     }
@@ -3243,12 +3267,23 @@ impl Render {
         engine: &Engine,
         auto: bool,
     ) -> crate::Result<super::offline::Capture> {
-        if !Arc::ptr_eq(&engine.inner, &self.engine.inner) || !self.converged() {
+        if !Arc::ptr_eq(&engine.inner, &self.engine.inner) {
             return Err("Temporal push needs a converged render on the same engine".into());
         }
         Ok(self.with(|state, id| {
             use super::offline::TemporalDenoiser;
             let r = state.renders.get_mut(&id).unwrap();
+            if state.device_failed
+                || r.busy
+                || r.error
+                || !r.current(state.scene_revision, state.camera_revision)
+                || r.samples < r.settings.max_samples
+            {
+                return Err(error(
+                    Status::InvalidState,
+                    "Temporal push requires a finished, converged render",
+                ));
+            }
             if r.settings.aovs & TemporalDenoiser::AOVS != TemporalDenoiser::AOVS
                 || r.settings.aov_resolution == AovResolution::Display
             {
@@ -3333,6 +3368,12 @@ impl Render {
     pub fn read_pixels(&self, kind: PixelKind) -> Result<Image> {
         let result = self.with(|state, id| {
             let render = state.renders.get_mut(&id).unwrap();
+            if render.error && render.samples == 0 {
+                return Err(error(
+                    Status::InvalidState,
+                    "Render has no valid output after failure",
+                ));
+            }
             for event in drain(render)? {
                 state.sample_events.push((id, event));
             }

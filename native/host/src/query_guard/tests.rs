@@ -9,9 +9,15 @@ fn guarded_replay_restores_all_accumulations_and_preserves_the_verified_prefix()
         return;
     }
     gpu.recovery_test.lock().unwrap().query_window = true;
-    let (mut scene, mut assets, _) =
-        crate::scene::prepare_retained(&crate::scene::tests::translated_camera_input(), true)
-            .unwrap();
+    let mut input = crate::scene::tests::translated_camera_input();
+    let slot = layout::header::MATERIAL_OFFSET * 4;
+    let material = u32::from_le_bytes(input[slot..slot + 4].try_into().unwrap()) as usize;
+    // An undetected primary miss must change radiance even without a scene light.
+    for word in layout::material::EMISSION_COLOR..=layout::material::EMISSION_LUMINANCE {
+        let offset = 4 * (material + word);
+        input[offset..offset + 4].copy_from_slice(&1f32.to_le_bytes());
+    }
+    let (mut scene, mut assets, _) = crate::scene::prepare_retained(&input, true).unwrap();
     scene.hwrt = Some(
         crate::hardware::capture_from_resources(&mut assets, scene.native_layout.as_ref().unwrap())
             .unwrap(),
@@ -201,6 +207,50 @@ fn guarded_replay_restores_all_accumulations_and_preserves_the_verified_prefix()
     renderer.add_samples(&mut target, 1).unwrap();
     let queries = counts()[0];
     assert!(queries > 0);
+    let healthy = read(&target);
+    // Search a short global query interval, including the canary calls. A
+    // masked scene query may be a genuine miss and leave every pixel unchanged.
+    let mut escaped = false;
+    for start in 0..queries {
+        renderer.reset_target(&mut target).unwrap();
+        reset_window(start, start + 1);
+        let mut batch = renderer.dispatch_target(&target, 0, 1, None).unwrap();
+        GpuDevice::wait(&gpu.device).unwrap();
+        let observed = counts();
+        if observed[3] == 0 || observed[4] != 0 {
+            continue;
+        }
+        batch.require_success("short query window").unwrap();
+        assert!(!renderer.verify_sampling_target(&target, 1).unwrap());
+        let modified = read(&target);
+        if modified == healthy {
+            continue;
+        }
+        let changed = modified[0]
+            .chunks_exact(16)
+            .zip(healthy[0].chunks_exact(16))
+            .filter(|(a, b)| a != b)
+            .count();
+        if changed == 0 {
+            continue;
+        }
+        // An independent execution error can replay the same unchecked samples.
+        batch.injected_error = Some("later execution error".into());
+        batch.injected_kind = Some(native_completion::injected_metal_errors(&[2, 1]));
+        renderer
+            .repair_target(&target, 0, 1, &batch, "later execution error".into())
+            .unwrap();
+        assert_eq!(read(&target), healthy);
+        eprintln!(
+            "escaped query window {start}..{}: scene={} canary={} changed HDR pixels={changed}",
+            start + 1,
+            observed[3],
+            observed[4]
+        );
+        escaped = true;
+        break;
+    }
+    assert!(escaped, "expected a short window between workgroup checks");
     renderer.reset_target(&mut target).unwrap();
     reset_window(queries / 2, queries + queries / 2);
     let previous = gpu.recovery_test.lock().unwrap().repairs;
