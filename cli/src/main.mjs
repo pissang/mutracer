@@ -321,19 +321,20 @@ async function main() {
     await frame(other,Math.floor(other * fps));
     if (digest(await frame(timeA,indexA)) !== early) throw new Error(`frame(t=${timeA}) is not deterministic. Assign an absolute pose from t and frame.`);
     const canCheck = worker.info.capabilities.includes('check-settings');
-    let denoiserWeights;
+    let denoiserWeights, directLightCandidates;
     if (canCheck || command === 'validate') {
       await worker.request('scene',{format:'descriptor-v8'},await frame(timeA,indexA));
       if (canCheck) {
         const index = command === 'still' ? indexA : first + Math.floor((last-first)/stride)*stride;
         const {header} = await worker.request('check',{t:command === 'still' ? time : index/fps,frame:index,settings});
         denoiserWeights = header.denoiserWeights ?? undefined;
+        directLightCandidates = header.directLightCandidates;
       } else if (settings.render || settings.display || settings.sampleSequence || settings.denoise === 'cleanAuxLarge') {
         throw new Error('Update the native CLI to validate the requested render settings.');
       }
     }
     if (command === 'validate') {
-      emit({event:'validated',module:file,pixelSamples:settings.size[0]*settings.size[1]*settings.spp*(last-first+1)});
+      emit({event:'validated',module:file,directLightCandidates,pixelSamples:settings.size[0]*settings.size[1]*settings.spp*(last-first+1)});
       return;
     }
     const render = async (descriptor, index, t) => {

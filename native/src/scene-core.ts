@@ -18,7 +18,7 @@ import {decodeCamera} from './camera-core.js';
 import {sceneErrorPacket} from './scene-errors.js';
 import {takeGeometryKernelHints, releaseGeometryKernelHints, geometryKernelBounds, encodeGeometryKernelHints, type GeometryKernelHint} from './geometry-kernel-hints.js';
 import {matrixStorage} from '../../src/math/storage.js';
-import {initialSceneConstants, sceneTraversalConstants, prepareSceneLightSampling, writeTraceLighting, packSceneAnalyticLights, writeTraceQuality, writeTraceSampling} from '../../src/renderer/sceneAssembly.js';
+import {initialSceneConstants, sceneTraversalConstants, autoDirectLightCandidates, prepareSceneLightSampling, writeTraceLighting, packSceneAnalyticLights, writeTraceQuality, writeTraceSampling} from '../../src/renderer/sceneAssembly.js';
 import {defaultSceneConfiguration, decodeSceneConfiguration} from './scene-configuration.js';
 import {nativeShaderVariant} from './shader-variants.js';
 import {displacementBaseGeometry, displacementPrismAabbs} from '../../src/renderer/displacementPreparation.js';
@@ -48,7 +48,7 @@ import { sceneCameraParameters } from './camera-core.js';
 import { InstanceState,
   EmissiveTriangleCache, estimateEnvironmentPower } from '../../src/renderer/lightCore.js';
 export * from '../../src/renderer/lightCore.js';
-import type { EmissiveTriangle } from '../../src/renderer/lightSampling.js';
+import { LightChoiceBuffer, type EmissiveTriangle } from '../../src/renderer/lightSampling.js';
 import type { AnalyticLightState } from '../../src/scene/lightState.js';
 import { meshInstancesLength, type MeshInstances } from '../../src/renderer/packedMeshInstances.js';
 import { prepareSceneMeshes, computeGeometryNormals, dirtyPreparedInstanceIndices, updateMeshInstanceTransforms, type PreparedMeshInstanceBinding } from '../../src/renderer/scenePreparation.js';
@@ -97,7 +97,7 @@ export function configureSceneParameters(bytes: Uint8Array, token: number): Uint
   } catch (error) { return sceneErrorPacket(ERROR_CODE.CONFIGURE, error);}
 }
 const retainedScenes = new Map<number, {source: MaterialState[]; ordered: MaterialState[]; table: MaterialData;
-  lights: AnalyticLightState[]; emissive: EmissiveTriangle[]; rt: ArrayBuffer;
+  lights: AnalyticLightState[]; emissive: EmissiveTriangle[]; rt: ArrayBuffer; autoCandidates: number;
   environmentWidth: number; environmentHeight: number; backgroundWidth: number; backgroundHeight: number;
   qualityFlags: number; environmentPower: number; meshes: MeshState[];
   textureIds: Map<TextureState, number>; nativeLayout: NativeLayout; hardware?: HardwareScene; prepared: PreparedScene; instances: MeshInstances; tlas: FlattendBVH; emissiveCache: EmissiveTriangleCache;
@@ -112,13 +112,13 @@ interface SceneShader {
 }
 /** Trace-uniform fields owned by one target: size, sampling and per-render quality. */
 function writeTargetTrace(views: ReturnType<typeof makeRayTraceUniform>['views'],
-  configuration: ReturnType<typeof defaultSceneConfiguration>, width: number, height: number, qualityFlags: number) {
+  configuration: ReturnType<typeof defaultSceneConfiguration>, width: number, height: number, qualityFlags: number, autoCandidates: number) {
   views.outputSize.set([width, height]); views.scaleOffset.set([1, 1, 0, 0]); views.jitter.set([0, 0]);
   writeTraceSampling(views, configuration.sampling);
   views.clamping[0] = configuration.clamping; views.transmissiveOutputAlphaMin[0] = configuration.transmissiveAlphaMin;
   views.sampleSequenceOffset[0] = configuration.sequenceOffset;
   writeTraceQuality(views, {bounces: configuration.bounces, bevel: !!(qualityFlags & 1), dispersionWavelengths: qualityFlags & 2 ? 3 : 1,
-    directLightCandidates: configuration.directLightCandidates});
+    directLightCandidates: configuration.directLightCandidates === -1 ? autoCandidates : configuration.directLightCandidates});
 }
 /** Production WGSL: the software shader, or the ray-query shader for hardware scenes. */
 function productionShader(id: number, shader: SceneShader): Uint8Array {
@@ -154,14 +154,14 @@ export function seedMaterialGraphFallbacks(previous:number,token:number):Uint8Ar
 type FloatGeometryPatch = {target: Float32Array; offset: number; data: Float32Array};
 type UintGeometryPatch = {target: Uint32Array; offset: number; data: Uint32Array};
 const pendingGeometry = new Map<number, {meshes: MeshState[]; bindings: PreparedMeshInstanceBinding[];
-  blases: BLASInstance[]; geometries: Geometry[]; emissive: EmissiveTriangle[]; rt: ArrayBuffer;
+  blases: BLASInstance[]; geometries: Geometry[]; emissive: EmissiveTriangle[]; rt: ArrayBuffer; autoCandidates: number;
   prepared: PreparedScene; instances: MeshInstances; tlas: FlattendBVH; floatPatches: FloatGeometryPatch[]; uintPatches: UintGeometryPatch[]}>();
 export function acceptSceneGeometry(token: number): Uint8Array {
   const state = retainedScenes.get(token), pending = pendingGeometry.get(token);
   if (!state) return new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
   if (!pending) return pendingTransforms.has(token) ? acceptSceneTransform(token) : new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
   state.meshes = pending.meshes; state.bindings = pending.bindings; state.blases = pending.blases;
-  state.geometries = pending.geometries; state.emissive = pending.emissive; state.rt = pending.rt;
+  state.geometries = pending.geometries; state.emissive = pending.emissive; state.rt = pending.rt; state.autoCandidates = pending.autoCandidates;
   for (const patch of pending.floatPatches) patch.target.set(patch.data, patch.offset);
   for (const patch of pending.uintPatches) patch.target.set(patch.data, patch.offset);
   state.prepared = pending.prepared; state.instances = pending.instances; state.tlas = pending.tlas;
@@ -173,7 +173,7 @@ type GeometryStage = {meshes: MeshState[]; prepared: PreparedScene; geometry: Ge
 const transformStages = new Map<number, TransformStage>();
 const geometryStages = new Map<number, GeometryStage>();
 const pendingTransforms = new Map<number, {meshes: MeshState[]; bindings: PreparedMeshInstanceBinding[];
-  emissive: EmissiveTriangle[]; rt: ArrayBuffer; instances: MeshInstances; tlas: FlattendBVH; prepared?: PreparedScene;
+  emissive: EmissiveTriangle[]; rt: ArrayBuffer; autoCandidates: number; instances: MeshInstances; tlas: FlattendBVH; prepared?: PreparedScene;
   blases?: BLASInstance[]; geometries?: Geometry[]; hardware?: HardwareScene; nativeLayout?: NativeLayout}>();
 type GeometryAppendStage = {meshes: MeshState[]; prepared: PreparedScene; bindings: PreparedMeshInstanceBinding[]; instances: MeshInstances;
   newMeshes: MeshState[]; inputGeometries: Geometry[]; blasBytes: Uint8Array; attributeBytes: Uint8Array; attributeOffset: number};
@@ -204,21 +204,21 @@ export function acceptSceneTransform(token: number): Uint8Array {
       const index = previousMeshIndices.get(b.mesh) ?? -1;
       return index < 0 || previousMeshes[index] === pending.meshes[index] ? b : {...b, mesh: pending.meshes[index]};
     });
-  state.emissive = pending.emissive; state.rt = pending.rt;
+  state.emissive = pending.emissive; state.rt = pending.rt; state.autoCandidates = pending.autoCandidates;
   retainedScenes.set(token, state); pendingTransforms.delete(token);
   return new Uint8Array(new Uint32Array([1, 0, 0, 0]).buffer);
 }
 // Pending light/environment candidates become authoritative only after the host
 // validates resource shapes and completes GPU writes. Rejected edits never alter
 // the inputs of a subsequent partial update.
-const pendingLighting = new Map<number, {lights: AnalyticLightState[]; rt: ArrayBuffer; environmentPower: number; lightTextures?: number[];
+const pendingLighting = new Map<number, {lights: AnalyticLightState[]; rt: ArrayBuffer; autoCandidates: number; environmentPower: number; lightTextures?: number[];
   materials?: {changes: Map<MaterialState, MaterialState>; emissive: EmissiveTriangle[]; bindings: PreparedScene['emissiveBindings']};
   maps?: {environmentWidth: number; environmentHeight: number; backgroundWidth: number; backgroundHeight: number};
   atlas?: {table: MaterialData; textureIds: Map<TextureState, number>}}>();
 export function acceptSceneLighting(token: number): Uint8Array {
   const state = retainedScenes.get(token), pending = pendingLighting.get(token);
   if (!state || !pending) return new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
-  state.lights = pending.lights; state.rt = pending.rt; state.environmentPower = pending.environmentPower;
+  state.lights = pending.lights; state.rt = pending.rt; state.autoCandidates = pending.autoCandidates; state.environmentPower = pending.environmentPower;
   const materials = pending.materials;
   if (materials) {
     for (const [target, source] of materials.changes) syncNativeMaterial(target, source);
@@ -260,7 +260,7 @@ export function sceneTargetParameters(bytes: Uint8Array, token: number): Uint8Ar
     const camera = sceneCameraParameters(bytes.subarray(settingsBytes + 8 * WORD_BYTES), width, height);
     const rt = makeRayTraceUniform();
     new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
-    writeTargetTrace(rt.views, configuration, width, height, qualityFlags);
+    writeTargetTrace(rt.views, configuration, width, height, qualityFlags, state.autoCandidates);
     const {constants} = state.shader;
     // Match WGPURayTracePass: deterministic source-over specializes only scenes
     // with blend coverage. The shared scene retains the stochastic base shader.
@@ -404,6 +404,7 @@ function sceneMaterialRecords(bytes: Uint8Array, token: number): Uint8Array {
     const rt = makeRayTraceUniform(); new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
     rt.views.sceneFeatureFlags[0] = wgpuSceneFeatureFlags(after);
     let emissive = state.emissive, bindings = state.prepared.emissiveBindings;
+    let autoCandidates = state.autoCandidates;
     if (emission) {
       bindings = state.prepared.instanceBindings.filter(binding => binding.materialIndices.some(index => {
         const material = ordered[index];
@@ -413,7 +414,8 @@ function sceneMaterialRecords(bytes: Uint8Array, token: number): Uint8Array {
       preparationMark('update.emissive.end');
   const lighting = prepareNativeLightSampling(state.lights, state.table, emissive, state.environmentPower);
   preparationMark('update.lighting.end');
-      packLightingUniform(rt, lighting);
+      autoCandidates = lighting.autoCandidates;
+      packLightingUniform(rt, lighting, token);
       records.push(resourceRecord(RESOURCE.LIGHT_UNIFORM, KIND.BUFFER, lighting.lightUniform.byteLength, 0, 0, 0, 0),
         resourceRecord(RESOURCE.LIGHT_SAMPLING, KIND.TEXTURE, lighting.lightData.byteLength, lighting.lightWidth, lighting.lightHeight, 1, FORMAT.RGBA32_FLOAT));
       parts.push(new Uint8Array(lighting.lightUniform.buffer), new Uint8Array(lighting.lightData.buffer));
@@ -425,7 +427,7 @@ function sceneMaterialRecords(bytes: Uint8Array, token: number): Uint8Array {
     }
     records.push(resourceRecord(RESOURCE.TRACE_UNIFORM, KIND.BUFFER, rt.buffer.byteLength, 0, 0, 0, 0));
     parts.push(new Uint8Array(rt.buffer));
-    pendingLighting.set(token, {lights: state.lights, rt: rt.buffer, environmentPower: state.environmentPower,
+    pendingLighting.set(token, {lights: state.lights, rt: rt.buffer, autoCandidates, environmentPower: state.environmentPower,
       materials: {changes, emissive, bindings}});
     return updatePacket(records, parts);
   } catch (error) { return sceneErrorPacket(ERROR_CODE.RETAINED_SCENE, error); }
@@ -712,7 +714,7 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   rt.views.isEmpty[0] = Number(meshInstancesLength(prepared.instances) === 0); rt.views.bevel[0] = Number(!!(qualityFlags & 1));
   rt.views.dispersionWavelengths[0] = qualityFlags & 2 ? 3 : 1;
   writeTraceLighting(rt.views, lighting);
-  writeTargetTrace(rt.views, configuration, width, height, qualityFlags);
+  writeTargetTrace(rt.views, configuration, width, height, qualityFlags, lighting.autoCandidates);
   rt.views.sceneFeatureFlags[0] = wgpuSceneFeatureFlags(constants);
   // Output packet: version, count, width, height, then 8-word resource descriptors
   // (id, kind[0=buffer,1=texture,2=WGSL,3=metadata], length, width,height,layers,format,offset).
@@ -813,7 +815,7 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
     add(RESOURCE.DISPLACEMENT_BOUNDS, KIND.METADATA, new Uint8Array(hardware.bounds.buffer), 0, 0, 0, 0);
   }
   if (token) retainedScenes.set(token, {source: materials, ordered: prepared.materials, table, lights, emissive,
-    rt: rt.buffer, environmentWidth: environment?.width ?? 0, environmentHeight: environment?.height ?? 0,
+    rt: rt.buffer, autoCandidates: lighting.autoCandidates, environmentWidth: environment?.width ?? 0, environmentHeight: environment?.height ?? 0,
     backgroundWidth: background?.width ?? 0, backgroundHeight: background?.height ?? 0, qualityFlags, environmentPower: estimateEnvironmentPower(environment),
     textureIds: input.textureIds, nativeLayout, hardware, prepared, instances: prepared.instances, tlas, emissiveCache, meshes, bindings: prepared.instanceBindings, blases, geometries, tlasStack: Number(constants.TLAS_STACK_SIZE), blasStack: Number(constants.BLAS_STACK_SIZE),
     shader: sceneShader, bvhCapacityBytes, attributeCapacityBytes: attributeCapacityWords * WORD_BYTES, instanceCapacity});
@@ -960,12 +962,13 @@ function resourcePacket(records: number[][], parts: Uint8Array[], width: number,
 }
 
 function prepareNativeLightSampling(lights: AnalyticLightState[], table: MaterialData, emissive: EmissiveTriangle[], environmentPower: number) {
-  const lighting = prepareSceneLightSampling(lights, emissive, environmentPower, 4096);
+  const choices = new LightChoiceBuffer();
+  const lighting = prepareSceneLightSampling(lights, emissive, environmentPower, 4096, choices);
   // Reserve 64 lights so adding or removing lights below that count keeps the
   // resource size and stays an incremental light-list update.
   const lightUniform = new Float32Array(Math.max(64, lights.length) * 24);
   lightUniform.set(packSceneAnalyticLights(lights, table.lightTexturesIndices, lighting.analyticPmfs, i => lighting.profiles.offsets[i]));
-  return {...lighting, lightUniform};
+  return {...lighting, lightUniform, autoCandidates: autoDirectLightCandidates(lights, choices)};
 }
 
 // Incremental writes carry destination byte offsets independently of payload
@@ -994,7 +997,7 @@ function incrementalInstanceWrites(stage: TransformStage, dirty: ReadonlySet<num
   const records: number[][] = [], parts: Uint8Array[] = [], destinations: number[] = [];
   // With every instance hidden there is no valid TLAS root (Software keeps zero
   // padding, which a refit walk would treat as a cyclic node); nothing to upload.
-  if (!meshInstancesLength(stage.instances)) return {records, parts, destinations, tlas: state.tlas, emissive: state.emissive, rt: state.rt};
+  if (!meshInstancesLength(stage.instances)) return {records, parts, destinations, tlas: state.tlas, emissive: state.emissive, rt: state.rt, autoCandidates: state.autoCandidates};
   // Only the small instance/TLAS candidate is copied; immutable BLAS and vertex
   // allocations are retained. Uploads below contain dirty records and ancestors.
   const tlas = copyTLASForRefit(state.tlas);
@@ -1007,7 +1010,7 @@ function incrementalInstanceWrites(stage: TransformStage, dirty: ReadonlySet<num
       records.push(resourceRecord(id, KIND.BUFFER, span.size, 0, 0, 0, 0)); parts.push(new Uint8Array(buffer.slice(span.offset, span.offset + span.size))); destinations.push(span.offset);
     }
   }
-  let emissive = state.emissive, rt = state.rt;
+  let emissive = state.emissive, rt = state.rt, autoCandidates = state.autoCandidates;
   const changed = new Set<MeshState>();
   for (let i = 0; i < state.meshes.length; i++) if (state.meshes[i] !== stage.meshes[i]) changed.add(state.meshes[i]);
   if (state.prepared.emissiveBindings.some(b => changed.has(b.mesh))) {
@@ -1019,7 +1022,7 @@ function incrementalInstanceWrites(stage: TransformStage, dirty: ReadonlySet<num
   const lighting = prepareNativeLightSampling(state.lights, state.table, emissive, state.environmentPower);
   preparationMark('update.lighting.end');
     const uniform = makeRayTraceUniform(); new Uint8Array(uniform.buffer).set(new Uint8Array(state.rt));
-    writeTraceLighting(uniform.views, lighting); rt = uniform.buffer;
+    packLightingUniform(uniform, lighting, token); rt = uniform.buffer; autoCandidates = lighting.autoCandidates;
     for (const [id, kind, data, width, height, format] of [
       [RESOURCE.TRACE_UNIFORM, KIND.BUFFER, new Uint8Array(rt), 0, 0, 0],
       [RESOURCE.LIGHT_UNIFORM, KIND.BUFFER, new Uint8Array(lighting.lightUniform.buffer), 0, 0, 0],
@@ -1027,12 +1030,12 @@ function incrementalInstanceWrites(stage: TransformStage, dirty: ReadonlySet<num
       records.push(resourceRecord(id, kind, data.byteLength, width, height, 1, format)); parts.push(data); destinations.push(0);
     }
   }
-  return {records, parts, destinations, tlas, emissive, rt};
+  return {records, parts, destinations, tlas, emissive, rt, autoCandidates};
 }
 function incrementalTransform(stage: TransformStage, dirty: ReadonlySet<number>, token: number): Uint8Array {
   const writes = incrementalInstanceWrites(stage, dirty, token);
   pendingTransforms.set(token, {meshes: stage.meshes, bindings: stage.bindings, instances: stage.instances,
-    tlas: writes.tlas, emissive: writes.emissive, rt: writes.rt});
+    tlas: writes.tlas, emissive: writes.emissive, rt: writes.rt, autoCandidates: writes.autoCandidates});
   return updatePacket(writes.records, writes.parts, writes.destinations);
 }
 
@@ -1062,8 +1065,8 @@ export function sceneEnvironmentParameters(bytes: Uint8Array, token: number): Ui
   writeEnvironmentSettings(rt, settings);
   if (u[0] === 3) writeGroundedSettings(rt, f.slice(16, 22));
   if (!background && !u[3]) rt.views.backgroundColor.set(f.slice(4, 8));
-  packLightingUniform(rt, lighting);
-  pendingLighting.set(token, {lights: state.lights, rt: rt.buffer, environmentPower,
+  packLightingUniform(rt, lighting, token);
+  pendingLighting.set(token, {lights: state.lights, rt: rt.buffer, autoCandidates: lighting.autoCandidates, environmentPower,
     maps: {environmentWidth: u[1], environmentHeight: u[2], backgroundWidth: u[8], backgroundHeight: u[9]}});
   const parts: Uint8Array[] = [], records: number[][] = [];
   function add(id: number, kind: number, data: Uint8Array, width: number, height: number, format: number) {
@@ -1078,7 +1081,8 @@ export function sceneEnvironmentParameters(bytes: Uint8Array, token: number): Ui
   return updatePacket(records, parts);
 }
 
-function packLightingUniform(rt: ReturnType<typeof makeRayTraceUniform>, lighting: Parameters<typeof writeTraceLighting>[1]) {
+function packLightingUniform(rt: ReturnType<typeof makeRayTraceUniform>, lighting: ReturnType<typeof prepareNativeLightSampling>, token: number) {
+  if (sceneConfigurations.get(token)?.directLightCandidates === -1) rt.views.directLightCandidates[0] = lighting.autoCandidates;
   writeTraceLighting(rt.views, lighting);
 }
 // Version1,index,reserved[2], followed by Light[32]. Attachments remain committed.
@@ -1095,8 +1099,8 @@ export function sceneLightParameters(bytes: Uint8Array, token: number): Uint8Arr
   const lights = state.lights.slice(); lights[u[1]] = light;
   const lighting = prepareNativeLightSampling(lights, state.table, state.emissive, state.environmentPower);
   const rt = makeRayTraceUniform(); new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
-  packLightingUniform(rt, lighting);
-  pendingLighting.set(token, {lights, rt: rt.buffer, environmentPower: state.environmentPower});
+  packLightingUniform(rt, lighting, token);
+  pendingLighting.set(token, {lights, rt: rt.buffer, autoCandidates: lighting.autoCandidates, environmentPower: state.environmentPower});
   return updatePacket([
     [7, 0, rt.buffer.byteLength, 0, 0, 0, 0, 0],
     [8, 0, lighting.lightUniform.byteLength, 0, 0, 0, 0, 0],
@@ -1130,8 +1134,8 @@ export function sceneLightListParameters(bytes: Uint8Array, token: number): Uint
     table.lightTexturesIndices = committedTextures;
     const rt = makeRayTraceUniform(); new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
     rt.views.lightsCount[0] = lights.length;
-    packLightingUniform(rt, lighting);
-    pendingLighting.set(token, {lights, rt: rt.buffer, environmentPower: state.environmentPower, lightTextures});
+    packLightingUniform(rt, lighting, token);
+    pendingLighting.set(token, {lights, rt: rt.buffer, autoCandidates: lighting.autoCandidates, environmentPower: state.environmentPower, lightTextures});
     return updatePacket([
       [7, 0, rt.buffer.byteLength, 0, 0, 0, 0, 0],
       [8, 0, lighting.lightUniform.byteLength, 0, 0, 0, 0, 0],
@@ -1352,8 +1356,8 @@ export function sceneAtlasParameters(bytes: Uint8Array, token: number): Uint8Arr
     }
     const lighting = prepareNativeLightSampling(state.lights, table, state.emissive, state.environmentPower);
     const rt = makeRayTraceUniform(); new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
-    packLightingUniform(rt, lighting);
-    pendingLighting.set(token, {lights: state.lights, rt: rt.buffer, environmentPower: state.environmentPower, atlas: {table, textureIds}});
+    packLightingUniform(rt, lighting, token);
+    pendingLighting.set(token, {lights: state.lights, rt: rt.buffer, autoCandidates: lighting.autoCandidates, environmentPower: state.environmentPower, atlas: {table, textureIds}});
     const records: number[][] = [], parts: Uint8Array[] = [], destinations: number[] = [];
     function add(id: number, kind: number, data: Uint8Array, width: number, height: number, format: number, destination: number) {
       records.push(resourceRecord(id, kind, data.length, width, height, kind === KIND.TEXTURE ? 1 : 0, format)); parts.push(data); destinations.push(destination);
@@ -1429,8 +1433,8 @@ function packTransformUpdate(stage: TransformStage, tlas: FlattendBVH, token: nu
   const rt = makeRayTraceUniform(); new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
   rt.views.blasOffset[0] = tlas.buffer.byteLength / 16;
   rt.views.isEmpty[0] = Number(meshInstancesLength(instances) === 0);
-  packLightingUniform(rt, lighting);
-  pendingTransforms.set(token, {meshes, bindings, instances, tlas, emissive, rt: rt.buffer, prepared: stage.prepared});
+  packLightingUniform(rt, lighting, token);
+  pendingTransforms.set(token, {meshes, bindings, instances, tlas, emissive, rt: rt.buffer, autoCandidates: lighting.autoCandidates, prepared: stage.prepared});
   const instanceBytes = new Uint8Array(tlas.instancesBuffer!);
   const paddedInstanceBytes = new Uint8Array(Math.max(instanceBytes.byteLength, state.instanceCapacity * 160));
   paddedInstanceBytes.set(instanceBytes);
@@ -1581,7 +1585,7 @@ function prepareGeometryUpdate(bytes: Uint8Array, token: number, native: boolean
   }
   const sourceGeometries = state.geometries.slice(); sourceGeometries[words[1]] = geometry;
   pendingGeometry.set(token, {meshes, bindings, blases, geometries: sourceGeometries, prepared, instances,
-    tlas: writes.tlas, emissive: writes.emissive, rt: writes.rt, floatPatches, uintPatches});
+    tlas: writes.tlas, emissive: writes.emissive, rt: writes.rt, autoCandidates: writes.autoCandidates, floatPatches, uintPatches});
   return updatePacket(writes.records, writes.parts, writes.destinations);
 }
 
@@ -1680,9 +1684,9 @@ function packGeometryUpdate(stage: GeometryStage, tlas: FlattendBVH, token: numb
   preparationMark('update.lighting.end');
   const rt = makeRayTraceUniform(); new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
   rt.views.blasOffset[0] = tlas.buffer.byteLength / 16; rt.views.isEmpty[0] = Number(meshInstancesLength(instances) === 0);
-  packLightingUniform(rt, lighting);
+  packLightingUniform(rt, lighting, token);
   const geometries = state.geometries.slice(); geometries[sourceIndex] = geometry;
-  pendingGeometry.set(token, {meshes, bindings: prepared.instanceBindings, blases: prepared.blases, geometries, emissive, rt: rt.buffer, prepared, instances, tlas, floatPatches: [], uintPatches: []});
+  pendingGeometry.set(token, {meshes, bindings: prepared.instanceBindings, blases: prepared.blases, geometries, emissive, rt: rt.buffer, autoCandidates: lighting.autoCandidates, prepared, instances, tlas, floatPatches: [], uintPatches: []});
   const metadata = nativeLayoutBytes(state.nativeLayout, rt.views.blasOffset[0], rt.views.isEmpty[0] !== 0, meshInstancesLength(instances));
   return updatePacket([
     [1,0,bvh.byteLength,0,0,0,0,0], [2,0,packedInstances.byteLength,0,0,0,0,0], [3,0,attributes.byteLength,0,0,0,0,0],
@@ -1882,7 +1886,7 @@ function prepareNativeHardwareAppend(state: NonNullable<ReturnType<typeof retain
   const lighting = prepareNativeLightSampling(state.lights, state.table, emissive, state.environmentPower);
   preparationMark('update.lighting.end');
   const rt = makeRayTraceUniform(); new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
-  rt.views.isEmpty[0] = Number(instanceCount === 0); packLightingUniform(rt, lighting);
+  rt.views.isEmpty[0] = Number(instanceCount === 0); packLightingUniform(rt, lighting, token);
   preparationMark('append.lighting.end');
   phase = 'nativeLayoutBytes';
   const metadata = nativeLayoutBytes(nativeLayout, nativeLayout.blasOffset, rt.views.isEmpty[0] !== 0, instanceCount);
@@ -1905,7 +1909,7 @@ function prepareNativeHardwareAppend(state: NonNullable<ReturnType<typeof retain
   const destinations = [0, 0, 0, 0, 0, oldVertexCount * layout.stride * WORD_BYTES, oldIndexCount * WORD_BYTES, 0];
   phase = 'pendingTransforms';
   pendingTransforms.set(token, {meshes: allMeshes, bindings: prepared.instanceBindings, instances, tlas,
-    emissive, rt: rt.buffer, prepared, blases: prepared.blases, hardware, nativeLayout,
+    emissive, rt: rt.buffer, autoCandidates: lighting.autoCandidates, prepared, blases: prepared.blases, hardware, nativeLayout,
     geometries: state.geometries.concat(inputGeometries.slice(state.geometries.length))});
   phase = 'updatePacket';
   return updatePacket(records, parts, destinations);

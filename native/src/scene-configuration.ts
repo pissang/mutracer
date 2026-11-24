@@ -19,7 +19,9 @@ export function decodeSceneConfiguration(bytes: Uint8Array) {
   const requestedTextureBudget = f[S.TEXTURE_BUDGET_BYTES / 2];
   const textureBudgetBytes = requestedTextureBudget === 0 ? defaultSceneConfiguration().textureBudgetBytes : requestedTextureBudget;
   if (!Number.isSafeInteger(textureBudgetBytes) || textureBudgetBytes < 1024 * 1024 || textureBudgetBytes >= 2 ** 32) throw new Error('Invalid material texture budget');
-  return {textureBudgetBytes, textureDimension: u[S.TEXTURE_DIMENSION] || 16384, textureBindings: u[S.TEXTURE_BINDINGS], bounces: normalizeBounces(f[S.BOUNCES / 2]), directLightCandidates: normalizeDirectLightCandidates(f[S.DIRECT_LIGHT_CANDIDATES / 2]),
+  // The private wire uses -1 for auto. Every unsigned SDK count keeps its usual clamp.
+  const candidates = f[S.DIRECT_LIGHT_CANDIDATES / 2];
+  return {textureBudgetBytes, textureDimension: u[S.TEXTURE_DIMENSION] || 16384, textureBindings: u[S.TEXTURE_BINDINGS], bounces: normalizeBounces(f[S.BOUNCES / 2]), directLightCandidates: candidates === -1 ? -1 : normalizeDirectLightCandidates(candidates),
     bevelSamples: normalizeBevelSamples(f[S.BEVEL_SAMPLES / 2]), clamping: f[S.CLAMPING / 2], transmissiveAlphaMin: f[S.TRANSMISSIVE_ALPHA_MIN / 2],
     causticFlags:u[S.CAUSTIC_FLAGS],lightPhotons:u[S.LIGHT_PHOTONS],photonMapPhotons:u[S.PHOTON_MAP_PHOTONS],photonMapRadius:new Float32Array(bytes.buffer,bytes.byteOffset+S.PHOTON_MAP_RADIUS*4,1)[0],sequenceOffset: u[S.SEQUENCE_OFFSET], sampling: traceSampling(pattern, u[S.MAX_SAMPLES], u[S.SEED]), variants: u[S.VARIANTS]};
 }

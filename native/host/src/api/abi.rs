@@ -1564,6 +1564,37 @@ pub unsafe extern "C" fn mt_render_get_options(
     })
 }
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_render_set_auto_direct_light_candidates(
+    handle: u64,
+    enabled: u32,
+    error_out: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    call(error_out, capacity, || {
+        if enabled > 1 {
+            return Err(invalid("auto direct-light candidates must be 0 or 1"));
+        }
+        render_of(handle)?.set_auto_direct_light_candidates(enabled != 0)
+    })
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_render_get_auto_direct_light_candidates(
+    handle: u64,
+    output: *mut u32,
+    error_out: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    call(error_out, capacity, || {
+        if output.is_null() {
+            return Err(invalid("Missing auto direct-light candidates output"));
+        }
+        unsafe {
+            *output = u32::from(render_of(handle)?.auto_direct_light_candidates()?);
+        }
+        Ok(())
+    })
+}
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_render_set_fallback(
     handle: u64,
     fallback: u64,

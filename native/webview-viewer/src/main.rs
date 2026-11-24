@@ -463,13 +463,15 @@ impl Host {
             })
             .collect::<Result<Vec<_>>>()?;
         let display = wire::display(&v["display"])?;
-        for (id, settings) in parsed {
+        for (id, (settings, auto_candidates)) in parsed {
             if let Some(target) = self.targets.get(&id) {
                 if self.target_configs.get(&id) != configs.iter().find(|c| c["id"] == id) {
                     target.set_settings(settings)?;
+                    target.set_auto_direct_light_candidates(auto_candidates)?;
                 }
             } else {
                 let target = Arc::new(api::Render::new(&self.engine, settings)?);
+                target.set_auto_direct_light_candidates(auto_candidates)?;
                 let events = self.events.clone();
                 let subscription=target.on_sample(move|event|events.lock().unwrap().push(json!({"event":"sample","value":{"target":id,"samples":event.samples,"isFirstFrame":event.is_first_frame,"frameTimeMs":event.frame_time_ms}})));
                 self.sample_subscriptions.insert(id, subscription);

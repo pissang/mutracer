@@ -13,12 +13,39 @@ pub struct RenderOptions {
     caustics: Option<Caustics>,
     clamping: Option<f64>,
     sampling_pattern: Option<Sampling>,
-    direct_light_candidates: Option<u32>,
+    #[serde(deserialize_with = "DirectLightCandidates::provided")]
+    direct_light_candidates: Option<DirectLightCandidates>,
     dispersion_wavelengths: Option<u32>,
     bevel: Option<bool>,
     bevel_samples: Option<u32>,
     alpha_blend_strategy: Option<AlphaBlend>,
     transmissive_output_alpha_min: Option<f64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DirectLightCandidates {
+    Auto,
+    #[serde(untagged)]
+    Count(u32),
+}
+
+impl DirectLightCandidates {
+    fn provided<'de, D: serde::Deserializer<'de>>(
+        de: D,
+    ) -> std::result::Result<Option<Self>, D::Error> {
+        let value = serde_json::Value::deserialize(de)?;
+        if value == "auto" {
+            return Ok(Some(Self::Auto));
+        }
+        value
+            .as_u64()
+            .and_then(|n| u32::try_from(n).ok())
+            .map(|n| Some(Self::Count(n)))
+            .ok_or_else(|| {
+                serde::de::Error::custom("expected an integer from 1 to 16 or the string \"auto\"")
+            })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -47,6 +74,11 @@ enum AlphaBlend {
 }
 
 impl RenderOptions {
+    pub fn direct_light_candidates(self) -> DirectLightCandidates {
+        self.direct_light_candidates
+            .unwrap_or(DirectLightCandidates::Auto)
+    }
+
     pub fn has_caustic_transport(self) -> bool {
         self.caustics.is_some_and(|caustics| {
             caustics.light_tracing.unwrap_or(false) || caustics.photon_mapping.unwrap_or(false)
@@ -71,9 +103,9 @@ impl RenderOptions {
             Some(Sampling::Random) => api::SamplingPattern::Random,
             None => sdk.sampling_pattern,
         };
-        sdk.direct_light_candidates = self
-            .direct_light_candidates
-            .unwrap_or(sdk.direct_light_candidates);
+        if let Some(DirectLightCandidates::Count(count)) = self.direct_light_candidates {
+            sdk.direct_light_candidates = count;
+        }
         sdk.dispersion_wavelengths = self
             .dispersion_wavelengths
             .unwrap_or(sdk.dispersion_wavelengths);
@@ -118,7 +150,7 @@ impl RenderOptions {
         range(
             "directLightCandidates",
             (1..=16).contains(&sdk.direct_light_candidates),
-            "Use an integer from 1 to 16.",
+            "Use an integer from 1 to 16 or the string \"auto\".",
         )?;
         range(
             "dispersionWavelengths",
@@ -276,6 +308,46 @@ mod tests {
                 .as_deref(),
             Some("/settings/render/bounces")
         );
+    }
+
+    #[test]
+    fn direct_light_candidates_accepts_only_auto_or_supported_integers() {
+        use serde_json::{from_value, json, to_value};
+        assert_eq!(
+            RenderOptions::default().direct_light_candidates(),
+            DirectLightCandidates::Auto
+        );
+        for value in [json!("auto"), json!(1), json!(16)] {
+            let request: RenderOptions =
+                from_value(json!({"directLightCandidates":value})).unwrap();
+            request.check("/settings/render").unwrap();
+            assert_eq!(to_value(request.direct_light_candidates()).unwrap(), value);
+        }
+        for value in [json!(0), json!(17)] {
+            let request: RenderOptions =
+                from_value(json!({"directLightCandidates":value})).unwrap();
+            assert_eq!(
+                request
+                    .check("/settings/render")
+                    .unwrap_err()
+                    .pointer
+                    .as_deref(),
+                Some("/settings/render/directLightCandidates")
+            );
+        }
+        for value in [
+            json!("AUTO"),
+            json!("8"),
+            json!(null),
+            json!(false),
+            json!({"auto": null}),
+            json!(1.5),
+            json!(-1),
+        ] {
+            let error =
+                from_value::<RenderOptions>(json!({"directLightCandidates":value})).unwrap_err();
+            assert!(error.to_string().contains("1 to 16"), "{error}");
+        }
     }
 
     #[test]

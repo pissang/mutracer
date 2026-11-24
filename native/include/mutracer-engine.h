@@ -395,7 +395,7 @@ typedef struct mt_render_options {
    * light-to-camera paths can be longer than this depth. */
   uint32_t bounces;
   uint32_t sampling_pattern; /* mt_sampling_pattern. Default MT_SAMPLING_SOBOL. */
-  uint32_t direct_light_candidates; /* Clamped to 1..16. Default 4. */
+  uint32_t direct_light_candidates; /* Fixed count, clamped to 1..16. Default 4. See mt_render_set_auto_direct_light_candidates. */
   uint32_t bevel; /* Rounded material edges. Default 1. */
   uint32_t bevel_samples; /* Clamped to 1..32. Default 8. */
   uint32_t dispersion_wavelengths; /* 1 or 3. Default 3. */
@@ -446,6 +446,12 @@ int32_t mt_render_create(mt_engine engine, const mt_render_options *options, mt_
 int32_t mt_render_destroy(mt_render render, char *error, size_t capacity);
 int32_t mt_render_set_options(mt_render render, const mt_render_options *options, char *error, size_t capacity);
 int32_t mt_render_get_options(mt_render render, mt_render_options *output, char *error, size_t capacity);
+/* 1 selects 1, 4 or 8 candidates from the sampled lights after each lighting edit.
+ * 0 (default) uses direct_light_candidates. Applies at the next update or render.
+ * The mode persists across mt_render_set_options. Other values return MT_ERROR_INVALID_ARGUMENT. */
+int32_t mt_render_set_auto_direct_light_candidates(mt_render render, uint32_t enabled, char *error, size_t capacity);
+/* Writes the current mode (0 or 1) to output, which must be non-NULL. */
+int32_t mt_render_get_auto_direct_light_candidates(mt_render render, uint32_t *output, char *error, size_t capacity);
 /* Presents fallback (0 for none) until this render has a complete image. One
  * level only, on the same engine. Default none. */
 int32_t mt_render_set_fallback(mt_render render, mt_render fallback, char *error, size_t capacity);

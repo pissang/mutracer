@@ -1205,7 +1205,7 @@ fn commit_inner(
                 );
             }
             cancelled(&cancel)?;
-            if settings.caustic_flags != 0 && target.is_some() {
+            if settings.caustic_flags & 6 != 0 && target.is_some() {
                 let word =
                     |i: usize| u32::from_le_bytes(bytes[i * 4..i * 4 + 4].try_into().unwrap());
                 let size = [word(layout::header::WIDTH), word(layout::header::HEIGHT)];

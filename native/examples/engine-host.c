@@ -202,6 +202,14 @@ int main(int argc, char **argv) {
   options.dispersion_wavelengths = (header->quality_flags & MT_QUALITY_DISPERSION) ? 3 : 1;
   mt_render render;
   OK(mt_render_create(engine, &options, &render, error, sizeof error));
+  uint32_t auto_candidates;
+  OK(mt_render_get_auto_direct_light_candidates(render, &auto_candidates, error, sizeof error));
+  REQUIRE(auto_candidates == 0, "fixed candidate default");
+  OK(mt_render_set_auto_direct_light_candidates(render, 1, error, sizeof error));
+  STATUS(mt_render_set_auto_direct_light_candidates(render, 2, error, sizeof error), MT_ERROR_INVALID_ARGUMENT);
+  OK(mt_render_get_auto_direct_light_candidates(render, &auto_candidates, error, sizeof error));
+  REQUIRE(auto_candidates == 1, "automatic candidates survive rejected mode");
+  OK(mt_render_set_auto_direct_light_candidates(render, 0, error, sizeof error));
   mt_render_options read_back = {.struct_size = sizeof read_back};
   OK(mt_render_get_options(render, &read_back, error, sizeof error));
   REQUIRE(read_back.max_samples == options.max_samples && read_back.bounces == options.bounces
