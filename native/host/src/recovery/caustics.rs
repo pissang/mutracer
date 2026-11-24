@@ -197,7 +197,7 @@ impl CausticCheckpoint {
 // Concurrent splats and photon gathers can differ in the last few bits of RGB.
 // Require bit-exact guides, sample counts and coverage, including hidden light
 // and pre-compose sums. Reject material disagreement instead of publishing one
-// of two plausible images. This comparison is used only after an explicit error.
+// of two plausible images. Compare only after a failed flight has been restored and replayed.
 fn verify_replay(
     reference: Vec<wgpu::Buffer>,
     actual: Vec<wgpu::Buffer>,

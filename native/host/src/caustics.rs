@@ -81,10 +81,43 @@ impl RadiusScaling {
         (radius * (f64::from(photons.max(1)) / 262144.).powf(exponent)) as f32
     }
 }
+pub(super) struct QueryCheck {
+    resources: Arc<query_guard::Resources>,
+    pub flag: wgpu::Buffer,
+}
+impl QueryCheck {
+    pub(super) fn for_scene(scene: &GpuScene) -> Result<Option<Self>> {
+        let gpu = &scene.gpu;
+        if !gpu.queue.observed.available()
+            || !query_guard::enabled(gpu, scene.hwrt_shader, &scene.scene)
+        {
+            return Ok(None);
+        }
+        let resources = match &scene.query_guard {
+            Some(guard) => guard.resources.clone(),
+            None => Arc::new(query_guard::Resources::new(gpu)?),
+        };
+        let flag = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Caustic flight query status"),
+            size: 4,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        Ok(Some(Self { resources, flag }))
+    }
+
+    pub(super) fn entries(&self) -> [wgpu::BindGroupEntry<'_>; 2] {
+        self.resources.canary_entries(&self.flag)
+    }
+}
+
 pub(crate) struct State {
     pub(crate) material_graphs: Vec<crate::api::MaterialGraphDiagnostic>,
     pub textures: wgpu::BindGroup,
     emission_textures: wgpu::BindGroup,
+    pub(super) query_check: Option<QueryCheck>,
     pub pt_color: Option<wgpu::Buffer>,
     light: Option<Light>,
     photons: Option<Photons>,
@@ -214,7 +247,8 @@ fn emitter(
     photon_texture: Option<&wgpu::Texture>,
     photon_directions: Option<&wgpu::Texture>,
     count: u32,
-) -> Emission {
+    guard: Option<&QueryCheck>,
+) -> Result<Emission> {
     let device = &gpu.device;
     let mut layout_entries = vec![
         wgpu::BindGroupLayoutEntry {
@@ -264,6 +298,12 @@ fn emitter(
             count: None,
         });
     }
+    if guard.is_some() {
+        layout_entries.extend(query_guard::layout_entries(
+            #[cfg(test)]
+            false,
+        ));
+    }
     let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("Caustic emission"),
         entries: &layout_entries,
@@ -278,6 +318,13 @@ fn emitter(
         ],
         ..Default::default()
     });
+    let guarded;
+    let source = if guard.is_some() {
+        guarded = query_guard::instrument_caustic(source, true)?;
+        &guarded
+    } else {
+        source
+    };
     let pipeline = pipeline(device, source, "main", Some(&full));
     let uniform = buffer(device, 112, true);
     let photon_view = photon_texture.map(|t| t.create_view(&Default::default()));
@@ -307,17 +354,20 @@ fn emitter(
             resource: wgpu::BindingResource::TextureView(view),
         });
     }
+    if let Some(guard) = guard {
+        entries.extend(guard.entries());
+    }
     let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("Caustic emission"),
         layout: &layout,
         entries: &entries,
     });
-    Emission {
+    Ok(Emission {
         pipeline,
         group,
         uniform,
         count,
-    }
+    })
 }
 fn emit(
     gpu: &GpuDevice,
@@ -383,6 +433,7 @@ impl State {
         samplers: &HashMap<usize, wgpu::Sampler>,
         target_buffers: &HashMap<usize, wgpu::Buffer>,
         size: [u32; 2],
+        query_check: Option<QueryCheck>,
     ) -> Result<Self> {
         #[cfg(test)]
         if let Ok(out) = std::env::var("MUTRACER_CAUSTICS_EVIDENCE") {
@@ -569,7 +620,8 @@ impl State {
                     Some(&data),
                     Some(&headers),
                     n,
-                ),
+                    query_check.as_ref(),
+                )?,
                 buckets,
                 grid,
                 uniform,
@@ -692,7 +744,8 @@ impl State {
                     None,
                     None,
                     m.light_photons.min(4_194_240),
-                ),
+                    query_check.as_ref(),
+                )?,
                 splats,
                 accumulation,
                 resolve,
@@ -708,6 +761,7 @@ impl State {
             textures: texture_group,
             emission_textures,
             pt_color,
+            query_check,
             light,
             photons,
             template: packet.uniform,

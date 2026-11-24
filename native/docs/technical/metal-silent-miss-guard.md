@@ -76,8 +76,12 @@ fragment stage avoids the related Hang but was rejected for the product.
 - A window shorter than the interval between workgroup checks can pass
   undetected. Injected windows that escaped changed at most a few dozen pixels
   in a single sample.
-- Caustics targets have separate flight checkpoints for explicit errors only.
-  Surface AOV/depth/picking passes, frame-input producers and
+- On observed Metal queues, caustic targets share the triangle across the
+  beauty and photon emission pipelines. Each checks at both ends of every
+  workgroup. A target-local flag covers the entire flight and is read before
+  crediting its samples. A detected miss or recoverable execution error uses
+  the caustic flight checkpoint. Both independent replays also check the flag.
+- Surface AOV/depth/picking passes, frame-input producers and
   host queues that the SDK does not observe have no checkpoint replay. A
   detected miss on an unobserved queue returns an error.
 

@@ -423,3 +423,63 @@ fn partial_caustic_flights_match_clean_hdr_and_guides() {
         assert!(!render.converged());
     }
 }
+
+#[test]
+#[cfg(target_os = "macos")]
+#[ignore = "requires a real Metal GPU"]
+fn repeated_caustic_flights_preserve_hdr() {
+    let (scene, camera) = caustic_plane();
+    let engine = Engine::new(EngineOptions {
+        backend: Backend::Hardware,
+    })
+    .unwrap();
+    engine.set_scene_object(&scene).unwrap();
+    engine.set_camera(Some(camera)).unwrap();
+    engine.update().unwrap();
+    for (light_tracing, photon_mapping) in [(true, false), (false, true), (true, true)] {
+        let render = Render::new(
+            &engine,
+            RenderSettings {
+                size: RenderSize::Fixed {
+                    width: 64,
+                    height: 48,
+                },
+                bounces: 8,
+                max_samples: 8,
+                caustics: CausticSettings {
+                    light_tracing,
+                    photon_mapping,
+                    light_photons: 16384,
+                    photon_map_photons: 16384,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let capture = || {
+            let mut options = ConvergeOptions::new(8);
+            options.samples_per_batch = 4;
+            options.sample_sequence_offset = 17;
+            render.converge(options).unwrap();
+            render.read_pixels(PixelKind::Hdr).unwrap().data
+        };
+        let reference = capture();
+        for iteration in 0..64 {
+            for (pixel, (actual, expected)) in capture()
+                .chunks_exact(4)
+                .zip(reference.chunks_exact(4))
+                .enumerate()
+            {
+                assert_eq!(actual[3], expected[3]);
+                assert!(
+                    actual[..3]
+                        .iter()
+                        .zip(expected)
+                        .all(|(a, b)| (a - b).abs() < 1e-5),
+                    "LT={light_tracing} PM={photon_mapping} iteration={iteration} pixel={pixel}: {actual:?} vs {expected:?}"
+                );
+            }
+        }
+    }
+}

@@ -1486,16 +1486,32 @@ impl GpuScene {
         let workgroup_size = caustic_packet
             .as_ref()
             .map_or(8, |p| p.metadata.workgroup_size);
-        let target_scene = caustic_packet
+        let caustic_guard = match &caustic_packet {
+            Some(_) => caustics::QueryCheck::for_scene(self)?,
+            None => None,
+        };
+        let mut target_scene = caustic_packet
             .as_ref()
             .map(|p| caustics::State::extend_scene(&self.scene, p))
             .unwrap_or_else(|| self.scene.clone());
+        if caustic_guard.is_some() {
+            target_scene.bind_groups[layout::group::OUTPUT]
+                .layout
+                .extend(query_guard::layout_entries(
+                    #[cfg(test)]
+                    false,
+                ));
+        }
         let (pipeline, layouts, aov_shader, aov_pipelines, query_guard) = match packet.shader {
             Some(source) => {
                 let (compiled, _) = compile_pipeline(
                     &self.gpu,
                     &target_scene,
-                    source,
+                    if caustic_guard.is_some() {
+                        query_guard::instrument_caustic(&source, false)?
+                    } else {
+                        source
+                    },
                     self.hardware.is_some(),
                     caustic_packet.is_none(),
                 )?;
@@ -1585,6 +1601,7 @@ impl GpuScene {
                     &self.samplers,
                     &buffers,
                     size,
+                    caustic_guard,
                 )
             })
             .transpose()?;
@@ -1603,7 +1620,9 @@ impl GpuScene {
                 })
                 .collect();
             if index == layout::group::OUTPUT {
-                if let Some(guard) = &query_guard {
+                if let Some(check) = caustics.as_ref().and_then(|c| c.query_check.as_ref()) {
+                    entries.extend(check.entries());
+                } else if let Some(guard) = &query_guard {
                     entries.extend(guard.resources.entries(&guard.resources.unused_flag));
                 }
             }
@@ -1736,6 +1755,11 @@ impl GpuScene {
                 .filter(|s| (start..end).contains(s))
                 .inspect(|_| injection.partial_sample = None)
         };
+        let check = target
+            .caustics
+            .as_ref()
+            .and_then(|c| c.query_check.as_ref());
+        let mut health = None;
         for sample in samples {
             #[cfg(test)]
             if partial.is_some_and(|s| sample > s) {
@@ -1760,6 +1784,11 @@ impl GpuScene {
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("MuTracer path trace sample"),
             });
+            if sample == start {
+                if let Some(check) = check {
+                    encoder.clear_buffer(&check.flag, 0, None);
+                }
+            }
             let pair = (sample - start) * target.caustics.as_ref().map_or(1, |c| c.pass_count());
             let pt_pair = pair + target.caustics.as_ref().map_or(0, |c| c.pt_pair());
             // Browser emission uses its f32 sampleCount, including the sequence offset.
@@ -1822,6 +1851,8 @@ impl GpuScene {
                 pass.dispatch_workgroups(1, 1, 1);
             }
             if sample + 1 == end {
+                health = check
+                    .map(|check| query_guard::Receipt::copy(&self.gpu, &check.flag, &mut encoder));
                 if let Some(t) = timer {
                     t.resolve(&mut encoder);
                 }
@@ -1834,6 +1865,10 @@ impl GpuScene {
         }
         #[allow(unused_mut)]
         let mut batch = completion.finish();
+        if let Some(receipt) = health {
+            receipt.map();
+            batch.health = Some(receipt);
+        }
         #[cfg(test)]
         if partial.is_some() {
             batch.injected_error = Some("controlled partial flight failure".into());
