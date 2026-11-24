@@ -91,9 +91,12 @@ failure, 4 for a budget limit and 5 for a resumable GPU or worker failure.
 mutracer render native/cli/examples/temporal-orbit.json -o orbit.mp4
 ```
 
-The first frames arrive after the look-ahead window fills. Rerun the same
-command after interruption to reuse finished images. The worker rebuilds
-the history around missing frames, which costs additional render time.
+The first frames arrive after the look-ahead window fills. Each temporal
+filter or readback operation has a ten-minute timeout, measured separately
+from sampling. The native and Node render commands retry GPU failures and
+rebuild the history needed for the next output. The Node command replays
+from the start of the selected input window, so a late retry can take longer.
+Rerun the native command after interruption to reuse finished images.
 The [shot options](schema/shot.md#output-and-animation) describe GPU memory
 budgets, cut points and the choice of OIDN weights.
 

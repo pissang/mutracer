@@ -318,7 +318,7 @@ impl Session {
                 };
                 stream.flushing = true;
                 let latency = stream.filter.latency();
-                let frame = stream.filter.flush().map_err(crate::temporal::gpu)?;
+                let frame = crate::temporal::flush(&mut stream.filter)?;
                 let done = frame.is_none();
                 let format = stream.settings.format;
                 if done {
@@ -716,10 +716,7 @@ impl Session {
                     if config.cuts_at(frame, stream.last_time, t) {
                         stream.filter.cut();
                     }
-                    stream
-                        .filter
-                        .push(frame, &renderer.render)
-                        .map_err(crate::temporal::gpu)?;
+                    crate::temporal::push(&mut stream.filter, frame, &renderer.render)?;
                     stream.last = frame;
                     stream.last_time = t;
                     None

@@ -309,6 +309,9 @@ impl Denoiser {
                 entry(6, &self.normal),
             ],
         });
+        if temporal_guides && gpu.info.backend == wgpu::Backend::Metal {
+            wait_for_temporal_inputs(gpu, std::time::Duration::from_secs(30))?;
+        }
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
         {
             let mut pass = encoder.begin_compute_pass(&Default::default());
@@ -409,6 +412,24 @@ impl Denoiser {
     }
 }
 
+// A tiled OIDN encoder needs many native buffers simultaneously at finish(),
+// before wgpu can commit any of them. Retire preceding window and display
+// work with a bounded fence wait before allocating that batch.
+fn wait_for_temporal_inputs(gpu: &GpuDevice, timeout: std::time::Duration) -> Result<()> {
+    gpu.device
+        .poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(timeout),
+        })
+        .map_err(|error| {
+            crate::status::fail(
+                crate::Status::ContextFailed,
+                format!("GPU completion failed before temporal OIDN: {error}"),
+            )
+        })?;
+    gpu.loss.check()
+}
+
 fn entry(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
     wgpu::BindGroupEntry {
         binding,
@@ -419,6 +440,94 @@ fn entry(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "requires a real Metal GPU"]
+    fn temporal_admission_times_out_before_encoding_and_can_resume() {
+        use objc2_metal::{MTLDevice, MTLSharedEvent};
+        use std::time::Duration;
+        use wgpu::hal::api::Metal;
+
+        let gpu = GpuDevice::with_backend(0).unwrap();
+        let event = unsafe { gpu.device.as_hal::<Metal>() }
+            .unwrap()
+            .raw_device()
+            .newSharedEvent()
+            .unwrap();
+        unsafe { gpu.queue.as_hal::<Metal>() }
+            .unwrap()
+            .enable_strict_event_sync()
+            .unwrap();
+        let target = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 4,
+            usage: wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        encoder.clear_buffer(&target, 0, None);
+        let command = encoder.finish();
+        let signal = event.clone();
+        // Release even if a future implementation accidentally ignores its deadline.
+        let (done, release) = std::sync::mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                let _ = release.recv_timeout(Duration::from_secs(2));
+                signal.setSignaledValue(1);
+            });
+            gpu.queue.exclusive_submit(|queue| {
+                unsafe { queue.as_hal::<Metal>() }
+                    .unwrap()
+                    .add_wait_event(event, 1);
+                queue.submit([command]);
+            });
+            let result = wait_for_temporal_inputs(&gpu, Duration::from_millis(20));
+            drop(done);
+            let error = result.unwrap_err();
+            assert_eq!(
+                crate::status::classify(error.as_ref(), crate::Status::Error),
+                crate::Status::ContextFailed
+            );
+        });
+        wait_for_temporal_inputs(&gpu, Duration::from_secs(5)).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "requires a real Metal GPU"]
+    fn tiled_clean_aux_matches_the_same_input_after_queue_renewal() {
+        // Keep the test runner responsive if finish() ever blocks in Metal again.
+        let (send, result) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let gpu = GpuDevice::with_backend(0).unwrap();
+            let size = [1280, 720];
+            let weights = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../oidn/weights/rt_hdr_calb_cnrm_large.tza");
+            let mut filter = Denoiser::new(&gpu, size, Some(&weights), 432).unwrap();
+            let values: Vec<[f32; 4]> = (0..size[0] * size[1])
+                .map(|i| [0.25 + (i % 11) as f32 / 32., 0.5, 1., 1.])
+                .collect();
+            let input = gpu
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Tiled OIDN fixture"),
+                    contents: bytemuck::cast_slice(&values),
+                    usage: wgpu::BufferUsages::STORAGE,
+                });
+            let mut denoise = || {
+                let (out, _) = filter.submit(&gpu, [&input; 3], 1, false).unwrap();
+                gpu.queue.read_buffer(&gpu.device, out.slice(..)).unwrap()
+            };
+            let reference = denoise();
+            gpu.queue.renew().unwrap();
+            assert!(reference == denoise(), "Tiled output changed after renewal");
+            send.send(()).unwrap();
+        });
+        result
+            .recv_timeout(std::time::Duration::from_secs(90))
+            .unwrap();
+    }
+
     #[test]
     fn normalization_shader_is_valid_wgsl() {
         let module =

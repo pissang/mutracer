@@ -337,25 +337,36 @@ async function main() {
       emit({event:'validated',module:file,directLightCandidates,pixelSamples:settings.size[0]*settings.size[1]*settings.spp*(last-first+1)});
       return;
     }
-    const render = async (descriptor, index, t) => {
+    const retryGpu = async (nextFrame, operation) => {
       for (let attempt = 0; ; attempt++) {
         try {
-          await worker.request('scene',{format:'descriptor-v8'},descriptor);
-          return await worker.request('render',{t,frame:index,settings});
+          return await operation();
         } catch (error) {
           if (!(error instanceof NativeError) || error.code !== 5 || attempt >= 2) throw error;
-          emit({event:'retry',frame:index,attempt:attempt+1});
+          emit({event:'retry',frame:nextFrame(),attempt:attempt+1});
           await worker.close();
           worker = await openWorker();
         }
       }
     };
+    const render = (descriptor, index, t) => retryGpu(() => index, async () => {
+      await worker.request('scene',{format:'descriptor-v8'},descriptor);
+      return worker.request('render',{t,frame:index,settings});
+    });
     const output = resolve(values.output);
     if (command === 'still' && settings.denoise === 'temporal') {
-      for await (const result of worker.temporalFrames([{frame:indexA,t:time,descriptor:await frame(time,indexA)}],settings)) {
-        await atomic(output,result.bytes);
-        emit({event:'frame',frame:result.frame,path:output});
-      }
+      const inputs = [{frame:indexA,t:time,descriptor:await frame(time,indexA)}];
+      const bytes = await retryGpu(() => indexA, async () => {
+        let image;
+        for await (const result of worker.temporalFrames(inputs,settings)) {
+          if (result.frame !== indexA || image) throw new NativeError('Unexpected temporal still frame.');
+          image = result.bytes;
+        }
+        if (!image) throw new NativeError('Missing temporal still frame.');
+        return image;
+      });
+      await atomic(output,bytes);
+      emit({event:'frame',frame:indexA,path:output});
       return;
     }
     if (command === 'still') {
@@ -384,22 +395,30 @@ async function main() {
       const radius = settings.temporal?.historyRadius;
       const latency = (typeof radius === 'number' ? radius : radius?.max ?? 16) + (settings.temporal?.postRadius ?? 3);
       const begin = Math.max(0,first-latency-1), end = Math.min(Math.ceil(duration*fps)-1,last+latency);
-      const sources = new Map();
-      async function* inputs() {
-        for (let index=begin; index<=end; index++) {
-          const descriptor = await frame(index/fps,index);
-          if (index>=first && index<=last) sources.set(index,digest(descriptor));
-          yield {frame:index,t:index/fps,descriptor};
+      let next = first;
+      await retryGpu(() => Math.min(next,last), async () => {
+        // Replay the same shot prefix to reconstruct motion, cuts and both history windows.
+        const sources = new Map();
+        async function* inputs() {
+          for (let index=begin; index<=end; index++) {
+            const descriptor = await frame(index/fps,index);
+            if (index>=next && index<=last) sources.set(index,digest(descriptor));
+            yield {frame:index,t:index/fps,descriptor};
+          }
         }
-      }
-      for await (const {frame:index,bytes} of worker.temporalFrames(inputs(),settings)) {
-        if (index<first || index>last) continue;
-        const path = resolve(directory,`frame_${String(index).padStart(6,'0')}.png`);
-        await atomic(path,bytes);
-        await atomic(path+'.json',JSON.stringify({source:sources.get(index),png:digest(bytes)}));
-        sources.delete(index);
-        emit({event:'frame',frame:index,t:index/fps,path,samples:settings.spp});
-      }
+        let expected = begin;
+        for await (const {frame:index,bytes} of worker.temporalFrames(inputs(),settings)) {
+          if (index !== expected++) throw new NativeError(`Unexpected temporal frame ${index}.`);
+          if (index<next || index>last) continue;
+          const path = resolve(directory,`frame_${String(index).padStart(6,'0')}.png`);
+          await atomic(path,bytes);
+          await atomic(path+'.json',JSON.stringify({source:sources.get(index),png:digest(bytes)}));
+          sources.delete(index);
+          emit({event:'frame',frame:index,t:index/fps,path,samples:settings.spp});
+          next++;
+        }
+        if (expected !== end+1) throw new NativeError('Incomplete temporal sequence.');
+      });
     } else for (let index=first;index<=last;index+=stride) {
       const t = index / fps;
       const descriptor = await frame(t,index);

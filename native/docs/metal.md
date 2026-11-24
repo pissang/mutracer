@@ -92,12 +92,12 @@ Device loss is terminal and allows engine destruction without guaranteeing done.
 - Imports retain native objects. Pending work retains textures after their import
   handles are released; timeline events and signal history stay until engine
   disposal. Retention does not make purging or reallocating their storage safe.
-- Call one engine and its objects from one thread at a time; only cancellation may
-  run concurrently. A supplied shared queue also requires host submission access
-  to be serialized with library calls and background preparation. Prefer the
-  default independent queue. For a supplied queue, allow enough command buffers
-  for pending SDK and host work; the example uses a capacity of 4096. Saturating
-  a small queue while withholding ready can block the producer on the CPU.
+- Call each engine and its objects from one thread at a time. Only cancellation
+  may run concurrently. Prefer the default independent queue. If you supply a
+  shared queue, serialize host submissions with library calls and background
+  preparation. For tiled OIDN, use a capacity of 4096 as in the host example.
+  Metal's default of 64 can stall denoising before it submits a frame. A full
+  queue can also block the host thread responsible for signaling readiness.
 
 The [Objective-C host](../examples/metal-host.m) shows GPU consumers and timeline
 reuse. Existing Vulkan hosts use the separate [negotiated device API](vulkan.md),

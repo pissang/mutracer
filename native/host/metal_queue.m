@@ -61,15 +61,15 @@ static void registerForwarders(Class cls, Protocol *protocol) {
 }
 @property (atomic, strong) id<MTLCommandQueue> live;
 - (instancetype)initWithQueue:(id<MTLCommandQueue>)queue record:(MuTracerRecord)record;
-- (BOOL)renew;
+- (BOOL)renewWithCapacity:(NSUInteger)capacity;
 @end
 
 @implementation MuTracerObservedQueue
 // Existing command buffers retain their original queue and completion handlers.
 // Only future command buffers use the replacement, on the same Metal device.
-- (BOOL)renew {
+- (BOOL)renewWithCapacity:(NSUInteger)capacity {
     @synchronized(self) {
-        id<MTLCommandQueue> next = [[self.live device] newCommandQueue];
+        id<MTLCommandQueue> next = [[self.live device] newCommandQueueWithMaxCommandBufferCount:capacity];
         if (!next) return NO;
         next.label = self.live.label;
         self.live = next;
@@ -120,8 +120,8 @@ bool mt_native_is_observed_metal_queue(void *queue) {
     return [(__bridge id)queue isKindOfClass:[MuTracerObservedQueue class]];
 }
 __attribute__((visibility("hidden")))
-bool mt_native_renew_metal_queue(void *queue) {
-    return [(__bridge MuTracerObservedQueue *)queue renew];
+bool mt_native_renew_metal_queue(void *queue, NSUInteger capacity) {
+    return [(__bridge MuTracerObservedQueue *)queue renewWithCapacity:capacity];
 }
 
 // Called by the commit observer before Metal commit. The block owns the notice
