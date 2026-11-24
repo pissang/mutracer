@@ -1826,7 +1826,7 @@ impl GpuScene {
         #[cfg(test)]
         if partial.is_some() {
             batch.injected_error = Some("controlled partial flight failure".into());
-            batch.injected_kind = Some(crate::native_completion::FailureKind::Retry);
+            batch.injected_kind = Some(native_completion::injected_metal_errors(&[2, 1]));
         }
         Ok(batch)
     }
