@@ -276,7 +276,7 @@ export function sceneTargetParameters(bytes: Uint8Array, token: number): Uint8Ar
     if((effectiveFlags&6)&&hasStochasticCausticCaster(state.meshes,m=>!nativeGraphAffectsCausticCaster(m)&&isCausticSpecular(m)))effectiveFlags&=~6;
     const causticConfiguration={...configuration,causticFlags:effectiveFlags};
     const light=effectiveFlags?prepareNativeLightSampling(state.lights,state.table,state.emissive,state.environmentPower):undefined;
-    const caustics=light?nativeCausticTarget({meshes:state.meshes,bindings:state.prepared.instanceBindings,materials:state.prepared.materials,lights:state.lights,emissive:state.emissive,environmentPower:state.environmentPower,lighting:light.lightData,cacheKey:state.prepared},causticConfiguration,width,height,bytes.subarray(settingsBytes+8*WORD_BYTES),camera,targetConstants,{...frameFeatures,workgroupSize:shaderId===RESOURCE.HWRT_SHADER?1:8},nativeHits,shaderId===RESOURCE.HWRT_SHADER):undefined;
+    const caustics=light?nativeCausticTarget({meshes:state.meshes,bindings:state.prepared.instanceBindings,materials:state.prepared.materials,lights:state.lights,emissive:state.emissive,environmentPower:state.environmentPower,lighting:light.lightData,cacheKey:state.prepared},causticConfiguration,width,height,bytes.subarray(settingsBytes+8*WORD_BYTES),camera,targetConstants,frameFeatures,nativeHits,shaderId===RESOURCE.HWRT_SHADER):undefined;
     if(caustics){
       frameFeatures.workgroupSize=caustics.metadata.workgroupSize;
       frameFeatures.lightTracing=!!(caustics.metadata.flags&2);frameFeatures.photonMapping=!!(caustics.metadata.flags&4);
