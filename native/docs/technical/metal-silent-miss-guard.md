@@ -41,7 +41,9 @@ HWRT targets. Paths below are relative to `native/host/src/`.
   repeatedly within one 10-second deadline. Explicit, recoverable execution
   errors allow at most 12 retries inside that deadline; `SubmissionsIgnored`
   renews the observed queue. Device loss and failures that cannot be verified
-  are returned. The result is byte-identical to an undisturbed render.
+  are returned. Injected and detected misses replay byte-identically on the
+  test scene. A missed query between checks can change the image until a
+  later replay recomputes that sample.
 - **Submission.** Each device has at most one sampling command buffer in
   flight. Short batches prepare the next buffer while the GPU runs and commit
   it once the previous one retires; long batches keep the four-dispatch
