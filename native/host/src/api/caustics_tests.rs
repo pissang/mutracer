@@ -291,13 +291,15 @@ fn caustic_target_packet_preserves_plain_independent_frame_guides() {
     let offset = u32::from_le_bytes(input[field..field + 4].try_into().unwrap()) as usize * 4;
     let camera = &input[offset..offset + 128];
     let loss = crate::device_loss::DeviceLossNotifier::default();
-    let beauty = retained
-        .target(&settings, [9, 7], 0, 0, false, camera, &loss, false)
-        .unwrap();
-    let packet = beauty.caustics.unwrap();
-    assert_eq!(packet.metadata.flags, 6);
-    assert_eq!(packet.metadata.workgroup_size, 8);
-    assert_eq!(packet.uniform.len(), 112);
+    for hardware in [false, true] {
+        let beauty = retained
+            .target(&settings, [9, 7], 0, 0, hardware, camera, &loss, false)
+            .unwrap();
+        let packet = beauty.caustics.unwrap();
+        assert_eq!(packet.metadata.flags, 6);
+        assert_eq!(packet.metadata.workgroup_size, 8);
+        assert_eq!(packet.uniform.len(), 112);
+    }
     let guides = retained
         .target(&settings, [9, 7], 0, 0, false, camera, &loss, true)
         .unwrap();
