@@ -1,5 +1,5 @@
 import {Engine, Render, getRecommendedDeviceDescriptor} from '../../src/main';
-import {TemporalDenoiser} from '../../src/temporal';
+import {TemporalDenoiser, type TemporalFrame} from '../../src/temporal';
 import Camera from '../../src/scene/Camera';
 import {estimateTemporalMemory, temporalMemoryTiers} from '../../src/temporal/memoryPlan';
 import {normalizeTemporalOptions} from '../../src/temporal/options';
@@ -182,6 +182,7 @@ async function run() {
     await displayAovRender.converge({samples: 1});
     await rejects(displayAovTemporal.push(displayAovRender), /AOVs at the render resolution/);
     displayAovTemporal.dispose(); displayAovRender.dispose();
+    await exercisePaddedPresentation(engine);
     const fullIdResult = await exerciseFullWidthIds(device);
     const overflowResult = await exerciseFullOverflow(device);
     const floatingPostResult = await exerciseFloatingPostCodes(device);
@@ -191,6 +192,54 @@ async function run() {
     check(uncaptured.length === 0, `Uncaptured WebGPU errors: ${uncaptured.join(' | ')}`);
     return {identity: true, max, sequence: true, oidnMax, presentationIdentity, vignetteChange, customAov: receivedRoughness, fullIdResult, overflowResult, floatingPostResult, materialAcceptanceResult, forwardSeed, uncapturedErrors: uncaptured.length, plan: temporal.plan};
   } finally { temporal.dispose(); render.dispose(); sync.dispose(); engine.dispose(); device.destroy(); }
+}
+
+async function exercisePaddedPresentation(engine: Engine) {
+  const width = 64, height = 56;
+  const render = new Render(engine, {width, height, maxSamples: 1});
+  const temporal = new TemporalDenoiser(engine, {historyRadius: 2, postRadius: 1,
+    denoiser: {type: 'oidn', model: 'standard', weightsBaseUrl: '/oidn/weights/'}});
+  const canvas = engine.display.canvas;
+  const context = new OffscreenCanvas(width, height).getContext('2d', {willReadFrequently: true})!;
+  temporal.attach(render);
+
+  async function compare(frame: TemporalFrame) {
+    const read = await frame.readPixels('denoised');
+    check(read.width === width && read.height === height, 'Incorrect readback crop');
+    check(engine.display.present(frame) === frame, 'Padded temporal frame was not presented');
+    // The canvas shows the full 64x64 target. Compare its visible export rectangle.
+    context.drawImage(canvas, 0, 4, width, height, 0, 0, width, height);
+    const shown = context.getImageData(0, 0, width, height).data;
+    const png = await blobPixels(await engine.display.toBlob(frame));
+    check(png.length === read.data.length, 'Incorrect PNG crop');
+    let presentError = 0, exportError = 0;
+    for (let i = 0; i < read.data.length; i++) {
+      if (i % 4 === 3) continue;
+      const linear = read.data[i];
+      const srgb = linear <= .0031308 ? 12.92 * linear : 1.055 * linear ** (1 / 2.4) - .055;
+      const code = Math.round(255 * Math.min(1, Math.max(0, srgb)));
+      presentError = Math.max(presentError, Math.abs(shown[i] - code));
+      exportError = Math.max(exportError, Math.abs(png[i] - code));
+    }
+    check(presentError <= 1 && exportError <= 1,
+      `Padded frame ${frame.index} differs from readback: present ${presentError}, PNG ${exportError}`);
+  }
+
+  try {
+    let drained = 0, flushed = 0;
+    for (let i = 0; i < 6; i++) {
+      // Move the plane across the border so queued frames have different edge pixels.
+      const camera = new Camera({projection: 'perspective', fov: 45});
+      const y = i % 2 ? -.6 : .6;
+      camera.position = [0, y, 2]; camera.lookAt([0, y, 0]);
+      await render.converge({camera, samples: 1, sampleSequenceOffset: i});
+      await temporal.push(render);
+      if (i === 4) continue; // Also drain two finished frames together.
+      for await (const frame of temporal.drain()) { await compare(frame); drained++; }
+    }
+    for await (const frame of temporal.flush()) { await compare(frame); flushed++; }
+    check(drained === 3 && flushed === 3, 'Expected three drain and three flush frames');
+  } finally { temporal.dispose(); render.dispose(); }
 }
 
 async function createTestWindow(device: GPUDevice, width: number, height: number, capacity: number) {
