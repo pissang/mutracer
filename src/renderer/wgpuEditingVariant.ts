@@ -20,7 +20,7 @@ export function universalEditingConstants(scene: Record<string, boolean | number
     SAMPLING_PATTERN: scene.SAMPLING_PATTERN ?? 0,
     BEVEL_SAMPLES: scene.BEVEL_SAMPLES ?? 8,
     HAS_ALPHA: true, HAS_ALPHA_MASK: true, HAS_ALPHA_BLEND: true,
-    HAS_MEDIUM: true, HAS_BEVEL: scene.HAS_BEVEL ?? false,
+    HAS_MEDIUM: true, HAS_ADJACENT_MEDIA: scene.HAS_ADJACENT_MEDIA ?? false, HAS_BEVEL: scene.HAS_BEVEL ?? false,
     USE_UV1: true, USE_ANISOTROPY_DIRECTIONS: true, USE_COAT_NORMAL_FRAMES: true,
     USE_MATERIALX_NORMAL_MAPS: true, USE_UDIM_MAPS: true,
     SPECTRAL: scene.SPECTRAL ?? false,

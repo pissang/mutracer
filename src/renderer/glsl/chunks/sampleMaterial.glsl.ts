@@ -280,11 +280,13 @@ ${fragments['sample5'] ?? ''}    path.beta *= f / scatteringPdf;
     crossedBoundary = !mat.thinWalled &&
       isNextRefraction;
     path.isNextRefraction = isNextRefraction;
-    // TODO prefer the opaque surface when transmission surface and opaque surface are overlapped.
-    // Or the ray go out from transmission material will miss the opque surface.
+    vec3 incomingOrigin = path.ray.o;
     path.ray.o = si.position + EPS * scatterDir;
 #ifdef USE_COAT_NORMAL_FRAMES
     if (mat.coatNormalEnabled) { path.ray.o = si.position + EPS * (dot(originalFace, scatterDir) >= 0.0 ? originalFace : -originalFace); }
+#endif
+#ifdef HAS_ADJACENT_MEDIA
+    if (isNextRefraction) { path.ray.o = transmissionRayOrigin(si.position, scatterDir, incomingOrigin); }
 #endif
   }
 
@@ -300,13 +302,14 @@ ${fragments['sample5'] ?? ''}    path.beta *= f / scatteringPdf;
   // event crosses the boundary of a medium-bearing closed mesh.
   if (!mediumSampled && crossedBoundary && mat.mediumType > 0) {
     if (ndv1 >= 0.0) {
-      si.mediumType = mat.mediumType;
+      // Store the owner: touching entry and exit hits can arrive in either order.
+      si.mediumType = si.materialIndex + 1;
       si.mediumExtinction = mat.mediumExtinction;
       si.mediumScattering = mat.mediumScattering;
       path.scatteringMediumEntered = path.scatteringMediumEntered || any(greaterThan(mat.mediumScattering, vec3(0.0)));
       si.mediumAnisotropy = mat.mediumAnisotropy;
     }
-    else {
+    else if (si.mediumType == si.materialIndex + 1) {
       si.mediumType = 0;
       si.mediumExtinction = vec3(0.0);
       si.mediumScattering = vec3(0.0);

@@ -939,6 +939,8 @@ void intersectScene(in Ray ray, inout SurfaceInteraction si, bool doubleSided) {
   int maxDim = maxDimension(abs(ray.d));
   vec3 shear = getShear(ray.d, maxDim);
   int hitInsIdx;
+  int sourceTriangle = si.triangleIndex;
+  int sourceInstance = si.instanceIndex;
 
 ${getBVHTraverseCode(glsl`
   si.triangleIndex = triangleIndex;
@@ -948,7 +950,7 @@ ${getBVHTraverseCode(glsl`
   hitIndex = index;
   isHit = true;
   hitInsIdx = insIdx;
-`)}
+`, '#ifdef HAS_ADJACENT_MEDIA\nif (doubleSided && triangleIndex == sourceTriangle && insIdx == sourceInstance) continue;\n#endif')}
 
   if (isHit) {
     si.instanceIndex = hitInsIdx;

@@ -430,6 +430,7 @@ ${mode === 'photonMapping' ? 'photonStore(photonIndex,vec4u(0u));' : ''}
   initRay(&ray,origin+EPS*direction,direction);
   var chain=0u;
   var singleT=false;
+  var mediumOwner = -1;
   var extinction=vec3f(0.0);
   var scattering=vec3f(0.0);
   var si:SurfaceInteraction;
@@ -438,7 +439,7 @@ ${mode === 'photonMapping' ? 'depth<=max(rtUniform.bounces,0)' : 'depth<20'}
   ;
   depth++) {
     samplingBounce=u32(depth);
-    si.triangleIndex=-1;
+    if (!HAS_ADJACENT_MEDIA) { si.triangleIndex = -1; }
     intersectScene(ray,&si,0,true,depth>0);
     if(!si.hit) {
       return;
@@ -535,13 +536,16 @@ ${
     flux/=m.relativeIor*m.relativeIor;
   }
   // Match PT: a clear solid interface does not replace the active medium.
-  if(transmission&&!m.thinWalled&&m.mediumType>0) {
+  if(transmission&&!m.thinWalled&&m.mediumType>0&&(!m.inside||mediumOwner==si.materialIndex)) {
+    mediumOwner = select(si.materialIndex, -1, m.inside);
     extinction=select(m.mediumExtinction,vec3f(0.0),m.inside);
     scattering=select(m.mediumScattering,vec3f(0.0),m.inside);
   }
   chain++;
   singleT=chain==1u&&((isCausticT(m)&&transmission)||(isCausticR(m)&&!transmission));
-  initRay(&ray,si.position+EPS*next,next);
+  var originNext = si.position + EPS * next;
+  if (HAS_ADJACENT_MEDIA && transmission) { originNext = transmissionRayOrigin(si.position, next, ray.o); }
+  initRay(&ray,originNext,next);
 }
 }
 `

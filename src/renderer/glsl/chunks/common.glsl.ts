@@ -15,4 +15,13 @@ export default glsl`
 
 #define ROUGHNESS_MIN 0.001
 
+#ifdef HAS_ADJACENT_MEDIA
+vec3 transmissionRayOrigin(vec3 position, vec3 direction, vec3 incomingOrigin) {
+  vec3 magnitude = max(abs(position), vec3(1.0));
+  float stepSize = max(max(magnitude.x, magnitude.y), magnitude.z) * 4.7683716e-7;
+  bool nearBoundary = distance(incomingOrigin, position) <= 2.0 * stepSize;
+  return position + (nearBoundary ? stepSize : -stepSize) * direction;
+}
+#endif
+
 `;

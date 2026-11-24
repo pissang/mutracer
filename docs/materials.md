@@ -105,6 +105,12 @@ wavelength-dependent refraction; values above `1` increase color separation,
 and `0` disables it. Lower `transmissionDispersionAbbeNumber` values also
 increase color separation.
 
+For liquid in a glass, use a closed liquid mesh and a hollow glass mesh with
+an inward-facing inner wall. The liquid can touch that wall or sit across an
+air gap. Touching faces still refract independently. Give absorbing materials
+separate volumes because leaving an overlapping volume can end absorption in
+the enclosing material.
+
 ## Compatibility names
 
 The canonical names below share storage with the deprecated names. Both work in
