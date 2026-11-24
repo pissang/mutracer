@@ -33,6 +33,7 @@ import type {WGPUSkyBaker} from './WGPUSkyBaker.js';
 import {
   initialSceneConstants,
   sceneTraversalConstants,
+  autoDirectLightCandidates,
   prepareSceneLightSampling,
   writeTraceLighting,
   packSceneAnalyticLights,
@@ -507,7 +508,8 @@ class WGPURayTracePass {
   // User set params
   private _bounces = -1;
   private _bevelSamples = DEFAULT_BEVEL_SAMPLES;
-  private _directLightCandidates = DEFAULT_DIRECT_LIGHT_CANDIDATES;
+  private _directLightCandidates: number | 'auto' = DEFAULT_DIRECT_LIGHT_CANDIDATES;
+  private _autoDirectLightCandidates = DEFAULT_DIRECT_LIGHT_CANDIDATES;
   private _clamping?: number;
   private _transmissiveAlphaMin = 1;
 
@@ -2046,11 +2048,11 @@ class WGPURayTracePass {
     return changed;
   }
 
-  setDirectLightCandidates(candidates: number) {
-    const next = normalizeDirectLightCandidates(candidates);
+  setDirectLightCandidates(candidates: number | 'auto') {
+    const next = candidates === 'auto' ? candidates : normalizeDirectLightCandidates(candidates);
     const changed = this._directLightCandidates !== next;
     this._directLightCandidates = next;
-    this._rtUniform.views.directLightCandidates[0] = next;
+    this._rtUniform.views.directLightCandidates[0] = next === 'auto' ? this._autoDirectLightCandidates : next;
     return changed;
   }
 
@@ -2117,12 +2119,14 @@ class WGPURayTracePass {
     bounces: number;
     bevel: boolean;
     dispersionWavelengths: 1 | 3;
-    directLightCandidates: number;
+    directLightCandidates: number | 'auto';
     caustics?: import('../Render.js').CausticSettings;
   }) {
     this._shareSpectralPrefix = options.dispersionWavelengths !== 1;
     WGPURayTracePass.prototype._setCaustics.call(this, options.caustics);
-    writeTraceQuality(this._rtUniform.views, options, MAX_PATH_EVENTS_WGPU);
+    this._directLightCandidates = options.directLightCandidates;
+    const directLightCandidates = options.directLightCandidates === 'auto' ? this._autoDirectLightCandidates : options.directLightCandidates;
+    writeTraceQuality(this._rtUniform.views, {...options, directLightCandidates}, MAX_PATH_EVENTS_WGPU);
   }
 
   private _setCaustics(settings?: import('../Render.js').CausticSettings) {
@@ -2565,6 +2569,8 @@ class WGPURayTracePass {
       this._shadowCatcherLightChoices,
       true
     );
+    this._autoDirectLightCandidates = autoDirectLightCandidates(this._analyticLights, this._lightChoices);
+    if (this._directLightCandidates === 'auto') this._rtUniform.views.directLightCandidates[0] = this._autoDirectLightCandidates;
     researchTransport()?.prepare(this, 'webgpu', lighting);
     this._analyticLightSelectionPmfs = lighting.analyticPmfs;
     this._iesProfileTexelOffsets = lighting.profiles.offsets;

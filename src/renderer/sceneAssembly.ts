@@ -2,7 +2,7 @@ import type {AnalyticLightState} from './analyticLightState.js';
 import {retainedShaderCapacity} from './shaderCapacity.js';
 import {makeRayTraceUniform, packWgpuAnalyticLights} from './wgpuSceneUniform.js';
 import {normalizeBounces, MAX_PATH_EVENTS_WEBGL} from './pathLimits.js';
-import {normalizeDirectLightCandidates, DEFAULT_BEVEL_SAMPLES} from './renderingLimits.js';
+import {normalizeDirectLightCandidates, DEFAULT_BEVEL_SAMPLES, DEFAULT_DIRECT_LIGHT_CANDIDATES} from './renderingLimits.js';
 import {samplingPatternCode, zSobolLog2SPP, type SamplingPattern} from './sampling.js';
 import {LightChoiceBuffer, buildLightAliasTable, buildShadowCatcherLightAliasTable, estimateAnalyticLightPower, packEmissiveTriangles, packIESProfiles,
   LIGHT_CHOICE_ENVIRONMENT, LIGHT_CHOICE_ANALYTIC, LIGHT_CHOICE_EMISSIVE_TRIANGLE,
@@ -81,6 +81,25 @@ export function prepareSceneLightSampling(lights: AnalyticLightState[], emissive
   return {lightData, lightWidth: width, lightHeight: height, analyticPmfs, profiles, environmentPmf,
     choiceCount: choices.count, totalWeight: distribution.totalWeight, emissiveTexels, domains,
     shadowCatcherChoiceOffset, shadowCatcherChoiceCount};
+}
+
+// The choice buffer contains only sources with nonzero sampling weight.
+export function autoDirectLightCandidates(lights: AnalyticLightState[], choices: LightChoiceBuffer) {
+  let analyticCount = 0;
+  let soleLight: AnalyticLightState | undefined;
+  for (let i = 0; i < choices.count; i++) {
+    if (choices.sourceTypes[i] === LIGHT_CHOICE_EMISSIVE_TRIANGLE) return DEFAULT_DIRECT_LIGHT_CANDIDATES;
+    if (choices.sourceTypes[i] === LIGHT_CHOICE_ANALYTIC) {
+      analyticCount++;
+      soleLight = lights[choices.sourceIndices[i]];
+    }
+  }
+  if (analyticCount === 1 && soleLight) {
+    if (soleLight.type === 'DirectionalLight') return 1;
+    if (choices.count === 1 && (soleLight.type === 'SphereLight' || soleLight.type === 'SpotLight') && soleLight.radius === 0) return 1;
+  }
+  if (analyticCount >= 16 && analyticCount === choices.count) return 8;
+  return DEFAULT_DIRECT_LIGHT_CANDIDATES;
 }
 
 export function writeTraceLighting(views: TraceViews, data: {environmentPmf: number; choiceCount: number; totalWeight: number; lightWidth: number; emissiveTexels: number;

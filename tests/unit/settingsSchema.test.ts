@@ -91,6 +91,17 @@ describe('settings schemas', () => {
       engine.dispose();
     });
   }
+  it('preserves auto through construction and numeric overrides', () => {
+    const {engine, targets} = renderFixture();
+    const render = new Render(engine, {directLightCandidates: 'auto'});
+    for (const setting of ['auto', 2, 'auto'] as const) {
+      render.directLightCandidates = setting;
+      render.refine();
+      expect(targets[0].configure).toHaveBeenLastCalledWith(expect.objectContaining({directLightCandidates: setting}));
+    }
+    expect(targets[0].restartSamples).toHaveBeenCalledTimes(3);
+    engine.dispose();
+  });
   it('normalizes at submission while preserving ordinary property values and serialization', () => {
     const {engine, targets} = renderFixture(); const render = new Render(engine);
     render.bevelSamples = 100; render.directLightCandidates = 100; render.refine();

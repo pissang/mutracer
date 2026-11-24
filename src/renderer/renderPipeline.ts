@@ -11,7 +11,7 @@ export interface TraceSettings {
   aovs?: readonly import('./aov.js').AovKind[]; aovSamples?: number; aovResolution?: 'render' | 'display';
   transmissiveOutputAlphaMin: number;
   bounces: number; clamping: number; bevel: boolean; bevelSamples: number;
-  dispersionWavelengths: 1 | 3; directLightCandidates: number;
+  dispersionWavelengths: 1 | 3; directLightCandidates: number | 'auto';
   caustics?: import('../Render.js').CausticSettings;
   alphaBlendStrategy: AlphaBlendStrategy; samplingPattern: SamplingPattern; maxSamples: number;
   timeBudgetMs: number; maxTiles: number; batchSamples: boolean;

@@ -4,7 +4,7 @@ import { normalizeBevelSamples, normalizeDirectLightCandidates } from '../render
 
 type Descriptor<K extends keyof Render> = {
   key: K; default: Render[K]; kind: 'image' | 'execution' | 'sample-cap' | 'resolution' | 'denoiser' | 'fallback';
-  backends: readonly ('webgpu' | 'webgl')[]; normalize?: (value: Render[K]) => Render[K];
+  backends: readonly ('webgpu' | 'webgl')[]; submit?: (render: Render) => Render[K];
 };
 const both = ['webgpu', 'webgl'] as const;
 // Trace fields are exhaustive: adding a pipeline setting requires a descriptor.
@@ -15,10 +15,10 @@ export const traceSchema = {
   bounces: {key: 'bounces', default: 3, kind: 'image', backends: both},
   clamping: {key: 'clamping', default: 0, kind: 'image', backends: both},
   bevel: {key: 'bevel', default: true, kind: 'image', backends: both},
-  bevelSamples: {key: 'bevelSamples', default: 8, kind: 'image', backends: both, normalize: normalizeBevelSamples},
+  bevelSamples: {key: 'bevelSamples', default: 8, kind: 'image', backends: both, submit: render => normalizeBevelSamples(render.bevelSamples)},
   dispersionWavelengths: {key: 'dispersionWavelengths', default: 3, kind: 'image', backends: both},
   caustics: {key: 'caustics', default: undefined, kind: 'image', backends: both},
-  directLightCandidates: {key: 'directLightCandidates', default: 4, kind: 'image', backends: ['webgpu'], normalize: normalizeDirectLightCandidates},
+  directLightCandidates: {key: 'directLightCandidates', default: 4, kind: 'image', backends: ['webgpu'], submit: render => render.directLightCandidates === 'auto' ? 'auto' : normalizeDirectLightCandidates(render.directLightCandidates)},
   alphaBlendStrategy: {key: 'alphaBlendStrategy', default: 'stochastic', kind: 'image', backends: ['webgpu']},
   transmissiveOutputAlphaMin: {key: 'transmissiveOutputAlphaMin', default: 1, kind: 'image', backends: both},
   samplingPattern: {key: 'samplingPattern', default: 'sobol', kind: 'image', backends: both},
@@ -37,7 +37,7 @@ export const renderSchema = [
 
 export function collectTraceSettings(render: Render, sampleCap: number): TraceSettings {
   return Object.fromEntries(Object.values(traceSchema).map(field => [field.key,
-    field.key === 'maxSamples' ? sampleCap : 'normalize' in field ? field.normalize(render[field.key]) : render[field.key]
+    field.key === 'maxSamples' ? sampleCap : 'submit' in field ? field.submit(render) : render[field.key]
   ])) as unknown as TraceSettings;
 }
 export function imageSettingsKey(settings: TraceSettings, size: {width: number; height: number}) {
