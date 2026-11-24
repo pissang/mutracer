@@ -291,13 +291,14 @@ host queue returns an error. If a beauty shader is incompatible with the
 sampling checks, the SDK logs a warning and renders that shader without
 silent-miss protection.
 
-Metal HWRT caustics can replay a sampling flight after a reported GPU error.
-They do not check for silent misses. Later flights retain an extra 96 bytes per
-pixel, or 128 with light tracing. Recovery runs the flight twice and temporarily
-uses another 192 or 256 bytes per pixel to verify the results. Concurrent light
-splats and photon gathering can change the last bits of radiance and its
-moments. If the results disagree beyond rounding or verification exceeds the
-deadline, the render returns an error.
+On SDK-observed Metal queues, HWRT caustics check both camera and photon paths
+for silent misses. If a check fails or the GPU reports a recoverable error, the
+renderer replays the affected samples. After the first flight, checkpoints
+retain an extra 96 bytes per pixel, or 128 with light tracing. Recovery runs
+the flight twice and temporarily uses another 192 or 256 bytes per pixel to
+compare the results. Concurrent light splats and photon gathering can change
+the last bits of radiance and its moments. If the results disagree beyond
+rounding or verification exceeds the deadline, the render returns an error.
 
 Standard path tracing checkpoints can retain an extra copy of the four accumulation buffers.
 Budget about 2% additional render time for scenes on the scale of SanMiguel,

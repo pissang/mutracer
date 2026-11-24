@@ -151,9 +151,11 @@ impl Resources {
             _vertices: vertices,
         })
     }
-    pub(super) fn entries<'a>(&'a self, flag: &'a wgpu::Buffer) -> Vec<wgpu::BindGroupEntry<'a>> {
-        #[allow(unused_mut)]
-        let mut entries = vec![
+    pub(super) fn canary_entries<'a>(
+        &'a self,
+        flag: &'a wgpu::Buffer,
+    ) -> [wgpu::BindGroupEntry<'a>; 2] {
+        [
             wgpu::BindGroupEntry {
                 binding: 4,
                 resource: self.tlas.as_binding(),
@@ -162,7 +164,11 @@ impl Resources {
                 binding: 5,
                 resource: flag.as_entire_binding(),
             },
-        ];
+        ]
+    }
+    pub(super) fn entries<'a>(&'a self, flag: &'a wgpu::Buffer) -> Vec<wgpu::BindGroupEntry<'a>> {
+        #[allow(unused_mut)]
+        let mut entries = self.canary_entries(flag).to_vec();
         #[cfg(test)]
         if let Some(window) = &self.window {
             entries.push(wgpu::BindGroupEntry {
@@ -204,6 +210,46 @@ pub fn instrument(source: &str) -> Result<String> {
     if !source.contains(entry) {
         return Err("Unexpected HWRT beauty entry".into());
     }
+    let mut source = instrument_queries(&source.replace(entry, "fn mtBeauty(globalId: vec3u)"))?;
+    source.push_str(include_str!("workgroup_canary.wgsl"));
+    Ok(source)
+}
+
+pub(super) fn instrument_caustic(source: &str, emission: bool) -> Result<String> {
+    let (entry, function, size) = if emission {
+        (
+            "@compute @workgroup_size(64)\n  fn main(@builtin(global_invocation_id) id:vec3u)",
+            "fn mtCaustic(id:vec3u)",
+            "64",
+        )
+    } else {
+        (
+            "@compute @workgroup_size(8, 8, 1)\nfn main(@builtin(global_invocation_id) globalId: vec3u)",
+            "fn mtCaustic(globalId:vec3u)",
+            "8, 8, 1",
+        )
+    };
+    if !source.contains(entry) {
+        return Err("Unexpected Metal HWRT caustic entry".into());
+    }
+    let mut source = instrument_queries(&source.replace(entry, function))?;
+    // Both ends are checked on ordinary dispatches and on checkpoint replays.
+    source.push_str(&format!(
+        r#"
+
+@compute @workgroup_size({size})
+fn main(@builtin(global_invocation_id) id:vec3u, @builtin(local_invocation_index) lane:u32) {{
+  if lane == 0u {{ mtCheckWorkgroup(); }}
+  mtCanaryRendezvous();
+  mtCaustic(id);
+  mtCanaryRendezvous();
+  if lane == 0u {{ mtCheckWorkgroup(); }}
+}}"#
+    ));
+    Ok(source)
+}
+
+fn instrument_queries(source: &str) -> Result<String> {
     // The AOT scene owns triangle/material intersection semantics. Extend its
     // one query initializer so ordinary rays and the private AS share traversal.
     let query = "rayQueryInitialize(&query, mtAcceleration, RayDesc(flags, 255u,";
@@ -211,12 +257,12 @@ pub fn instrument(source: &str) -> Result<String> {
     if !source.contains("fn mtTrace(") || !source.contains(query) || !source.contains(committed) {
         return Err("Missing native HWRT intersection routine".into());
     }
-    let mut source=source.replace(entry, "fn mtBeauty(globalId: vec3u)")
+    let mut source=source
         .replace("mtTrace(", "mtTrace(mtAcceleration, false, ")
         .replace("fn mtTrace(mtAcceleration, false, ", "fn mtTrace(accel: acceleration_structure, markerRay: bool, ")
         .replace(query, "rayQueryInitialize(&query, accel, RayDesc(select(flags, 5u, markerRay), 255u /* all instances */,")
         .replace(committed, "let hit = rayQueryGetCommittedIntersection(&query); if markerRay { var marker: MtHit; marker.kind = hit.kind; return marker; }");
-    source.push_str(include_str!("workgroup_canary.wgsl"));
+    source.push_str(include_str!("query_guard/canary.wgsl"));
     Ok(source)
 }
 
