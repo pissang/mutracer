@@ -118,8 +118,9 @@ export class TemporalFrame {
   }
   /** @internal */ _withPresentation<T>(callback: (render: Render) => T): T {
     if (!this.valid) throw new Error('This temporal frame is no longer borrowed.');
+    // Captured buffers include padding even when the exported image is cropped.
     this.presentation.engine.display._withSettings(this.source.settings, () =>
-      this.presentation._composeExternalDenoiseInput({width:this.width,height:this.height,samples:this.source.samples,
+      this.presentation._composeExternalDenoiseInput({width:this.storageWidth,height:this.storageHeight,samples:this.source.samples,
         color:this.source.color,albedo:this.source.albedo,normal:this.source.normal}));
     this.presentation.engine.display._configure(this.presentation);
     this.presentation._setExternalDenoisedOutput(this.buffers.denoised,this.displayLinear,this.encodedCodes,this.source.baseline);
