@@ -62,6 +62,7 @@ impl CausticCheckpoint {
         let wait = || crate::query_guard::wait(scene, deadline);
         let mut attempts = 0;
         let mut reference = None;
+        let mut comparison = None;
         let result = (|| -> Result<()> {
             wait()?;
             self.proof.require_success("caustic checkpoint")?;
@@ -119,7 +120,15 @@ impl CausticCheckpoint {
                 }
                 let images = self.read_accumulations(scene, deadline)?;
                 if let Some(reference) = reference {
-                    return verify_replay(reference, images, deadline);
+                    let started = Instant::now();
+                    let mut max_abs = 0.0f64;
+                    let verified = verify_replay(reference, images, deadline, &mut max_abs);
+                    comparison = Some(serde_json::json!({
+                        "passed": verified.is_ok(),
+                        "maxObservedAbsDifference": max_abs,
+                        "milliseconds": started.elapsed().as_secs_f64() * 1000.,
+                    }));
+                    return verified;
                 }
                 reference = Some(images);
                 kind = FailureKind::Retry;
@@ -130,7 +139,7 @@ impl CausticCheckpoint {
             "{}",
             serde_json::json!({"nativeFlightRecovery": {
                 "flight": [start, end], "checkpoint": start, "retries": attempts,
-                "reason": original.to_string(), "recovered": result.is_ok(), "caustics": true,
+                "comparison": comparison, "reason": original.to_string(), "recovered": result.is_ok(), "caustics": true,
                 "milliseconds": begun.elapsed().as_secs_f64()*1000.,
                 "error": result.as_ref().err().map(ToString::to_string),
             }})
@@ -193,6 +202,7 @@ fn verify_replay(
     reference: Vec<wgpu::Buffer>,
     actual: Vec<wgpu::Buffer>,
     deadline: Instant,
+    max_abs: &mut f64,
 ) -> Result<()> {
     for (plane, (first, second)) in reference.iter().zip(&actual).enumerate() {
         let a = first.slice(..).get_mapped_range()?;
@@ -209,6 +219,17 @@ fn verify_replay(
                 .zip(bytemuck::cast_slice::<u8, u32>(right))
                 .enumerate()
                 .all(|(i, (&a, &b))| {
+                    if a == b {
+                        return true;
+                    }
+                    let x = f32::from_bits(a);
+                    let y = f32::from_bits(b);
+                    let difference = if x.is_finite() && y.is_finite() {
+                        (f64::from(x) - f64::from(y)).abs()
+                    } else {
+                        f64::INFINITY
+                    };
+                    *max_abs = max_abs.max(difference);
                     // ShadowCatcherAccumulation is three vec4s. Its two
                     // luminance moments share the radiance sum's rounding.
                     let radiance = match plane {
@@ -216,12 +237,11 @@ fn verify_replay(
                         3 => matches!(i % 12, 8 | 9),
                         _ => false,
                     };
-                    a == b
-                        || (radiance
-                            && f32::from_bits(a).is_finite()
-                            && f32::from_bits(b).is_finite()
-                            && (a >> 31) == (b >> 31)
-                            && a.abs_diff(b) <= 8)
+                    radiance
+                        && x.is_finite()
+                        && y.is_finite()
+                        && (a >> 31) == (b >> 31)
+                        && a.abs_diff(b) <= 8
                 });
             if !equal {
                 return Err(format!(

@@ -159,6 +159,7 @@ fn render_offline_sequence() {
     use crate::api::{
         Backend, Camera, CausticSettings, ConvergeOptions, RenderSettings, RenderSize,
     };
+    crate::logging::stderr();
     let dir = PathBuf::from(std::env::var_os("MUTRACER_TEMPORAL_SCENE").unwrap());
     let output = PathBuf::from(std::env::var_os("MUTRACER_TEMPORAL_OUTPUT").unwrap());
     std::fs::create_dir_all(&output).unwrap();
@@ -256,6 +257,7 @@ fn render_offline_sequence() {
         if spp > 32 && !(18..44).contains(&i) {
             continue;
         }
+        eprintln!("Rendering input frame {i}");
         if dining {
             let bytes = std::fs::read(dir.join(format!("frame_{i:04}.camera"))).unwrap();
             engine

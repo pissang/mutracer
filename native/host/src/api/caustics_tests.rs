@@ -322,6 +322,7 @@ fn caustic_target_packet_preserves_plain_independent_frame_guides() {
 #[cfg(target_os = "macos")]
 #[ignore = "requires a real Metal GPU"]
 fn partial_caustic_flights_match_clean_hdr_and_guides() {
+    crate::logging::stderr();
     let (scene, camera) = caustic_plane();
     let engine = Engine::new(EngineOptions {
         backend: Backend::Hardware,
