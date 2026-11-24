@@ -106,14 +106,18 @@ fn u(v: &Value, k: &str) -> Result<u32> {
 fn b(v: &Value, k: &str) -> Result<bool> {
     v[k].as_bool().with_context(|| format!("Invalid bool {k}"))
 }
-pub fn render(v: &Value, fixed: &Value) -> Result<api::RenderSettings> {
+pub fn render(v: &Value, fixed: &Value) -> Result<(api::RenderSettings, bool)> {
     let mut s = api::RenderSettings::default();
     // Web Render uses sequenceSeed=0; native SDK defaults to 12345.
     s.seed = 0;
     s.max_samples = u(v, "maxSamples")?;
     s.bounces = u(v, "bounces")?;
     s.clamping = n(v, "clamping")?;
-    s.direct_light_candidates = u(v, "directLightCandidates")?;
+    let auto_candidates = v["directLightCandidates"] == "auto";
+    if !auto_candidates {
+        s.direct_light_candidates = u(v, "directLightCandidates")
+            .context("directLightCandidates must be an unsigned integer or the string \"auto\"")?;
+    }
     s.bevel = b(v, "bevel")?;
     s.bevel_samples = u(v, "bevelSamples")?;
     s.dispersion_wavelengths = u(v, "dispersionWavelengths")?;
@@ -165,7 +169,7 @@ pub fn render(v: &Value, fixed: &Value) -> Result<api::RenderSettings> {
         s.caustics.photon_map_radius = c["photonMapRadius"].as_f64().unwrap_or(0.) as f32;
     }
     s.validate()?;
-    Ok(s)
+    Ok((s, auto_candidates))
 }
 pub fn pixel(name: &str) -> Result<api::PixelKind> {
     Ok(match name {

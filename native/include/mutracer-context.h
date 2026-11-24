@@ -92,6 +92,10 @@ int32_t mt_context_cancel_commit(mt_context handle, char *error, size_t capacity
  * mt_context_snapshot.last_commit reports which ran. Every successful commit
  * restarts accumulation. Comparison cost grows with descriptor size. */
 int32_t mt_context_commit(mt_context handle, const uint8_t *input, size_t length, char *error, size_t capacity);
+/* OR into mt_render_settings.caustic_flags to select 1, 4 or 8 direct-light
+ * candidates from the sampled lights after each lighting edit. Default off. */
+#define MT_CONTEXT_AUTO_DIRECT_LIGHT_CANDIDATES 32u
+
 /* Settings are copied by commit_with_settings. Initialize with
  * mt_render_settings_default, then change fields. Defaults: Sobol, seed 12345,
  * max_samples 64, bounces 6, direct-light candidates 2, bevel samples 8,
@@ -115,7 +119,7 @@ typedef struct mt_render_settings {
   uint32_t struct_size, sampling_pattern, seed, max_samples;
   uint32_t bounces, direct_light_candidates, bevel_samples, sample_sequence_offset;
   double clamping, transmissive_output_alpha_min;
-  uint32_t caustic_flags; /* MT_CAUSTIC_* bit mask, default 0 (all disabled). */
+  uint32_t caustic_flags; /* MT_CAUSTIC_* and MT_CONTEXT_AUTO_DIRECT_LIGHT_CANDIDATES. Default 0. */
   uint32_t light_photons, photon_map_photons; /* Default 0: pixel count / 4, capped by device limits;
                                                 photon_map_photons also at most 262144. */
   /* Nonnegative first-batch radius in scene units, independent of photon_map_photons;

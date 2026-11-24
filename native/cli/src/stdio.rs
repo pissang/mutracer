@@ -661,7 +661,7 @@ impl Session {
                         render_settings::denoiser_identity(settings.denoise, "/settings/denoise")?;
                     return reply(
                         writer,
-                        json!({"type":"ok","id":id,"denoiserWeights":weights,"warnings":request_warnings}),
+                        json!({"type":"ok","id":id,"directLightCandidates":settings.render.direct_light_candidates(),"denoiserWeights":weights,"warnings":request_warnings}),
                         None,
                     );
                 }

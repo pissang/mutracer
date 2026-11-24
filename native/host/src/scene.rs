@@ -2922,6 +2922,66 @@ pub(crate) mod tests {
         bytes
     }
     #[test]
+    fn auto_candidates_follow_accepted_light_edits_and_per_target_settings() {
+        let _test = crate::abi_test_lock();
+        let _entry = crate::entry_lock();
+        runtime::init();
+        let one = light_scene(1, 6);
+        let sun = light_scene(1, 5);
+        let sun = change(&sun, Words(&sun).u(h::LIGHT_OFFSET) as usize + l::TYPE, 2);
+        let many = light_scene(16, 6);
+        let auto = settings::RenderSettings {
+            caustic_flags: settings::AUTO_DIRECT_LIGHT_CANDIDATES,
+            ..Default::default()
+        };
+        let fixed = settings::RenderSettings {
+            direct_light_candidates: 0,
+            ..Default::default()
+        };
+        let count = |trace: &[u8]| {
+            let offset = layout::ray_uniform::DIRECT_LIGHT_CANDIDATES;
+            u32::from_le_bytes(trace[offset..offset + 4].try_into().unwrap())
+        };
+        for (base, expected) in [(auto, 1), (settings::RenderSettings::default(), 2)] {
+            let (_, assets, scene) = prepare_retained_with_settings(&sun, false, 0, &base).unwrap();
+            assert_eq!(
+                count(&assets[&AssetId::Packet(res::TRACE_UNIFORM)]),
+                expected
+            );
+            let camera = Words(&sun).u(h::CAMERA_OFFSET) as usize * 4;
+            let target = |settings: &settings::RenderSettings| {
+                count(
+                    &scene
+                        .target(
+                            settings,
+                            [8, 8],
+                            0,
+                            0,
+                            false,
+                            &sun[camera..camera + 128],
+                            &Default::default(),
+                            false,
+                        )
+                        .unwrap()
+                        .trace,
+                )
+            };
+            for (edit, before, after) in [(&many, 1, 8), (&one, 8, 4), (&sun, 4, 1)] {
+                let updates = scene.light_list(edit).unwrap();
+                let uniform = updates.iter().find(|u| u.0 == res::TRACE_UNIFORM).unwrap();
+                assert_eq!(
+                    count(&uniform.4),
+                    if base.caustic_flags == 0 { 2 } else { after }
+                );
+                assert_eq!(target(&auto), before);
+                scene.accept_lighting().unwrap();
+                assert_eq!(target(&auto), after);
+                assert_eq!(target(&fixed), 1);
+            }
+        }
+    }
+
+    #[test]
     fn scene_v5_light_records_remain_readable_and_v6_allows_1024_lights() {
         assert!(validate(&light_scene(1, 5)).is_ok());
         assert!(validate(&light_scene(1024, 6)).is_ok());

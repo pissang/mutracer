@@ -76,7 +76,7 @@ test('MaterialX can decorate a legacy Three.js material with a named-focus lens'
   try {
     const file = join(dir,'materialx.mjs');
     await writeFile(file,`
-      export const output = {duration: 1, render: {bounces: 3}, display: {toneMapping: 'linear'},
+      export const output = {duration: 1, render: {bounces: 3, directLightCandidates: 'auto'}, display: {toneMapping: 'linear'},
         sampleSequence: 'frame', size: [64, 48], spp: 1};
       export async function setup({THREE, load}) {
         const scene = new THREE.Scene(), camera = new THREE.PerspectiveCamera(40);
@@ -99,7 +99,7 @@ test('MaterialX can decorate a legacy Three.js material with a named-focus lens'
       }
       export function frame() {}
     `);
-    assert.equal(JSON.parse((await validate(file)).stdout).event, 'validated');
+    assert.equal(JSON.parse((await validate(file)).stdout).directLightCandidates, 'auto');
   } finally {
     await rm(dir,{recursive:true,force:true});
   }

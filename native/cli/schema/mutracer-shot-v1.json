@@ -501,7 +501,7 @@
         "bounces": {"type": "integer", "minimum": 1, "maximum": 20, "default": 6},
         "clamping": {"type": "number", "minimum": 0, "default": 0},
         "samplingPattern": {"enum": ["sobol", "zsobol", "random"], "default": "sobol"},
-        "directLightCandidates": {"type": "integer", "minimum": 1, "maximum": 16, "default": 4},
+        "directLightCandidates": {"oneOf": [{"type": "integer", "minimum": 1, "maximum": 16}, {"const": "auto"}], "default": 4},
         "dispersionWavelengths": {"enum": [1, 3], "default": 3},
         "bevel": {"type": "boolean", "default": true},
         "bevelSamples": {"type": "integer", "minimum": 1, "maximum": 32, "default": 8},

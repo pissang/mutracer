@@ -383,7 +383,7 @@ pub fn validate(file: &Path) -> Result<()> {
     }
     let frames = shot::frame_count(input.shot.output.duration, settings.fps)?;
     progress(
-        json!({"event":"validated","shot":file,"assets":input.assets.fingerprints().count(),"cost":input.estimate(settings,frames)}),
+        json!({"event":"validated","shot":file,"directLightCandidates":settings.render.direct_light_candidates(),"assets":input.assets.fingerprints().count(),"cost":input.estimate(settings,frames)}),
     );
     Ok(())
 }
@@ -433,6 +433,12 @@ impl Renderer {
             }),
         )
         .map_err(|e| Error::gpu(e.to_string()))?;
+        if settings.render.direct_light_candidates() == render_settings::DirectLightCandidates::Auto
+        {
+            render
+                .set_auto_direct_light_candidates(true)
+                .map_err(|e| Error::gpu(e.to_string()))?;
+        }
         if matches!(settings.denoise, Denoise::Oidn | Denoise::CleanAuxLarge) {
             render
                 .set_denoiser(Some(api::DenoiserOptions {

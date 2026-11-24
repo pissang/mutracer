@@ -104,7 +104,8 @@ pub struct RenderSettings {
     pub sampling_pattern: SamplingPattern,
     /// Primary-ray blend policy. Default [`AlphaBlendStrategy::Stochastic`].
     pub alpha_blend_strategy: AlphaBlendStrategy,
-    /// Light candidates per vertex, clamped to 1–16. Default 4.
+    /// Fixed light candidates per vertex, clamped to 1–16. Default 4.
+    /// [`Render::set_auto_direct_light_candidates`] can override this count.
     pub direct_light_candidates: u32,
     /// Rounded material edges. Default true.
     pub bevel: bool,
@@ -757,6 +758,7 @@ struct Denoise {
 
 pub(super) struct RenderState {
     pub(super) settings: RenderSettings,
+    auto_direct_light_candidates: bool,
     jnlm: Option<crate::display::jnlm::Options>,
     pub(super) fallback: Option<u64>,
     /// L0 context linked as a target to the engine's shared scene.
@@ -797,6 +799,14 @@ pub(super) struct RenderState {
     adaptive: Adaptive,
 }
 impl RenderState {
+    fn target_settings(&self, samples: u32, offset: u32) -> L0Settings {
+        let mut settings = self.settings.l0(self.settings.sample_cap(samples), offset);
+        if self.auto_direct_light_candidates {
+            settings.caustic_flags |= crate::settings::AUTO_DIRECT_LIGHT_CANDIDATES;
+        }
+        settings
+    }
+
     pub(super) fn aov_samples_for_display(&self) -> u32 {
         self.aov.as_ref().map_or(0, |a| a.samples)
     }
@@ -1064,9 +1074,7 @@ fn desired(state: &State, render: &RenderState) -> Option<TargetKey> {
         size: render.image_size(state.display.size),
         quality: render.settings.quality(),
         alpha_blend_strategy: render.settings.alpha_blend_strategy,
-        settings: render
-            .settings
-            .l0(render.settings.sample_cap(render.settings.max_samples), 0),
+        settings: render.target_settings(render.settings.max_samples, 0),
         camera_override: None,
     })
 }
@@ -2344,6 +2352,7 @@ impl Render {
             id,
             RenderState {
                 settings,
+                auto_direct_light_candidates: false,
                 jnlm: None,
                 fallback: None,
                 context,
@@ -2546,6 +2555,24 @@ impl Render {
     fn get<T>(&self, f: impl FnOnce(&State, &RenderState) -> T) -> Option<T> {
         let state = self.engine.lock();
         state.renders.get(&self.id).map(|r| f(&state, r))
+    }
+    /// Selects 1, 4 or 8 direct-light candidates from the sampled lights and
+    /// reselects after lighting edits. The mode persists across [`Render::set_settings`].
+    /// Default false. Pass false to resume
+    /// [`RenderSettings::direct_light_candidates`]. Applies at the next update or render.
+    pub fn set_auto_direct_light_candidates(&self, enabled: bool) -> Result<()> {
+        self.with(|state, id| {
+            state
+                .renders
+                .get_mut(&id)
+                .unwrap()
+                .auto_direct_light_candidates = enabled;
+            Ok(())
+        })
+    }
+    /// Whether this render selects direct-light candidates automatically. Default false.
+    pub fn auto_direct_light_candidates(&self) -> Result<bool> {
+        self.with(|state, id| Ok(state.renders[&id].auto_direct_light_candidates))
     }
     /// The latest settings from [`Render::new`] or [`Render::set_settings`].
     pub fn settings(&self) -> Result<RenderSettings> {
@@ -2964,10 +2991,7 @@ impl Render {
             let render = state.renders.get_mut(&id).unwrap();
             render.busy = true;
             cancel_denoise(render);
-            key.settings = render.settings.l0(
-                render.settings.sample_cap(options.samples),
-                options.sample_sequence_offset,
-            );
+            key.settings = render.target_settings(options.samples, options.sample_sequence_offset);
             key.camera_override = options.camera.map(|c| c.to_bytes());
             Ok(key)
         })?;

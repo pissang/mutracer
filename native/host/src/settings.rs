@@ -2,6 +2,10 @@
 use super::*;
 use crate::layout::{WORD_BYTES, settings as wire};
 
+/// Context render flag selecting 1, 4 or 8 candidates from the sampled lights.
+/// Combine with the caustic bits in [`RenderSettings::caustic_flags`]. Default off.
+pub const AUTO_DIRECT_LIGHT_CANDIDATES: u32 = 32;
+
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq)]
 pub struct RenderSettings {
@@ -10,11 +14,15 @@ pub struct RenderSettings {
     pub seed: u32,
     pub max_samples: u32,
     pub bounces: u32,
+    /// Fixed candidates per vertex, clamped to 1–16. Default 2.
+    /// [`AUTO_DIRECT_LIGHT_CANDIDATES`] overrides this count after each lighting edit.
     pub direct_light_candidates: u32,
     pub bevel_samples: u32,
     pub sample_sequence_offset: u32,
     pub clamping: f64,
     pub transmissive_output_alpha_min: f64,
+    /// Render flags. Bits 1 and 2 enable light tracing and photon mapping.
+    /// [`AUTO_DIRECT_LIGHT_CANDIDATES`] enables automatic light candidates. Default 0.
     pub caustic_flags: u32,
     pub light_photons: u32,
     pub photon_map_photons: u32,
@@ -52,10 +60,10 @@ impl RenderSettings {
                 "mt_render_settings.struct_size must be sizeof(mt_render_settings)",
             ));
         }
-        if self.caustic_flags & !6 != 0
-            || !self.photon_map_radius.is_finite()
-            || self.photon_map_radius < 0.
-        {
+        if self.caustic_flags & !(6 | AUTO_DIRECT_LIGHT_CANDIDATES) != 0 {
+            return Err(fail(Status::InvalidArgument, "Unknown context render flag"));
+        }
+        if !self.photon_map_radius.is_finite() || self.photon_map_radius < 0. {
             return Err(fail(Status::InvalidArgument, "Invalid caustic settings"));
         }
         let mut bytes = vec![0; wire::WORDS * WORD_BYTES];
@@ -68,7 +76,7 @@ impl RenderSettings {
             (wire::VARIANTS, variants),
             (wire::TEXTURE_DIMENSION, textures[0]),
             (wire::TEXTURE_BINDINGS, textures[1]),
-            (wire::CAUSTIC_FLAGS, self.caustic_flags),
+            (wire::CAUSTIC_FLAGS, self.caustic_flags & 6),
             (wire::LIGHT_PHOTONS, self.light_photons),
             (wire::PHOTON_MAP_PHOTONS, self.photon_map_photons),
             (wire::PHOTON_MAP_RADIUS, self.photon_map_radius.to_bits()),
@@ -84,7 +92,11 @@ impl RenderSettings {
             (wire::BOUNCES, f64::from(self.bounces)),
             (
                 wire::DIRECT_LIGHT_CANDIDATES,
-                f64::from(self.direct_light_candidates),
+                if self.caustic_flags & AUTO_DIRECT_LIGHT_CANDIDATES != 0 {
+                    -1.
+                } else {
+                    f64::from(self.direct_light_candidates)
+                },
             ),
             (wire::BEVEL_SAMPLES, f64::from(self.bevel_samples)),
             (wire::CLAMPING, self.clamping),

@@ -35,6 +35,15 @@ class ShotTests(unittest.TestCase):
             self.assertEqual(reply["warnings"], [])
             self.assertFalse(any("warning" in event for event in progress))
 
+    @unittest.skipUnless(os.environ.get("MUTRACER_BIN"), "requires the native CLI")
+    def test_auto_direct_light_candidates_reach_worker(self):
+        scene = shot(Mesh("tri", shape="box"))
+        scene.output.render = {"directLightCandidates": "auto"}
+        with Session() as session:
+            session.scene(scene.to_dict())
+            self.assertEqual(session.check(0, 0)["directLightCandidates"], "auto")
+            self.assertEqual(session.check(0, 0, settings={"render": {"directLightCandidates": 8}})["directLightCandidates"], 8)
+
     def test_keys_bake_and_json(self):
         keys = Keys.bake(0.1, 24, lambda time: [time, 0, 0])
         self.assertEqual([k[0] for k in keys.keys], [0, 1 / 24, 2 / 24, 0.1])
