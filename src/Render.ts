@@ -103,7 +103,7 @@ export interface RenderSettings {
   /** Radiance clamp; 0 disables it. Default 0. */ clamping?: number;
   /** Sampling sequence. Default sobol. */ samplingPattern?: SamplingPattern;
   /** Caustic estimators. All are disabled by default. */ caustics?: CausticSettings;
-  /** Light candidates per vertex; WebGPU only, ignored on WebGL. Default 4. */ directLightCandidates?: number;
+  /** WebGPU light candidates per vertex. Use 1–16 or 'auto' to select by scene lighting. WebGL ignores this setting. Default 4. */ directLightCandidates?: number | 'auto';
   /** Rounded material edges. Default true. */ bevel?: boolean;
   /** Bevel neighborhood probes, clamped to 1–32. Default 8. */ bevelSamples?: number;
   /** Wavelength paths per dispersion sample, each carrying one RGB channel. Default 3; 1 selects one random channel. */ dispersionWavelengths?: 1 | 3;
@@ -194,7 +194,7 @@ export default class Render {
   /** Per-sample radiance clamp; 0 disables it. Default 0. */ clamping = 0;
   /** Sampling sequence. Default sobol. */ samplingPattern: SamplingPattern = 'sobol';
   /** Caustic estimators. Default undefined (all disabled). */ caustics?: CausticSettings;
-  /** WebGPU light candidates per vertex; ignored on WebGL. Default 4. */ directLightCandidates = 4;
+  /** WebGPU light candidates per vertex. Use 1–16 or 'auto' to select by scene lighting. WebGL ignores this setting. Default 4. */ directLightCandidates: number | 'auto' = 4;
   /** Rounded material edges. Default true. */ bevel = true;
   /** Bevel probes, clamped to 1–32. Default 8. */ bevelSamples = 8;
   /** Dispersion wavelengths per sample. Default 3. */ dispersionWavelengths: 1 | 3 = 3;

@@ -1034,7 +1034,7 @@ class WebGLRayTracePass {
     this._shadowCatcherPass.useTarget(target);
   }
 
-  setQuality(options: { bounces: number; bevel: boolean; dispersionWavelengths: 1 | 3; directLightCandidates: number; caustics?: import('../Render.js').CausticSettings }) {
+  setQuality(options: { bounces: number; bevel: boolean; dispersionWavelengths: 1 | 3; directLightCandidates: number | 'auto'; caustics?: import('../Render.js').CausticSettings }) {
     const wasIndependent = this._independentSpectralPaths;
     const research = researchTransport()?.configure(this, 'webgl');
     this._independentSpectralPaths = !!research?.enabled;

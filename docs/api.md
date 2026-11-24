@@ -143,7 +143,7 @@ other sequences retain their completed samples.
 | `bounces` / `clamping` | `3` / `0` | Scattering depth / per-sample radiance clamp; 0 disables clamping |
 | `samplingPattern` | `'sobol'` | Sobol, ZSobol or random; see [sampling](./sampling.md) |
 | `caustics` | `undefined` | Optional caustics; all estimators default to off. See [caustics](#caustics) |
-| `directLightCandidates` | `4` | WebGPU light candidates, clamped 1–16; ignored on WebGL |
+| `directLightCandidates` | `4` | WebGPU light candidates per vertex. Use a number (clamped to 1–16) or `'auto'`. WebGL ignores this option |
 | `bevel` / `bevelSamples` | `true` / `8` | Bevel shading / probes, clamped 1–32 |
 | `dispersionWavelengths` | `3` | One continuous wavelength per RGB channel, or one randomly chosen channel |
 | `alphaBlendStrategy` | `'stochastic'` | WebGPU primary BLEND policy; ignored on WebGL |
@@ -155,6 +155,13 @@ other sequences retain their completed samples.
 | `batchSamples` | `false` | Let one refine submit several samples within an estimated timeBudgetMs; one sample or tile can exceed it; see [sample batching](./progressive-rendering.md#sample-batching). `allowMultipleSamplesPerFrame` is a deprecated alias |
 | `fallback` | `null` | Single-level Render on the same engine |
 | `denoiser` | `null` | Per-render configuration; read back through the frozen `denoiser` getter and change with `setDenoiser()`; see [denoising](./denoising.md) |
+
+With `directLightCandidates: 'auto'`, WebGPU counts only sources that contribute
+to light sampling. It uses one candidate for a lone directional light with or
+without environment lighting, or for a lone zero-radius sphere or spot light
+without environment lighting. Scenes lit exclusively by 16 or more analytic
+lights use eight candidates, which can lower direct-light noise at a higher cost
+per sample. All other lighting combinations use four.
 
 `bounces` is rounded and clamped to [1, 50] on WebGPU or [1, 20] on WebGL;
 NaN becomes 1. Paths allow at most `min(bounces * 3, 50)` events on WebGPU
@@ -313,9 +320,8 @@ engine.display.present(render);
 ```
 
 Ordinary setting fields remain enumerable and read back the assigned value.
-For example, `bevelSamples` and `directLightCandidates` are clamped when
-submitted, without rewriting the assigned field. Existing accessors for
-resolution, fallback and worker count retain their validation rules.
+Numeric `bevelSamples` and `directLightCandidates` values are clamped at submission.
+Resolution, fallback and worker count validate values on assignment.
 
 `DenoiserOptions` is a union of `JNLMDenoiserOptions`, `OIDNDenoiserOptions`
 and `CustomDenoiserOptions`,
