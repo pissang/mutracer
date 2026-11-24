@@ -44,7 +44,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   output[index]=aovResolvedValue(source,parameters.w&255u);
 }
 `;
-export const aovResolveNativeShader = resolveCommon(true, 7, false) + resolveMain;
+export const aovResolveNativeShader = resolveCommon(true, 7) + resolveMain;
 export default resolveCommon(false) + resolveMain;
 
 /** Borrowed depth texture: rg32float (depth, hit coverage), top row first. */
@@ -67,8 +67,7 @@ const borrowReflectanceMain = /* wgsl */ `
 }`;
 export const aovBorrowDepthShader = resolveCommon(false) + borrowDepthMain;
 /** Native borrowed depth also supports center depth at native AOV index 8. */
-export const aovBorrowDepthNativeShader = resolveCommon(true, 7, false) + borrowDepthMain;
+export const aovBorrowDepthNativeShader = resolveCommon(true, 7) + borrowDepthMain;
 /** Borrowed reflectance texture, rendered into rgba8unorm-srgb, top row first. */
 export const aovBorrowReflectanceShader = resolveCommon(false) + borrowReflectanceMain;
-/** Native keeps its existing public motion depth lane while preserving validity. */
-export const aovBorrowReflectanceNativeShader = resolveCommon(false, 9, false) + borrowReflectanceMain;
+export const aovBorrowReflectanceNativeShader = aovBorrowReflectanceShader;

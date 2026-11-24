@@ -45,6 +45,14 @@ class ShotTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             Keys(((0.1, 3), (0.1, 4)))
 
+    def test_temporal_shot_options_reach_file_mode(self):
+        scene = shot(Mesh("tri", shape="box"))
+        scene.output = Output(1, denoise="temporal", sample_sequence="frame",
+                              temporal={"historyRadius": 4, "cuts": [3]})
+        output = scene.to_dict()["output"]
+        self.assertEqual(output["sampleSequence"], "frame")
+        self.assertEqual(output["temporal"], {"historyRadius": 4, "cuts": [3]})
+
     def test_builder_writes_canonical_material_and_display_fields(self):
         scene = shot(Mesh("tri", shape="box", material={
             "color": [0.2, 0.3, 0.4],

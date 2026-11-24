@@ -6,7 +6,8 @@
   "description": "Render Three.js shot modules through MuTracer's native video CLI",
   "engines": {"node": ">=22"},
   "bin": {"mutracer-js": "./dist/main.mjs"},
-  "files": ["dist/main.mjs", "examples", "README.md"],
+  "main": "./src/worker.mjs",
+  "files": ["dist/main.mjs", "src/worker.mjs", "examples", "README.md"],
   "scripts": {
     "build": "node build.mjs",
     "test": "npm run build && node --test tests/*.test.mjs"

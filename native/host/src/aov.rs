@@ -114,7 +114,12 @@ fn create_pipelines(
 /// The path tracer source with its AOV entry points replaced by the shared
 /// display-resolution storage variant.
 fn display_source(source: &str) -> Result<String> {
-    let [default, display] = &crate::postprocess::sources()?.aov_trace;
+    let sources = crate::postprocess::sources()?;
+    let [default, display] = if source.contains("fn mtIndices(") {
+        &sources.aov_trace_hwrt
+    } else {
+        &sources.aov_trace
+    };
     // Material graphs specialize aovSurface's material call alongside the
     // beauty shader. Keep that function verbatim when changing AOV storage;
     // the surrounding shared template must still match exactly.
@@ -195,8 +200,8 @@ impl Query {
             size: [target.width, target.height],
         })
     }
-    pub(crate) fn metadata(&self, camera: &[u8], size: [u32; 2]) -> Result<Vec<u32>> {
-        self.retained.aov_metadata(camera, size)
+    pub(crate) fn metadata(&self, camera: &[u8], size: [u32; 2], motion: bool) -> Result<Vec<u32>> {
+        self.retained.aov_metadata(camera, size, motion)
     }
     pub(crate) fn size(&self) -> [u32; 2] {
         self.size
@@ -495,6 +500,9 @@ impl Output {
         self.render(query, 1, self.mask)
     }
     pub(crate) fn snapshot(&self, mask: u32) -> Result<Vec<api::GpuAov>> {
+        self.ordered_snapshot(mask,false)
+    }
+    pub(crate) fn ordered_snapshot(&self, mask:u32,top_first:bool)->Result<Vec<api::GpuAov>> {
         let device = &self.gpu.device;
         let pipeline = self.resolve.get_or_init(|| {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -524,7 +532,7 @@ impl Output {
                 mapped_at_creation: false,
             });
             let bytes: Vec<_> =
-                bytemuck::cast_slice(&[self.size[0], self.size[1], self.samples, index]).to_vec();
+                bytemuck::cast_slice(&[self.size[0], self.size[1], self.samples, index | (u32::from(top_first)<<8)]).to_vec();
             let parameters = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: None,
                 contents: &bytes,
@@ -849,9 +857,13 @@ pub(crate) fn read_denoise_aov(gpu: &GpuDevice, aov: &api::GpuAov) -> Result<api
 }
 
 pub(crate) fn reproject_metadata(current: &[u32], previous: Option<&[u32]>) -> Vec<u32> {
-    let mut words = current.to_vec();
+    // The input tail holds this frame's snapshots on the CPU. Upload only the
+    // previous positions actually used by changed, topology-compatible geometry.
+    let end = current[19] as usize;
+    let mut words = current[..if end == 0 { current.len() } else { end }].to_vec();
+    let mut snapshots = HashMap::new();
     words[..16].fill(0);
-    if let Some(old) = previous.filter(|p| p.len() >= 52 && p[18] == words[18]) {
+    if let Some(old) = previous.filter(|p| p.len() >= 52) {
         words[..16].copy_from_slice(&old[20..36]);
         words[44..52].copy_from_slice(&old[36..44]);
         let mut records = HashMap::new();
@@ -860,7 +872,23 @@ pub(crate) fn reproject_metadata(current: &[u32], previous: Option<&[u32]>) -> V
         }
         for offset in (52..words[16] as usize).step_by(24) {
             if let Some(&prior) = records.get(&(words[offset], words[offset + 1])) {
-                if words[offset + 20..offset + 23] == old[prior + 20..prior + 23] {
+                if words[offset + 20] != old[prior + 20] || words[offset + 22] != old[prior + 22] {
+                    continue;
+                }
+                if words[offset + 21] != old[prior + 21] {
+                    let start = old[prior + 23] as usize;
+                    if start == 0 || words[offset + 23] == 0 {
+                        continue;
+                    }
+                    let snapshot = *snapshots.entry(start).or_insert_with(|| {
+                        let destination = words.len() as u32;
+                        words.extend_from_slice(&old[start..start + old[prior + 22] as usize]);
+                        destination
+                    });
+                    words[offset + 2] = 1;
+                    words[offset + 3] = snapshot;
+                    words[offset + 4..offset + 20].copy_from_slice(&old[prior + 4..prior + 20]);
+                } else {
                     let matrix = glam::Mat4::from_cols_array(&std::array::from_fn(|i| {
                         f32::from_bits(words[offset + 4 + i])
                     }));

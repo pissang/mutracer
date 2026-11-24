@@ -162,6 +162,25 @@ export class Worker {
     }
   }
 
+  /** Submit one input at a time and yield finished frames in display order. */
+  async *temporalFrames(inputs, settings) {
+    if (!this.info.capabilities.includes('temporal-offline')) throw new NativeError('Update the native CLI for offline temporal rendering.', 2);
+    const unpack = function* ({header, bytes}) {
+      if (header.type !== 'frames') throw new NativeError('Expected a temporal frame batch.');
+      for (const item of header.frames) yield {frame:item.frame, bytes:bytes.subarray(item.offset, item.offset + item.bytes)};
+    };
+    for await (const {frame, t, descriptor, cut} of inputs) {
+      if (descriptor) await this.request('scene', {format:'descriptor-v8'}, descriptor);
+      if (cut) await this.request('cut', {});
+      yield* unpack(await this.request('render', {frame, t, settings}));
+    }
+    for (;;) {
+      const result = await this.request('flush', {});
+      yield* unpack(result);
+      if (result.header.done) return;
+    }
+  }
+
   async close() {
     this.child.stdin.end();
     let timeout;

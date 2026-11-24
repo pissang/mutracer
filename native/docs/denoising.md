@@ -171,3 +171,20 @@ The Auto backend tries Metal, CUDA, HIP, then CPU; explicit backends never fall
 back. GPU backends need supported hardware and drivers, and HIP also needs the
 matching AMD HIP runtime; see
 [OIDN's system requirements](https://github.com/RenderKit/oidn/blob/v2.5.1/README.md#system-requirements).
+
+## Offline animation
+
+Create a Rust `TemporalDenoiser` on the render's engine and enable
+`TemporalDenoiser::AOVS` at render resolution. For each frame, update the
+scene, converge with a fresh sample range, and call `push(index, &render)`.
+Drain ready frames after each push. At the end, call `flush()` until it
+returns `None`. Each `OfflineFrame` keeps its original index. Read the
+denoised image with `read_pixels(false)` or pre-spatial HDR with
+`read_pixels(true)`.
+
+Call `cut()` before the first input of a new segment. A full output queue
+holds four frames. The effective `plan()` and `latency()` are available after
+the first push. Wider windows delay output and use more GPU memory. Moving
+reflections and shadows can leave trails, and newly visible surfaces have
+less history. The [shot options](../cli/schema/shot.md#output-and-animation)
+describe the radii, byte budget and spatial weights used for video.

@@ -379,10 +379,10 @@ pub enum PixelKind {
     /// `Image::id_data`. Background is u32::MAX in all channels. Exact shared-edge
     /// hits may select either adjacent triangle depending on host/GPU rounding.
     Id,
-    /// Previous minus current pixel position, x right, y down, z=0; alpha 3 for
-    /// visible camera/rigid correspondence, otherwise 0. History is per-render,
-    /// from its previous AOV frame. Size/projection changes, missing IDs, topology
-    /// or vertex edits and visibility failures invalidate it. Device loss clears it.
+    /// Previous minus current pixel position (x right, y down) and previous camera-forward
+    /// depth in z. Alpha is 3 for visible correspondence, otherwise all lanes are zero.
+    /// History follows camera, projection, rigid and same-topology vertex changes.
+    /// Size changes, missing IDs, topology changes and device loss invalidate history.
     Motion,
     /// Signed unit world shading normal, including the base normal map, from the
     /// same unjittered center hit as ID. Double-sided backface orientation is retained.
@@ -1685,7 +1685,7 @@ fn render_aovs(render: &mut RenderState, mask: u32, samples: u32) -> Result<()> 
             vec![0; 64]
         } else {
             query
-                .metadata(&render.aov_camera, layout.size)
+                .metadata(&render.aov_camera, layout.size, mask & 64 != 0)
                 .map_err(|e| error(Status::Error, e.to_string()))?
         };
         render.aov = Some(
@@ -1997,6 +1997,7 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
                         &inputs[1],
                         capture.oidn_normal(),
                         render.samples,
+                        false,
                     )
                     .map_err(|e| e.to_string())?;
                 return Ok(DenoisedImage::DisplayGpu { pixels, settings });
@@ -2633,7 +2634,7 @@ impl Render {
         self.set_denoiser_domain(options, false)
     }
     // Viewer-only plumbing; the installed SDK keeps its HDR denoiser contract.
-    #[cfg(feature = "viewer-support")]
+    #[cfg(any(test, feature = "viewer-support"))]
     #[doc(hidden)]
     pub fn set_viewer_denoiser(&self, options: Option<DenoiserOptions>) -> Result<()> {
         self.set_denoiser_domain(options, true)
@@ -3236,6 +3237,94 @@ impl Render {
                 },
             }
         })
+    }
+    pub(super) fn offline_capture(
+        &self,
+        engine: &Engine,
+        auto: bool,
+    ) -> crate::Result<super::offline::Capture> {
+        if !Arc::ptr_eq(&engine.inner, &self.engine.inner) || !self.converged() {
+            return Err("Temporal push needs a converged render on the same engine".into());
+        }
+        Ok(self.with(|state, id| {
+            use super::offline::TemporalDenoiser;
+            let r = state.renders.get_mut(&id).unwrap();
+            if r.settings.aovs & TemporalDenoiser::AOVS != TemporalDenoiser::AOVS
+                || r.settings.aov_resolution == AovResolution::Display
+            {
+                return Err(error(
+                    Status::InvalidArgument,
+                    "Enable TemporalDenoiser::AOVS at render resolution before convergence",
+                ));
+            }
+            update_aovs(r)?;
+            let aov = r
+                .aov
+                .as_ref()
+                .ok_or_else(|| error(Status::InvalidState, "Missing temporal surface outputs"))?;
+            // The native resolve pipeline uses consecutive channel indices.
+            let resolve_mask = (0..10)
+                .filter(|i| PixelKind::from_aov_index(*i).aov_mask() & TemporalDenoiser::AOVS != 0)
+                .fold(0, |mask, i| mask | 1 << i);
+            let shots = context_result(aov.ordered_snapshot(resolve_mask, true))?;
+            let get = |kind| {
+                shots
+                    .iter()
+                    .find(|a| a.kind == kind)
+                    .unwrap()
+                    .buffer
+                    .clone()
+            };
+            let (raw, size, _) = context_result(context::denoise_buffers(r.context))?;
+            let [color, albedo, normal] = raw;
+            let packed = context_result(crate::scene::prepare_camera(
+                &r.aov_camera,
+                size[0],
+                size[1],
+            ))?;
+            let layout: Vec<f32> = bytemuck::pod_collect_to_vec(&packed);
+            let vp = glam::Mat4::from_cols_slice(&layout[..16]).inverse();
+            let proj = vp * glam::Mat4::from_cols_slice(&layout[16..32]);
+            let mut camera = [0.; 20];
+            camera[..16].copy_from_slice(&vp.to_cols_array());
+            camera[16..].copy_from_slice(&[
+                size[1] as f32 * proj.y_axis.y * 0.5,
+                layout[32],
+                layout[33],
+                0.,
+            ]);
+            let (scene_key, revisions) = if auto {
+                super::offline::scene_revisions(
+                    state
+                        .scene
+                        .as_ref()
+                        .ok_or_else(|| error(Status::InvalidState, "Missing temporal scene"))?,
+                )
+            } else {
+                Default::default()
+            };
+            Ok(super::offline::Capture {
+                raw: true,
+                check_camera: true,
+                size,
+                samples: r.samples,
+                camera,
+                display: state.display.settings,
+                revisions,
+                scene_key,
+                guides: [
+                    get(PixelKind::CenterDepth),
+                    get(PixelKind::CenterNormal),
+                    get(PixelKind::Roughness),
+                    albedo,
+                    color,
+                    get(PixelKind::Motion),
+                    get(PixelKind::Id),
+                    normal,
+                    get(PixelKind::CenterPosition),
+                ],
+            })
+        })?)
     }
     /// Waits for the in-flight batch, then reads this render's RGBA image
     /// (u32 for Id, f32 otherwise), top row first. During preparation it reads the previous image.

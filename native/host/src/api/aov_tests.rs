@@ -155,6 +155,9 @@ fn independent_surface_aovs(backend: Backend) {
         assert_eq!(render.backend().unwrap().0, Backend::Hardware);
     }
     let before = render.read_pixels(PixelKind::Hdr).unwrap();
+    if let Ok(path) = std::env::var("MUTRACER_AOV_BEAUTY") {
+        std::fs::write(path, bytemuck::cast_slice(&before.data)).unwrap();
+    }
     let guides =
         [PixelKind::Normal, PixelKind::Albedo].map(|kind| render.read_pixels(kind).unwrap());
     let mut settings = render.settings().unwrap();
@@ -303,18 +306,47 @@ fn independent_surface_aovs(backend: Backend) {
         assert!(valid.len() > 40, "motion history was lost for {aovs:#x}");
         assert!(valid.iter().all(|p| p[0].abs() < 1e-5 && p[1].abs() < 1e-5));
     }
-    descriptor[194 * 4..195 * 4].copy_from_slice(&(-1.2f32).to_le_bytes());
+    for vertex in 0..4 {
+        let offset = (194 + vertex * 3) * 4;
+        let x = f32::from_le_bytes(descriptor[offset..offset + 4].try_into().unwrap());
+        descriptor[offset..offset + 4].copy_from_slice(&(x - 0.2).to_le_bytes());
+    }
     engine.set_scene(&descriptor).unwrap();
     engine.update().unwrap();
     render.converge(ConvergeOptions::new(4)).unwrap();
-    assert!(
-        render
-            .read_pixels(PixelKind::Motion)
-            .unwrap()
-            .data
-            .chunks_exact(4)
-            .all(|v| v[3] == 0.)
-    );
+    let deformed = render.read_pixels(PixelKind::Motion).unwrap();
+    let ids_now = render.read_pixels(PixelKind::Id).unwrap().id_data.unwrap();
+    let mut count = 0;
+    for (m, id) in deformed.data.chunks_exact(4).zip(ids_now.chunks_exact(4)) {
+        if id[0] == 101 && m[3] == 3. {
+            assert!(
+                (m[0] - 0.2 * c * focal / 4.).abs() < 1e-3
+                    && (m[1] - 0.2 * s * focal / 4.).abs() < 1e-3,
+                "{m:?}"
+            );
+            assert!((m[2] / 4. - 1.).abs() < 1e-4);
+            count += 1;
+        }
+    }
+    assert!(count > 40);
+    camera.fov = 35.;
+    engine.set_camera(Some(camera)).unwrap();
+    engine.update().unwrap();
+    render.converge(ConvergeOptions::new(4)).unwrap();
+    let zoomed = render.read_pixels(PixelKind::Motion).unwrap();
+    let ratio = (camera.fov.to_radians() * 0.5).tan() / (std::f32::consts::PI / 8.).tan();
+    let mut count = 0;
+    for (pixel, m) in zoomed.data.chunks_exact(4).enumerate() {
+        if m[3] == 3. {
+            let dx = (pixel % 48) as f32 + 0.5 - 24.;
+            let dy = (pixel / 48) as f32 + 0.5 - 16.;
+            assert!(
+                (m[0] - dx * (ratio - 1.)).abs() < 1e-3 && (m[1] - dy * (ratio - 1.)).abs() < 1e-3
+            );
+            count += 1;
+        }
+    }
+    assert!(count > 40);
     if let Ok(directory) = std::env::var("MUTRACER_AOV_EVIDENCE") {
         std::fs::create_dir_all(&directory).unwrap();
         std::fs::write(
@@ -1545,6 +1577,7 @@ fn aov_targets_use_the_requested_sampling_variant_and_reuse_it() {
                 .metadata(
                     &descriptor[camera_offset..camera_offset + 128],
                     query.size(),
+                    true,
                 )
                 .unwrap();
             let layout = crate::aov::Layout {

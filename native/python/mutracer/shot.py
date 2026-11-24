@@ -189,6 +189,7 @@ class Output:
     display: dict | None = None
     render: dict | None = None
     sample_sequence: str | None = None
+    temporal: dict | None = None
 
 
 def _json_value(value, directory: Path):

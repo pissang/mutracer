@@ -20,7 +20,7 @@ fn loadAov(source: u32) -> AovResolvedAccumulation {
 fn aovResolvedValue(source: u32, kind: u32) -> vec4u {
   if(kind==5u){return center[source].identity;}
   var value=vec4f(0.0);
-  if(kind==6u){let motion=center[source].motion;value=vec4f(motion.xy,0.0,select(0.0,3.0,motion.w!=0.0));}
+  if(kind==6u){let motion=center[source].motion;value=vec4f(motion.xy,motion.w,select(0.0,3.0,motion.w!=0.0));}
   else{
     let pixel=loadAov(source);let hits=pixel.position.w;
     let scale=select(0.0,1.0/max(hits,1.0),hits>0.0);let coverage=hits/f32(max(parameters.z,1u));

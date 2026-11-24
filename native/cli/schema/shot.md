@@ -40,6 +40,24 @@ model. To use `"cleanAuxLarge"`, put `rt_hdr_calb_cnrm_large.tza`,
 [oidn-weights 2.3.0-1](https://cdn.jsdelivr.net/npm/oidn-weights@2.3.0-1/).
 Large takes more time and GPU memory because it filters the guides first.
 
+For an animation, set `output.denoise` to `"temporal"` and `sampleSequence` to
+`"frame"`. Use `render` at stride 1. Temporal uses the Large weights above
+when available. Otherwise it uses bundled weights and reports warning `W3`.
+
+| `output.temporal` option | Behavior |
+| --- | --- |
+| `mode` | `"offline"` (default). |
+| `historyRadius` | Number of neighbors on each side, 0–32, or an adaptive range such as the default `{"min":8,"max":16}`. |
+| `postRadius` | Stabilization radius, 0–3. Default 3. |
+| `stabilizeSparkle` | Suppress isolated flashes. Default true. Set false when `postRadius` is 0. |
+| `historyInvalidation` | `"auto"` (default) reacts to scene and material changes. Choose `"manual"` when supplying shot boundaries yourself. |
+| `cuts` | Frame indices or `{"time": seconds}` entries. Each begins a new segment at the first frame at or after the cut. Default empty. |
+| `memoryBudget` | Maximum estimated temporal GPU bytes. Smaller budgets reduce the history and stabilization radii. A budget below the minimum plan fails. |
+
+Output starts after the effective history and post radii in future frames
+(default 19). The worker finishes the tail with the available neighbors.
+A temporal EXR contains the stabilized display-linear result.
+
 An animatable value can be a constant or a channel such as
 `{"keys":[[0,0.2],[1,0.65]],"ease":"inOutSine"}`. Use strictly increasing
 times in `[0, duration]` and the same value shape at every key. A channel holds

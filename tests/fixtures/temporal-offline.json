@@ -1,0 +1,208 @@
+{
+  "options": [
+    {
+      "input": {},
+      "expected": {
+        "mode": "offline",
+        "historyRadius": {
+          "min": 8,
+          "max": 16
+        },
+        "postRadius": 3,
+        "stabilizeSparkle": true,
+        "denoiser": {
+          "type": "oidn",
+          "model": "cleanAuxLarge"
+        },
+        "historyInvalidation": "auto"
+      }
+    },
+    {
+      "input": {
+        "historyRadius": 2,
+        "postRadius": 0,
+        "stabilizeSparkle": false,
+        "denoiser": null,
+        "historyInvalidation": "manual"
+      },
+      "expected": {
+        "mode": "offline",
+        "historyRadius": {
+          "min": 2,
+          "max": 2
+        },
+        "postRadius": 0,
+        "stabilizeSparkle": false,
+        "denoiser": null,
+        "historyInvalidation": "manual"
+      }
+    },
+    {
+      "input": {
+        "historyRadius": {
+          "min": 1,
+          "max": 7
+        },
+        "memoryBudget": 4000000
+      },
+      "expected": {
+        "mode": "offline",
+        "historyRadius": {
+          "min": 1,
+          "max": 7
+        },
+        "postRadius": 3,
+        "stabilizeSparkle": true,
+        "denoiser": {
+          "type": "oidn",
+          "model": "cleanAuxLarge"
+        },
+        "historyInvalidation": "auto",
+        "memoryBudget": 4000000
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "postRadius": 0
+    },
+    {
+      "historyRadius": 33
+    },
+    {
+      "historyRadius": {
+        "min": 5,
+        "max": 4
+      }
+    },
+    {
+      "memoryBudget": -1
+    }
+  ],
+  "schedule": [
+    {
+      "input": {},
+      "pushed": 19,
+      "flush": false,
+      "ready": -1,
+      "latency": 19
+    },
+    {
+      "input": {},
+      "pushed": 20,
+      "flush": false,
+      "ready": 0,
+      "latency": 19
+    },
+    {
+      "input": {},
+      "pushed": 5,
+      "flush": true,
+      "ready": 4,
+      "latency": 19
+    },
+    {
+      "input": {
+        "historyRadius": 0,
+        "postRadius": 0,
+        "stabilizeSparkle": false
+      },
+      "pushed": 1,
+      "flush": false,
+      "ready": 0,
+      "latency": 0
+    }
+  ],
+  "limits": {
+    "maxTextureDimension2D": 16384,
+    "maxTextureArrayLayers": 256,
+    "maxStorageBufferBindingSize": 134217728,
+    "maxBufferSize": 268435456
+  },
+  "memory": [
+    {
+      "width": 1280,
+      "height": 720,
+      "materials": 0,
+      "input": {},
+      "overrides": {},
+      "expected": {
+        "historyRadius": {
+          "min": 8,
+          "max": 16
+        },
+        "postRadius": 3,
+        "bytes": 2739147592
+      }
+    },
+    {
+      "width": 1920,
+      "height": 1080,
+      "materials": 5,
+      "input": {},
+      "overrides": {},
+      "expected": {
+        "historyRadius": {
+          "min": 8,
+          "max": 16
+        },
+        "postRadius": 3,
+        "bytes": 6157664536
+      }
+    },
+    {
+      "width": 31,
+      "height": 17,
+      "materials": 3,
+      "input": {
+        "memoryBudget": 1500000
+      },
+      "overrides": {},
+      "expected": {
+        "historyRadius": {
+          "min": 2,
+          "max": 2
+        },
+        "postRadius": 1,
+        "bytes": 1169616
+      }
+    },
+    {
+      "width": 31,
+      "height": 17,
+      "materials": 3,
+      "input": {},
+      "overrides": {
+        "maxTextureArrayLayers": 10
+      },
+      "expected": {
+        "historyRadius": {
+          "min": 2,
+          "max": 2
+        },
+        "postRadius": 1,
+        "bytes": 1169616
+      }
+    },
+    {
+      "width": 1,
+      "height": 1,
+      "materials": 0,
+      "input": {
+        "historyRadius": 0,
+        "postRadius": 0,
+        "stabilizeSparkle": false,
+        "denoiser": null
+      },
+      "overrides": {},
+      "expected": {
+        "historyRadius": {
+          "min": 0,
+          "max": 0
+        },
+        "postRadius": 0,
+        "bytes": 131780
+      }
+    }
+  ]
+}

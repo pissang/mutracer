@@ -154,7 +154,15 @@ fn prepare(@builtin(global_invocation_id) id: vec3u) {
   let raw = (prepareParams.size.y - 1u - id.y) * prepareParams.size.x + id.x;
   color[i] = textureLoad(colorImage, id.xy, 0);
   albedo[i] = textureLoad(albedoImage, id.xy, 0);
-  normal[i] = accumulatedNormal[raw] / prepareParams.samples;
+  let n = accumulatedNormal[raw];
+  normal[i] = n / prepareParams.samples;
+  if (prepareParams.flags != 0u) {
+    // The Web temporal composition publishes both guides through RGBA8Unorm targets.
+    var encoded = vec3f(0.0);
+    if (dot(n.rgb, n.rgb) > 0.1) { encoded = n.rgb / prepareParams.samples * 0.5 + 0.5; }
+    normal[i] = vec4f(unpack4x8unorm(pack4x8unorm(vec4f(encoded, 1.0))).rgb * 2.0 - 1.0, 1.0);
+    albedo[i] = unpack4x8unorm(pack4x8unorm(albedo[i]));
+  }
 }
 @group(0) @binding(0) var<storage, read> filtered: array<vec4f>;
 @group(0) @binding(1) var outputImage: texture_storage_2d<rgba8unorm, write>;
@@ -182,11 +190,20 @@ ${createCompositeDenoiseDisplayMain('srgb')}
 import frameResolve from './frame-resolve.wgsl.js';
 import {areaDownsampleShader, easuShader} from '../../src/renderer/wgsl/easu.wgsl.js';
 import {albedoDownsampleShader, easuDetailShader, guidedCoefficientShader, toneLutShader, EASU_DETAIL, TONE_LUT_SIZE} from '../../src/renderer/wgsl/easuDetail.wgsl.js';
+import {specializeMotionIndices} from './shader-variants.js';
 import aovTraceWGSL from '../../src/renderer/wgsl/aovTrace.wgsl.js';
 import aovTraceDisplayWGSL from '../../src/renderer/wgsl/aovTraceDisplay.wgsl.js';
 
+import {captureWGSL} from '../../src/renderer/temporalCaptureShader.js';
+import {mixedWindowWGSL} from '../../src/renderer/temporalWindowShader.js';
+import {vetoShader} from '../../src/renderer/temporalSparkleShader.js';
+import {composePackWGSL, motionCoverageWGSL} from '../../src/renderer/temporalComposeShader.js';
+import {idSnapshot, snapshot, reproject, accumulate, blur} from '../../src/renderer/temporalKernels.js';
+import {combine, match, pyramid} from '../../src/renderer/temporalFlow.js';
 export function postprocessParameters(): Uint8Array {
   return new TextEncoder().encode(JSON.stringify({
+    temporal: {capture:captureWGSL, window:mixedWindowWGSL, sparkle:vetoShader, pack:composePackWGSL, coverage:motionCoverageWGSL,
+      idSnapshot: idSnapshot, snapshot: snapshot, reproject: reproject, accumulate: accumulate, blur: blur, combine: combine, match: match, pyramid: pyramid},
     bloom: nativeBloomShader(), auxiliary: nativeOidnAuxiliaryShader(),
     normalize: nativeOidnNormalizeShader, frame_resolve: frameResolve,
     oidn_composition: [nativeDisplayEffectsShader(false, 'linear'), nativeDisplayEffectsShader(false, 'albedo')],
@@ -198,7 +215,8 @@ export function postprocessParameters(): Uint8Array {
       EASU_DETAIL.minimumAlbedo, EASU_DETAIL.depthTolerance, EASU_DETAIL.guidedEpsilon],
     tone_lut_size: TONE_LUT_SIZE,
     // The display AOV trace replaces the default suffix of the path tracer source.
-    aov_trace: [aovTraceWGSL, aovTraceDisplayWGSL]
+    aov_trace: [aovTraceWGSL, aovTraceDisplayWGSL],
+    aov_trace_hwrt: [specializeMotionIndices(aovTraceWGSL), specializeMotionIndices(aovTraceDisplayWGSL)]
   }));
 }
 export function bloomParameters(radius: number): Uint8Array {

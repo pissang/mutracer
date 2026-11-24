@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "output": {
+    "duration": 2, "fps": 24, "size": [384, 216], "spp": 16,
+    "denoise": "temporal", "sampleSequence": "frame",
+    "temporal": {"historyRadius": 4, "postRadius": 2}
+  },
+  "environment": {"color": [0.16, 0.18, 0.2]},
+  "objects": [
+    {"name": "ball", "shape": "sphere", "material": {"baseColor": [0.75, 0.25, 0.08], "specularRoughness": 0.28}}
+  ],
+  "lights": [{"type": "rect", "position": [2, 3, 2], "target": "ball", "size": [1, 2], "intensity": 12}],
+  "camera": {"target": "ball", "orbit": {"distance": 3, "azimuth": {"keys": [[0, 0], [2, 100]]}, "elevation": 15}}
+}

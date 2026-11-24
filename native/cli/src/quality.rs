@@ -26,6 +26,9 @@ pub fn hdr(render: &api::Render) -> Result<Vec<u8>> {
     let hdr = render
         .read_pixels(PixelKind::Denoised)
         .map_err(|e| Error::gpu(e.to_string()))?;
+    encode_hdr(hdr)
+}
+pub fn encode_hdr(hdr: api::Image) -> Result<Vec<u8>> {
     let frame = image::Rgba32FImage::from_raw(hdr.width, hdr.height, hdr.data)
         .ok_or_else(|| Error::gpu("Native HDR data size differs from dimensions"))?;
     let mut output = Cursor::new(Vec::new());

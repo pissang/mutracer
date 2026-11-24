@@ -136,6 +136,7 @@ def npm(out, binary, exe, version, platform, os_name, arch, bundle, license_file
     files = {f"package/{name}": (data, 0o644) for name, data in license_files.items()}
     files["package/package.json"] = (encoded(wrapper), 0o644)
     files["package/dist/main.mjs"] = (bundle.read_bytes(), 0o755)
+    files["package/src/worker.mjs"] = ((source / "src" / "worker.mjs").read_bytes(), 0o644)
     files["package/README.md"] = ((source / "README.md").read_bytes(), 0o644)
     for item in (source / "examples").iterdir():
         if item.is_file():

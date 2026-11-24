@@ -90,7 +90,7 @@ typedef enum mt_image_kind {
  * ID: stable object,local instance (0 for ordinary meshes),material,source triangle;
  * background UINT32_MAX in every channel.
  * Exact shared-edge hits may select either adjacent triangle depending on rounding.
- * MOTION: prev-current input pixels,x right,y down,z=0,alpha=3 valid or 0 invalid.
+ * MOTION: prev-current input pixels,x right,y down,previous camera-forward depth,alpha=3 valid or 0 invalid.
  * CENTER_NORMAL: signed unit world shading normal xyz (including the base normal
  * map and retaining double-sided backface orientation), alpha 1 on the ID-selected
  * surface; misses are zero RGBA. CENTER_DEPTH: camera-forward distance,0,0,valid;
@@ -98,8 +98,8 @@ typedef enum mt_image_kind {
  * Context keeps its existing row order. They use the ID pixel-center pinhole ray,
  * one sample, alpha >= 0.5, skip shadow catchers, and stop after 32 layers.
  * Their alpha is binary validity, not opacity. Reads require the matching AOV bit.
- * History is per-render, from its previous AOV frame. Size/projection changes,
- * missing IDs, topology/vertex edits, visibility failures and device loss invalidate
+ * History is per-render, from its previous AOV frame. Size changes,
+ * missing IDs, topology changes, visibility failures and device loss invalidate
  * correspondence. Never reuse an object/material ID for a different item in live history. */
 enum { MT_AOV_DEPTH = 1u, MT_AOV_POSITION = 2u, MT_AOV_ROUGHNESS = 4u,
   MT_AOV_DIFFUSE_ALBEDO = 8u, MT_AOV_SPECULAR_ALBEDO = 16u,

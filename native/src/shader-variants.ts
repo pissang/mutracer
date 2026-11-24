@@ -19,10 +19,18 @@ export function nativeShaderVariant(id: number, constants: Record<string, boolea
   hash >>>= 0;
   const previous = variants.get(hash);
   if (previous?.signature === signature) {hits++; return previous.bytes;}
-  const bytes = new TextEncoder().encode(source()); generated++;
+  const original = source();
+  const wgsl = original.includes('fn mtIndices(') ? specializeMotionIndices(original) : original;
+  const bytes = new TextEncoder().encode(wgsl); generated++;
   variants.set(hash, {signature, bytes});
   if (!previous) order.push(hash);
   if (order.length > 32) variants.delete(order.shift()!);
   return bytes;
 }
 export function nativeShaderVariantStats() {return {generated, hits, retained: variants.size};}
+
+// Native ray queries return global vertex indices. Previous positions are per geometry.
+export function specializeMotionIndices(source: string): string {
+  return source.replace('let record=bvhBuffer[u32(si.triangleIndex)];\n    let indices=bitcast<vec3u>(record.xyz);',
+    'let indices=vec3u(mtIndices(si.instanceIndex,si.triangleIndex) - vec3i(bitcast<i32>(instancesBuffer[si.instanceIndex*10].y)));');
+}

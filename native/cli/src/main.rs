@@ -9,6 +9,7 @@ mod render_settings;
 mod run;
 mod scene;
 mod shot;
+mod temporal;
 mod stdio;
 mod warnings;
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from hashlib import sha256
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -128,6 +129,35 @@ class Session:
         header, _ = self._request("check", frame=frame, t=t, progress=progress, **fields)
         return header
 
+    def cut(self):
+        """Start a new history segment before the next input frame."""
+        self._request("cut")
+
+    def _temporal_frames(self, inputs, settings, progress):
+        if "temporal-offline" not in self.capabilities["capabilities"]:
+            raise ValueError("Update the native CLI for temporal rendering.")
+
+        def unpack(reply):
+            header, data = reply
+            if header["type"] != "frames":
+                raise ValueError("Enable temporal denoising in the shot or render settings.")
+            for item in header["frames"]:
+                yield item["frame"], data[item["offset"]:item["offset"] + item["bytes"]]
+
+        for index, time in inputs:
+            yield from unpack(self.render(index, time, settings=settings, progress=progress))
+        while True:
+            response = self._request("flush", progress=progress)
+            yield from unpack(response)
+            if response[0]["done"]:
+                return
+
+    async def temporal_frames(self, inputs, *, settings=None, progress=None):
+        """Yield (frame index, encoded bytes) for consecutive (index, time) inputs."""
+        frames = self._temporal_frames(inputs, settings, progress)
+        while (frame := await asyncio.to_thread(next, frames, None)) is not None:
+            yield frame
+
     def render(self, frame: int, t: float, *, settings=None, progress=None):
         fields = {"settings": canonical_settings(settings)} if settings is not None else {}
         return self._request("render", frame=frame, t=t, progress=progress, **fields)
@@ -196,6 +226,32 @@ def render_frames(shot, base: Path, directory: Path, callback, settings, fps, pr
                 raise ValueError("Callback directory contains PNGs without a manifest.")
             else:
                 _atomic_bytes(manifest, json.dumps(job, sort_keys=True).encode())
+
+            if settings.get("denoise", shot["output"].get("denoise")) == "temporal":
+                keys = {}
+
+                def inputs():
+                    for index in range(count):
+                        t = index / rate
+                        edits = callback(t, index) or {}
+                        if edits:
+                            session.edit(edits)
+                            state.update(edits)
+                        key = sha256(json.dumps(state, allow_nan=False, sort_keys=True,
+                                                separators=(",", ":")).encode()).hexdigest()
+                        record = directory / f"frame_{index:06d}.json"
+                        if record.exists() and json.loads(record.read_text())["state"] != key:
+                            raise ValueError(f"Callback settings changed at frame {index}. Use a new frame directory.")
+                        keys[index] = key
+                        yield index, t
+
+                for index, data in session._temporal_frames(inputs(), settings, emit):
+                    path = directory / f"frame_{index:06d}.png"
+                    _atomic_bytes(path, data)
+                    _atomic_bytes(path.with_suffix(".json"), json.dumps({
+                        "state": keys.pop(index), "sha256": sha256(data).hexdigest()}).encode())
+                    emit({"event": "frame", "frame": index, "path": str(path)})
+                return rate, events
 
             for frame in range(count):
                 t = frame / rate
