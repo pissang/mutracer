@@ -1010,9 +1010,9 @@ dependencies = [
 
 [[package]]
 name = "oidn-webgpu-native"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d725c5a5768786d3d3b1ab3f1eee0f34d1564d27bd84c861d3d546733eaf26e2"
+checksum = "f9824d9b065d116ad448b10932dc29bfeda47117803f2e73e538c99fb2ea4ca3"
 dependencies = [
  "ash",
  "libloading",

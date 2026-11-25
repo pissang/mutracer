@@ -136,7 +136,7 @@
   },
   "dependencies": {
     "@webgpu/types": "^0.1.40",
-    "oidn-webgpu": "^0.6.0"
+    "oidn-webgpu": "^0.6.1"
   },
   "peerDependencies": {
     "@types/three": ">=0.150.0",

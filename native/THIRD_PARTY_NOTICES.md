@@ -74,7 +74,7 @@ The importer and scene API also use these MIT-licensed Rust libraries:
 ## oidn-webgpu native runtime
 
 The native host links
-[oidn-webgpu-native 0.2.0](https://github.com/pissang/oidn-webgpu/tree/native-v0.2.0/native)
+[oidn-webgpu-native 0.2.1](https://github.com/pissang/oidn-webgpu/tree/native-v0.2.1/native)
 Rust crate. Project-owned code is MIT, Copyright (c) 2024 pissang
 ([text](./LICENSES/OIDNWeb-MIT.txt)). Its bundled core also contains the scriptc
 runtime (Apache-2.0), V8-derived radix conversion (BSD-3-Clause), and Ryū object
