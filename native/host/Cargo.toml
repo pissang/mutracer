@@ -9,7 +9,7 @@ crate-type = ["rlib", "cdylib", "staticlib"]
 
 [dependencies]
 ash = { version = "=0.38.0", default-features = false, features = ["std", "loaded"] }
-oidn-webgpu = { package = "oidn-webgpu-native", version = "=0.2.0" }
+oidn-webgpu = { package = "oidn-webgpu-native", version = "=0.2.1" }
 gltf = { version = "=1.4.1", features = ["KHR_materials_ior", "KHR_materials_transmission", "KHR_materials_emissive_strength", "KHR_materials_unlit", "KHR_texture_transform", "extensions"], optional = true }
 meshopt = {version = "=0.6.2", optional = true}
 base64 = {version = "0.22", optional = true}
