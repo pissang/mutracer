@@ -1,27 +1,34 @@
 import type {TemporalHistoryGPU} from './WGPUTemporalHistory.js';
-import {mixedWindowWGSL} from './temporalWindowShader.js';
+import {createMixedWindowWGSL} from './temporalWindowShader.js';
 export {directGeometryWGSL, directWindowWGSL} from './temporalWindowShader.js';
 export class DirectWindowGPU {
   readonly rejects: GPUBuffer;
   readonly total: GPUBuffer;
   readonly output: GPUBuffer;
+  readonly guides?: {albedo: GPUBuffer; normal: GPUBuffer};
   private readonly params: GPUBuffer;
   private pipeline!: GPUComputePipeline;
 
-  private constructor(private readonly history: TemporalHistoryGPU, private readonly adaptiveRadius: boolean) {
+  private constructor(private readonly history: TemporalHistoryGPU, private readonly adaptiveRadius: boolean, accumulateGuides: boolean) {
     const d = history.device;
     const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
     this.total = d.createBuffer({label: 'Direct window weighted sum', size: history.bytes, usage});
     this.output = d.createBuffer({label: 'Direct window normalized output', size: history.bytes, usage});
+    if (accumulateGuides) {
+      this.guides = {
+        albedo: d.createBuffer({label: 'Direct window albedo', size: history.bytes, usage}),
+        normal: d.createBuffer({label: 'Direct window normal', size: history.bytes, usage}),
+      };
+    }
     this.rejects = d.createBuffer({label: 'Direct window validation counts', size: 64, usage});
     this.params = d.createBuffer({label: 'Direct window parameters', size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST});
   }
 
-  static async create(history: TemporalHistoryGPU, adaptiveRadius = false) {
-    const window = new DirectWindowGPU(history, adaptiveRadius);
+  static async create(history: TemporalHistoryGPU, adaptiveRadius = false, accumulateGuides = false) {
+    const window = new DirectWindowGPU(history, adaptiveRadius, accumulateGuides);
     const device = history.device;
     try {
-      const module = device.createShaderModule({label: 'Direct temporal window', code: mixedWindowWGSL});
+      const module = device.createShaderModule({label: 'Direct temporal window', code: createMixedWindowWGSL(accumulateGuides)});
       window.pipeline = await device.createComputePipelineAsync({layout: 'auto', compute: {module, entryPoint: 'main'}});
       return window;
     } catch (error) { window.dispose(); throw error; }
@@ -32,10 +39,13 @@ export class DirectWindowGPU {
   async dispatch(current: number, source: number, symmetric: boolean, stage: number,
     radiusMin: number, radiusMax: number, includeMaterialRevisions = true) {
     const h = this.history, d = h.device;
-    const mode = Number(this.adaptiveRadius) | 2 | (Number(includeMaterialRevisions) << 2);
+    // Camera-cut validation uses stage 1 without a preceding window initialization.
+    const mode = Number(this.adaptiveRadius) | 2 | (Number(includeMaterialRevisions) << 2) |
+      (Number(!!this.guides && includeMaterialRevisions) << 3);
     d.queue.writeBuffer(this.params, 0, new Uint32Array([h.width, h.height, h.slot(current), h.slot(source),
       source - current, Number(symmetric), stage, mode, radiusMin, radiusMax]));
     const resources = [this.params, h.surface, h.id, h.raw, h.meta, this.total, this.output, h.overflow, this.rejects, h.motion];
+    if (this.guides) resources.push(h.guides, this.guides.albedo, this.guides.normal);
     const group = d.createBindGroup({layout: this.pipeline.getBindGroupLayout(0), entries: resources.map((resource, binding) => ({
       binding, resource: resource instanceof GPUBuffer ? {buffer: resource} : resource.createView({dimension: '2d-array'}),
     }))});
@@ -75,10 +85,12 @@ export class DirectWindowGPU {
   }
 
   memory() {
-    return {total: this.total.size + this.output.size + this.rejects.size + this.params.size};
+    return {total: this.total.size + this.output.size + this.rejects.size + this.params.size + (this.guides ? this.guides.albedo.size + this.guides.normal.size : 0)};
   }
 
   dispose() {
+    this.guides?.albedo.destroy();
+    this.guides?.normal.destroy();
     this.total.destroy();
     this.output.destroy();
     this.rejects.destroy();

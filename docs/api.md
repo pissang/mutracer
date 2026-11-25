@@ -2,7 +2,7 @@
 
 Import the core API, including `MaterialGraph`, from `@meimu/mutracer`.
 The Three.js adapter uses `@meimu/mutracer/three` and OIDN weight helpers use `@meimu/mutracer/oidn`.
-The [temporal denoiser](./temporal-denoising.md) uses `@meimu/mutracer/temporal`.
+The [temporal denoiser](#temporaldenoiser) uses `@meimu/mutracer/temporal`.
 To read a `.mtlx` document, import `parseMaterialX` from `@meimu/mutracer/materialx`. See [MaterialX parsing](materialx.md).
 See [progressive rendering](./progressive-rendering.md) for complete examples.
 
@@ -243,6 +243,18 @@ rendering cost and image-quality limitations.
 | `photonMapping` | `false` | `true` or an object enables progressive caustic photon mapping on WebGPU; ignored on WebGL 2. See [PM-only denoising limits](./caustics.md#limits) |
 | `photonMapping.photonsPerSample` | pixel count / 4, at most 262144 | Emitted photons per batch; 28 bytes each plus up to 13 MiB of overhead. Positive finite values are rounded to at least 1 and reduced to fit device limits and a 128 MiB batch budget; other values use the default |
 | `photonMapping.initialRadius` | 3% of the caster bounding sphere radius | Positive first-batch gather radius in scene units, independent of `photonsPerSample`; shrinks as batches accumulate. Smaller radii preserve detail but require more photons |
+
+## TemporalDenoiser
+
+`new TemporalDenoiser(engine, { accumulateGuides: true })` averages the albedo
+and normal guides passed to OIDN across the offline history window. This can
+reduce flicker in defocused regions. The option defaults to `false` and applies
+only to offline OIDN with a positive history radius.
+
+At 1280 × 720 with a maximum history radius of 16, this adds about 265 MB
+of GPU memory. The allocation counts toward `memoryBudget`, which can reduce
+the effective radii reported in `plan`.
+See the [animation workflow and other options](./temporal-denoising.md).
 
 ## RenderLoop and Sync
 

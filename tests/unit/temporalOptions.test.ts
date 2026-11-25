@@ -6,9 +6,14 @@ describe('temporal denoiser options', () => {
   it('freezes the offline adopted defaults', () => {
     const options = normalizeTemporalOptions();
     expect(options).toEqual({mode: 'offline', historyRadius: {min: 8, max: 16}, postRadius: 3,
-      stabilizeSparkle: true, denoiser: {type: 'oidn', model: 'cleanAuxLarge'}, historyInvalidation: 'auto', memoryBudget: undefined});
+      stabilizeSparkle: true, denoiser: {type: 'oidn', model: 'cleanAuxLarge'}, accumulateGuides: false, historyInvalidation: 'auto', memoryBudget: undefined});
     expect(Object.isFrozen(options)).toBe(true);
     expect(Object.isFrozen(options.historyRadius)).toBe(true);
+  });
+
+  it('accepts a boolean guide-accumulation option', () => {
+    expect(normalizeTemporalOptions({accumulateGuides: true}).accumulateGuides).toBe(true);
+    expect(() => normalizeTemporalOptions({accumulateGuides: null as unknown as boolean})).toThrow(/boolean/);
   });
 
   it('uses the causal radius and rejects incompatible settings', () => {

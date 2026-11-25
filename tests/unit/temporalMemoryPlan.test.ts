@@ -61,6 +61,19 @@ describe('temporal memory planner', () => {
     expect(plan.postRadius).toBe(1);
   });
 
+  it('budgets the full offline OIDN guide ring and two window scratch images', () => {
+    const base = normalizeTemporalOptions();
+    const windowed = normalizeTemporalOptions({accumulateGuides: true});
+    const w = 1280, h = 720;
+    const budget = estimateTemporalMemory(w, h, base);
+    expect(estimateTemporalMemory(w, h, windowed) - budget).toBe(w * h * (16 * 16 + 32));
+    expect(planTemporalMemory(w, h, {...windowed, memoryBudget: budget}, limits).historyRadius.max).toBe(8);
+    for (const override of [{mode: 'interactive'}, {historyRadius: 0}, {denoiser: null}] as const) {
+      const options = normalizeTemporalOptions({...override, accumulateGuides: true});
+      expect(estimateTemporalMemory(w, h, options)).toBe(estimateTemporalMemory(w, h, {...options, accumulateGuides: false}));
+    }
+  });
+
   it('budgets retained custom AOV copies for the offline look-ahead', () => {
     const plain = normalizeTemporalOptions({denoiser: null});
     const custom = normalizeTemporalOptions({denoiser: {type: 'custom', denoiser: {async denoise() {}}, aovs: ['roughness', 'motion']}});

@@ -54,7 +54,7 @@ independent noise. The example advances by its samples-per-frame count.
 | `historyRadius` | Offline `{ min: 8, max: 16 }`. Interactive `17`. | Number of neighboring frames in each available direction, from 0 to 32. Use an adaptive `{ min, max }` in offline mode. |
 | `postRadius` | `3` | Radius of post stabilization, from 0 to 3. Set to 0 with `stabilizeSparkle: false` to disable post stabilization. |
 | `stabilizeSparkle` | `true` | Suppresses one-frame bright impulses while preserving persistent highlights. |
-| `denoiser` | OIDN `cleanAuxLarge` | Spatial filter applied to the accumulated frame. Accepts OIDN options, a custom denoiser, or `null`. |
+| `denoiser` | OIDN `cleanAuxLarge` | Spatial filter applied to the accumulated frame. Accepts OIDN options, a custom denoiser, or `null`. See [guide accumulation](./api.md#temporaldenoiser) for offline OIDN. |
 | `historyInvalidation` | `'auto'` | Splits history on detected cuts and lighting or visibility changes. Material edits invalidate history on the affected surfaces. Use `'manual'` to control cuts in scenes with continuously changing light. |
 | `memoryBudget` | Full plan | GPU bytes for temporal history and scratch. A smaller budget can reduce the effective radii in `plan`. |
 

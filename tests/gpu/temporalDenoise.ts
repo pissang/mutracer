@@ -242,10 +242,11 @@ async function exercisePaddedPresentation(engine: Engine) {
   } finally { temporal.dispose(); render.dispose(); }
 }
 
-async function createTestWindow(device: GPUDevice, width: number, height: number, capacity: number) {
-  const history = await TemporalHistoryGPU.create(device, width, height, capacity, 1, false);
-  const window = await DirectWindowGPU.create(history);
+async function createTestWindow(device: GPUDevice, width: number, height: number, capacity: number, accumulateGuides = false) {
+  const history = await TemporalHistoryGPU.create(device, width, height, capacity, accumulateGuides ? capacity : 1, false);
+  const window = await DirectWindowGPU.create(history, false, accumulateGuides);
   return {
+    guides: window.guides,
     rejects: window.rejects,
     filter: window.filter.bind(window),
     read: window.read.bind(window),
@@ -371,12 +372,13 @@ async function exerciseForwardMotionSeed(device: GPUDevice) {
   const identity = new Float32Array(16);
   identity[0] = identity[5] = identity[10] = identity[15] = 1;
   const metadata = {viewProjection: identity, projection: identity, apertureRadius: 0, focusDistance: 1};
-  const window = await createTestWindow(device, width, height, 3);
+  const window = await createTestWindow(device, width, height, 3, true);
 
   async function upload(frame: number, start: number, brightness: number, visible: boolean) {
     const depth = new Float32Array(pixels * 4);
     const position = new Float32Array(pixels * 4);
     const normal = new Float32Array(pixels * 4);
+    const guideNormal = new Float32Array(pixels * 4);
     const albedo = new Float32Array(pixels * 4);
     const roughness = new Float32Array(pixels * 4);
     const motion = new Float32Array(pixels * 4);
@@ -389,7 +391,11 @@ async function exerciseForwardMotionSeed(device: GPUDevice) {
       position.set([0, 0, 0, 1], at);
       depth.set([1, 0, 0, 1], at);
       normal.set([0, 0, 1, 1], at);
-      albedo.set([.5, .5, .5, 1], at);
+      // The white row represents fully covered glass. A neighboring
+      // background pixel has a different guide from the moving footprint.
+      const grey = inside ? brightness / 4 : 0;
+      albedo.set(i < width ? [1, 1, 1, 1] : [grey, grey, grey, 1], at);
+      guideNormal.set(inside ? [0.5, 0.5, 0.5 + grey / 2, 1] : [0, 0, 0, 0], at);
       roughness.set([.5, 0, 0, 1], at);
       if (inside && visible) motion.set([-3, 0, 1, 3], at);
       hdr.set([brightness, brightness, brightness, 1], at);
@@ -397,7 +403,7 @@ async function exerciseForwardMotionSeed(device: GPUDevice) {
     }
     await window.upload(frame, metadata, {
       centerPosition: position, centerDepth: depth, centerNormal: normal,
-      albedo, roughness, motion, hdr, id,
+      albedo, normal: guideNormal, roughness, motion, hdr, id,
     });
   }
 
@@ -410,11 +416,19 @@ async function exerciseForwardMotionSeed(device: GPUDevice) {
     check(Math.abs(accepted[pixel] - expected) < 1e-6,
       'A visible forward solution was lost because the earlier coordinate fell off the later surface');
 
+    const guides = window.guides!;
+    const albedo = new Float32Array(await window.read(guides.albedo));
+    const normal = new Float32Array(await window.read(guides.normal));
+    check(Math.abs(albedo[pixel] - expected / 4) < 1e-6, 'Albedo used a different landing point or weight from beauty');
+    check(Math.abs(normal[pixel + 2] - expected / 4) < 1e-6, 'Guide normals lost their accumulated length');
+    check(albedo[4 * 4] === 1, 'The window changed neutral glass albedo');
     await upload(1, 7, 3, false);
     await upload(2, 10, 9, true);
     const occluded = new Float32Array(await window.read(await window.filter(0, [2], true)));
     check(occluded[pixel] === 1, 'The predictor used history beyond invalid intermediate motion');
-    return {visible: accepted[pixel], occluded: occluded[pixel]};
+    const occludedAlbedo = new Float32Array(await window.read(guides.albedo))[pixel];
+    check(occludedAlbedo === .25, 'Guides used rejected history beyond invalid intermediate motion');
+    return {visible: accepted[pixel], occluded: occluded[pixel], albedo: albedo[pixel], normal: normal[pixel + 2]};
   } finally {
     window.dispose();
   }

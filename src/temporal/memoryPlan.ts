@@ -30,14 +30,25 @@ export function temporalHistorySlots(options: NormalizedTemporalOptions) {
   return options.mode === 'offline' ? Math.max(2 * history, history + 2 * post) + 1 : Math.max(history, post) + 1;
 }
 
+export function usesTemporalGuideWindow(options: NormalizedTemporalOptions) {
+  return options.accumulateGuides && options.mode === 'offline' &&
+    options.denoiser?.type === 'oidn' && options.historyRadius.max > 0;
+}
+
+export function temporalGuideSlots(options: NormalizedTemporalOptions) {
+  // The guide window addresses both textures with the same frame slot.
+  if (usesTemporalGuideWindow(options)) return temporalHistorySlots(options);
+  return options.mode === 'offline' ? options.historyRadius.max + 1 : 1;
+}
+
 /** Exact allocation estimate for the GPU resources owned by temporal history, window and post stages. */
 export function estimateTemporalMemory(width: number, height: number, options: NormalizedTemporalOptions, materialCount=0) {
   const pixels = width * height;
   const historySlots = temporalHistorySlots(options);
-  const guideSlots = options.mode === 'offline' ? options.historyRadius.max + 1 : 1;
+  const guideSlots = temporalGuideSlots(options);
   const postSlots = postHistorySlots(options);
   const history = historySlots * (pixels * 56 + 80 + overflowBuckets * overflowEntryBytes) + guideSlots * pixels * 16 + 32;
-  const window = pixels * 32 + 112;
+  const window = pixels * (usesTemporalGuideWindow(options) ? 64 : 32) + 112;
 
   const pyramidBytes = scales.reduce((sum, scale) => sum + ceilDiv(width, scale) * ceilDiv(height, scale) * 8, 0);
   const grids = gridScratchBytes(width, height);
