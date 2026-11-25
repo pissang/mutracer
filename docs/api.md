@@ -2,7 +2,7 @@
 
 Import the core API, including `MaterialGraph`, from `@meimu/mutracer`.
 The Three.js adapter uses `@meimu/mutracer/three` and OIDN weight helpers use `@meimu/mutracer/oidn`.
-The [temporal denoiser](#temporaldenoiser) uses `@meimu/mutracer/temporal`.
+The [temporal denoiser](./temporal-denoising.md) uses `@meimu/mutracer/temporal`.
 To read a `.mtlx` document, import `parseMaterialX` from `@meimu/mutracer/materialx`. See [MaterialX parsing](materialx.md).
 See [progressive rendering](./progressive-rendering.md) for complete examples.
 
@@ -246,15 +246,9 @@ rendering cost and image-quality limitations.
 
 ## TemporalDenoiser
 
-`new TemporalDenoiser(engine, { accumulateGuides: true })` averages the albedo
-and normal guides passed to OIDN across the offline history window. This can
-reduce flicker in defocused regions. The option defaults to `false` and applies
-only to offline OIDN with a positive history radius.
-
-At 1280 × 720 with a maximum history radius of 16, this adds about 265 MB
-of GPU memory. The allocation counts toward `memoryBudget`, which can reduce
-the effective radii reported in `plan`.
-See the [animation workflow and other options](./temporal-denoising.md).
+Use `new TemporalDenoiser(engine, { accumulateGuides: false })` to use
+current-frame guides. See [guide accumulation](./temporal-denoising.md#options)
+for the default, supported mode and memory cost.
 
 ## RenderLoop and Sync
 

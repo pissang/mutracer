@@ -460,3 +460,72 @@ fn cached_temporal_frames_survive_rejected_inputs_and_exclude_failed_outputs() {
     }
     assert!(history.flush().unwrap().is_none());
 }
+
+/// Use the same moving footprint and packed guide inputs as exerciseForwardMotionSeed on Web.
+#[test]
+#[ignore = "requires a hardware ray-query GPU"]
+fn window_guides_match_web_packed_guides() {
+    let engine = super::super::aov_tests::aov_engine(crate::api::Backend::Hardware);
+    let gpu = engine.inner.gpu.clone();
+    let size = [16, 8];
+    let options = TemporalOptions {
+        history_radius: HistoryRadius::Fixed(8),
+        post_radius: 0,
+        stabilize_sparkle: false,
+        ..Default::default()
+    };
+    let plan = options.plan(size, 0, &gpu.device.limits()).unwrap();
+    let passes = Passes::new(gpu.clone(), size, plan, 0, false, true).unwrap();
+    let mut camera = [0.; 20];
+    for i in [0, 5, 10, 15, 18] {
+        camera[i] = 1.;
+    }
+    camera[16] = 4.;
+    for (frame, start, brightness) in [(0, 4, 1.), (1, 7, 3.)] {
+        let data: [Vec<[f32; 4]>; 9] = std::array::from_fn(|kind| {
+            (0..128)
+                .map(|i| {
+                    let inside = (start..start + 2).contains(&(i % 16));
+                    let grey = if inside { brightness / 4. } else { 0. };
+                    match kind {
+                        0 => [1., 0., 0., 1.],
+                        1 => [0., 0., 1., 1.],
+                        2 => [0.5, 0., 0., 1.],
+                        3 if i < 16 => [1.; 4],
+                        3 => [grey, grey, grey, if frame == 0 { 0.5 } else { 1. }],
+                        4 => [brightness, brightness, brightness, 1.],
+                        5 if inside => [-3., 0., 1., 3.],
+                        5 => [0.; 4],
+                        6 => [f32::from_bits(if inside { 1 } else { 9 }), 0., f32::from_bits(1), 0.],
+                        7 if inside => [0.5, 0.5, 0.5 + grey / 2., 1.],
+                        7 => [0.; 4],
+                        _ => [0., 0., 0., 1.],
+                    }
+                })
+                .collect()
+        });
+        let resources = data.map(|values| {
+            Resource::Buffer(gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Window guide parity input"),
+                contents: bytemuck::cast_slice(&values),
+                usage: wgpu::BufferUsages::STORAGE,
+            }))
+        });
+        passes.capture(frame, &resources, &camera, &[]);
+    }
+    passes.clear("rejects", 0, 64);
+    passes.window(0, 0, 0, true);
+    passes.window(0, 1, 1, true);
+    passes.window(0, 0, 2, true);
+    let output = ["Color", "Albedo", "Normal"].map(|name| passes.alloc(name, passes.bytes));
+    passes.pack(0, 2, &passes["window"], &output);
+    let albedo = passes.read::<[f32; 4]>(&output[1]).unwrap()[4 * 16 + 4];
+    let normal = passes.read::<[f32; 4]>(&output[2]).unwrap()[4 * 16 + 4];
+    let expected = (1. + 3. * 8. / 9.) / (1. + 8. / 9.) / 2.;
+    assert!(albedo[..3].iter().all(|c| (c - expected).abs() < 1e-6));
+    assert_eq!(albedo[3], 1.);
+    assert_eq!(normal[..2], [0.; 2]);
+    assert!((normal[2] - expected).abs() < 1e-6);
+    assert_eq!(normal[3], 2.);
+    println!("Packed guide parity: {}", serde_json::json!({ "albedo": albedo, "normal": normal }));
+}

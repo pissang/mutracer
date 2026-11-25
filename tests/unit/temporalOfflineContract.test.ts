@@ -6,9 +6,9 @@ import {planTemporalMemory} from '../../src/temporal/memoryPlan';
 
 it('normalizes offline options shared with the native host', () => {
   for (const {input, expected} of fixture.options) {
-    expect(normalizeTemporalOptions(input as TemporalDenoiserOptions)).toEqual({...expected, accumulateGuides: false});
+    expect(normalizeTemporalOptions(input as TemporalDenoiserOptions)).toEqual(expected);
   }
-  for (const input of fixture.invalid) expect(() => normalizeTemporalOptions(input)).toThrow();
+  for (const input of fixture.invalid) expect(() => normalizeTemporalOptions(input as TemporalDenoiserOptions)).toThrow();
 });
 
 it('matches the offline readiness and flush boundaries', () => {

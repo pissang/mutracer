@@ -251,6 +251,19 @@ impl TemporalOptions {
 mod tests {
     use super::*;
     #[test]
+    fn guide_window_budget_reduces_the_enabled_plan_first() {
+        let enabled = TemporalOptions::default();
+        let disabled = TemporalOptions { accumulate_guides: false, ..enabled };
+        let size = [1280, 720];
+        let enabled_plan = enabled.estimate(size, 0).unwrap();
+        let disabled_plan = disabled.estimate(size, 0).unwrap();
+        assert_eq!(enabled_plan.bytes - disabled_plan.bytes, 265_420_800);
+        let constrained = TemporalOptions { memory_budget: Some(disabled_plan.bytes), ..enabled };
+        let plans = constrained.plans(size, 0, SpatialCost::Oidn, &wgpu::Limits::default()).unwrap();
+        assert_eq!((plans[0].max, plans[1].max), (8, 4));
+    }
+
+    #[test]
     fn shared_memory_contract() {
         let f: serde_json::Value = serde_json::from_str(include_str!(
             "../../../../../tests/fixtures/temporal-offline.json"
@@ -270,6 +283,7 @@ mod tests {
             for field in [
                 "postRadius",
                 "stabilizeSparkle",
+                "accumulateGuides",
                 "historyInvalidation",
                 "memoryBudget",
             ] {

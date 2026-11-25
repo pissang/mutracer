@@ -4,6 +4,7 @@ import Camera from '../../src/scene/Camera';
 import {estimateTemporalMemory, temporalMemoryTiers} from '../../src/temporal/memoryPlan';
 import {normalizeTemporalOptions} from '../../src/temporal/options';
 import {DirectWindowGPU} from '../../src/renderer/WGPUTemporalWindow';
+import {createComposePackWGSL} from '../../src/renderer/temporalComposeShader';
 import {TemporalHistoryGPU} from '../../src/renderer/WGPUTemporalHistory';
 import {TemporalPostGPU} from '../../src/renderer/WGPUTemporalPost';
 import {THREESync, fromTHREECamera} from '../../src/three';
@@ -96,7 +97,9 @@ async function run() {
     for await (const frame of reduced.flush()) { check(frame.index === reducedOutputs, 'Reduced history flush changed output order'); reducedOutputs++; }
     check(reducedOutputs === 12, `Reduced ring overwrote or lost frames after exceeding capacity: ${reducedOutputs}`);
     reduced.dispose();
-    const oom = new TemporalDenoiser(engine, {denoiser: null});
+    const oom = new TemporalDenoiser(engine, {
+      denoiser: {type: 'oidn', model: 'standard', weightsBaseUrl: '/oidn/weights/'},
+    });
     oom.attach(render);
     await render.converge({samples: 1, sampleSequenceOffset: 250});
     const pushErrorScope = device.pushErrorScope, popErrorScope = device.popErrorScope;
@@ -114,6 +117,8 @@ async function run() {
       await oom.push(render);
       check(attempts === 2 && oom.plan?.historyRadius.max === 8 && oom.latency === 11,
         'An out-of-memory scope error did not retry the next plan exactly once');
+      const {history, window} = oom as any;
+      check(window.guides && history.guideCapacity === 17, 'The OOM retry did not rebuild the smaller guide ring');
     } finally {
       device.pushErrorScope = pushErrorScope;
       device.popErrorScope = popErrorScope;
@@ -246,6 +251,7 @@ async function createTestWindow(device: GPUDevice, width: number, height: number
   const history = await TemporalHistoryGPU.create(device, width, height, capacity, accumulateGuides ? capacity : 1, false);
   const window = await DirectWindowGPU.create(history, false, accumulateGuides);
   return {
+    history,
     guides: window.guides,
     rejects: window.rejects,
     filter: window.filter.bind(window),
@@ -394,7 +400,7 @@ async function exerciseForwardMotionSeed(device: GPUDevice) {
       // The white row represents fully covered glass. A neighboring
       // background pixel has a different guide from the moving footprint.
       const grey = inside ? brightness / 4 : 0;
-      albedo.set(i < width ? [1, 1, 1, 1] : [grey, grey, grey, 1], at);
+      albedo.set(i < width ? [1, 1, 1, 1] : [grey, grey, grey, brightness === 1 ? .5 : 1], at);
       guideNormal.set(inside ? [0.5, 0.5, 0.5 + grey / 2, 1] : [0, 0, 0, 0], at);
       roughness.set([.5, 0, 0, 1], at);
       if (inside && visible) motion.set([-3, 0, 1, 3], at);
@@ -411,7 +417,8 @@ async function exerciseForwardMotionSeed(device: GPUDevice) {
     await upload(0, 4, 1, true);
     await upload(1, 7, 3, true);
     const pixel = (3 * width + 4) * 4;
-    const accepted = new Float32Array(await window.read(await window.filter(0, [1], true)));
+    const accumulated = await window.filter(0, [1], true);
+    const accepted = new Float32Array(await window.read(accumulated));
     const expected = (1 + 3 * 8 / 9) / (1 + 8 / 9);
     check(Math.abs(accepted[pixel] - expected) < 1e-6,
       'A visible forward solution was lost because the earlier coordinate fell off the later surface');
@@ -422,15 +429,53 @@ async function exerciseForwardMotionSeed(device: GPUDevice) {
     check(Math.abs(albedo[pixel] - expected / 4) < 1e-6, 'Albedo used a different landing point or weight from beauty');
     check(Math.abs(normal[pixel + 2] - expected / 4) < 1e-6, 'Guide normals lost their accumulated length');
     check(albedo[4 * 4] === 1, 'The window changed neutral glass albedo');
+    const packed = await readPackedWindowGuides(device, window, accumulated, [4, 3]);
+    check(Math.abs(packed.albedo[0] - expected / 2) < 1e-6 && packed.albedo[3] === 1,
+      'Packing lost the averaged albedo or changed current coverage');
+    check(Math.abs(packed.normal[2] - expected / 2) < 1e-6 && packed.normal[3] === 2,
+      'Packing changed the weighted normal or sample count');
     await upload(1, 7, 3, false);
     await upload(2, 10, 9, true);
     const occluded = new Float32Array(await window.read(await window.filter(0, [2], true)));
     check(occluded[pixel] === 1, 'The predictor used history beyond invalid intermediate motion');
     const occludedAlbedo = new Float32Array(await window.read(guides.albedo))[pixel];
     check(occludedAlbedo === .25, 'Guides used rejected history beyond invalid intermediate motion');
-    return {visible: accepted[pixel], occluded: occluded[pixel], albedo: albedo[pixel], normal: normal[pixel + 2]};
+    return {visible: accepted[pixel], occluded: occluded[pixel], albedo: albedo[pixel], normal: normal[pixel + 2], packed};
   } finally {
     window.dispose();
+  }
+}
+
+async function readPackedWindowGuides(device: GPUDevice, window: Awaited<ReturnType<typeof createTestWindow>>,
+  accumulated: GPUBuffer, [x, y]: [number, number]) {
+  const {history, guides} = window;
+  const {width, height} = history;
+  const params = device.createBuffer({size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST});
+  const outputs = Array.from({length: 3}, () => device.createBuffer({
+    size: history.bytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+  }));
+  try {
+    const module = device.createShaderModule({code: createComposePackWGSL(true)});
+    const pipeline = await device.createComputePipelineAsync({layout: 'auto', compute: {module, entryPoint: 'main'}});
+    device.queue.writeBuffer(params, 0, new Uint32Array([width, height, 2, history.guideSlot(0)]));
+    const group = device.createBindGroup({layout: pipeline.getBindGroupLayout(0),
+      entries: [params, accumulated, history.guides, ...outputs, guides!.albedo, guides!.normal]
+        .map((value, binding) => ({binding, resource: value instanceof GPUBuffer
+          ? {buffer: value} : value.createView({dimension: '2d-array'})}))});
+    const encoder = device.createCommandEncoder();
+    const pass = encoder.beginComputePass();
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, group);
+    pass.dispatchWorkgroups(Math.ceil(width / 8), Math.ceil(height / 8));
+    pass.end();
+    device.queue.submit([encoder.finish()]);
+    const offset = ((height - 1 - y) * width + x) * 4;
+    const read = async (buffer: GPUBuffer) =>
+      Array.from(new Float32Array(await window.read(buffer)).subarray(offset, offset + 4));
+    return {albedo: await read(outputs[1]), normal: await read(outputs[2])};
+  } finally {
+    params.destroy();
+    for (const output of outputs) output.destroy();
   }
 }
 
