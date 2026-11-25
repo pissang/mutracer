@@ -41,8 +41,9 @@ void main() {
   vec3 forward = -normalize(viewInv[2].xyz);
   SurfaceInteraction si;
   si.triangleIndex = -1;
+  si.instanceIndex = -1;
   for (int layer = 0; layer < 32; layer++) {
-    intersectScene(ray, si, false);
+    intersectScene(ray, si, false, true);
     if (!si.hit) return;
     OpenPbrResolvedMaterial material;
     getMaterial(material, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
@@ -54,7 +55,7 @@ void main() {
       } else out_depth.r = max(dot(si.position - eye, forward), 0.0);
       return;
     }
-    ray.o = si.position + ray.d * (EPS * 0.02);
+    ray.o = transmissionRayOrigin(si.position, ray.d, ray.o);
   }
 }
 `

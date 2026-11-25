@@ -82,8 +82,14 @@ ${debug ? '  mneeCounters[0]+=1.0;mneeTraceEnabled=seed==0;if(mneeTraceEnabled){
   vec3 x=receiver.position,y=x+ls.direction*(directional?1e8:ls.dist);
   float pdfA=ls.pdf;if(ls.sourceType!=1&&!directional&&!point)pdfA*=abs(dot(ls.normal,-ls.direction))/(ls.dist*ls.dist);if(pdfA<=0.0)return mneeFail(1);
   vec3 direction=ls.direction;if(seed>0&&mneeSeedCount>0)direction=normalize(mneeSeed(x,seed)-x);
-  Ray ray;initRay(ray,x+EPS*direction,direction);SurfaceInteraction si;si.triangleIndex=-1;${debug?'mneeCounters[12]+=1.0;':''}intersectScene(ray,si,true);
-  if(!si.hit||(seed==0&&!directional&&distance(x,si.position)>=ls.dist-EPS))return mneeFail(2);
+  Ray ray;
+  SurfaceInteraction si;
+  initRay(ray, offsetSurfaceRay(x, receiver.faceNormal, direction, x), direction);
+${debug ? '  mneeCounters[12]+=1.0;' : ''}
+  si.triangleIndex = receiver.triangleIndex;
+  si.instanceIndex = receiver.instanceIndex;
+  intersectScene(ray, si, true, false);
+  if(!si.hit||(seed==0&&!directional&&distance(x,si.position)>=ls.dist-rayRoundoff(x,ls.dist)))return mneeFail(2);
   OpenPbrResolvedMaterial material;float eta=1.0,dielectricEta=1.0;bool reflection=false;
   for(int iteration=0;iteration<${damping?20:10};iteration++){
     getMaterial(material,si.materialIndex,si.uv,si.uv1,si.instanceIndex,si.vertexColor);
@@ -101,9 +107,11 @@ ${debug ? '    mneeCounters[11]+=1.0;' : ''}
 ${damping?/* glsl */ `    vec2 step=mneeSolve2(j,c);vec3 position=si.position;int interfaceInstance=si.instanceIndex,interfaceMaterial=si.materialIndex;float scale=1.0;bool improved=false;
     for(int backtrack=0;backtrack<8;backtrack++){
       vec3 proposal=position-scale*(f.du*step.x+f.dv*step.y),direction=normalize(proposal-x);
-      initRay(ray,x+EPS*direction,direction);
-${debug?'      mneeCounters[12]+=1.0;':''}
-      intersectScene(ray,si,true);
+      initRay(ray, offsetSurfaceRay(x, receiver.faceNormal, direction, x), direction);
+${debug ? '      mneeCounters[12]+=1.0;' : ''}
+      si.triangleIndex = receiver.triangleIndex;
+      si.instanceIndex = receiver.instanceIndex;
+      intersectScene(ray, si, true, false);
       if(si.hit&&si.instanceIndex==interfaceInstance&&si.materialIndex==interfaceMaterial){
         bool nextReflection=dot(x-si.position,si.faceNormal)*dot(y-si.position,si.faceNormal)>0.0;
         float nextEta=dot(x-si.position,si.faceNormal)>0.0?1.0/ior:ior;
@@ -116,17 +124,26 @@ ${debug?'      mneeCounters[12]+=1.0;':''}
     vec2 step=mneeSolve2(j,c);if(!all(lessThan(abs(step),vec2(INF))))return mneeFail(4);
     vec3 proposal=si.position-f.du*step.x-f.dv*step.y;
     if(!all(lessThan(abs(proposal),vec3(INF)))||dot(proposal-x,proposal-x)<1e-16)return mneeFail(5);
-    vec3 direction=normalize(proposal-x);initRay(ray,x+EPS*direction,direction);
-${debug?'    mneeCounters[12]+=1.0;':''}intersectScene(ray,si,true);if(!si.hit)return mneeFail(5);
+    vec3 direction = normalize(proposal - x);
+    initRay(ray, offsetSurfaceRay(x, receiver.faceNormal, direction, x), direction);
+${debug ? '    mneeCounters[12]+=1.0;' : ''}
+    si.triangleIndex = receiver.triangleIndex;
+    si.instanceIndex = receiver.instanceIndex;
+    intersectScene(ray, si, true, false);
+    if (!si.hit) return mneeFail(5);
 `}
   }
   MneeFrame f=mneeFrame(si);vec3 wi=normalize(x-si.position),wo=normalize(y-si.position);
   if(length(mneeProject(wo+eta*wi,f))>1e-4||(dot(wi,si.faceNormal)*dot(wo,si.faceNormal)>0.0)!=reflection)return mneeFail(6);
   vec3 normal=dot(wi,si.normal)>=0.0?si.normal:-si.normal,refracted=reflection?reflect(-wi,normal):refract(-wi,normal,eta);
   if(dot(refracted,refracted)<.5||dot(refracted,wo)<.9999)return mneeFail(7);
-  initRay(ray,si.position+EPS*wo,wo);vec3 endpoint=y+EPS*ls.normal;
+  vec3 origin = reflection ? offsetSurfaceRay(si.position, si.faceNormal, wo, x)
+    : si.position - wo * surfaceRayRoundoff(si.position, x);
+  vec3 endpoint = ls.sourceType == 1 ? offsetSurfaceRay(y, ls.normal, -wo, si.position) : y;
+  vec3 connection = endpoint - origin;
+  initRay(ray, origin, normalize(connection));
 ${debug ? '  mneeCounters[13]+=1.0;' : ''}
-  if(intersectSceneShadow(ray,max(distance(ray.o,endpoint)-EPS,0.0),si.triangleIndex)||(!directional&&!point&&dot(ls.normal,-wo)<=0.0))return mneeFail(8);
+  if(intersectSceneShadow(ray,length(connection),si.triangleIndex,si.instanceIndex)||(!directional&&!point&&dot(ls.normal,-wo)<=0.0))return mneeFail(8);
 #ifdef NUM_LIGHTS
   if(ls.sourceType==2){Light light=fetchLight(ls.sourceIndex);if(int(light.type)==RECT_LIGHT&&dot(ls.normal,-wo)<cos(.5*PI*light.spread))return mneeFail(9);}
 #endif

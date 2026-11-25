@@ -68,8 +68,10 @@ vec4 integrator(inout Ray ray, out vec4 background, out vec2 shadowCounts) {
   path.abort = false;
 
   SurfaceInteraction si;
+  si.triangleIndex = -1;
+  si.instanceIndex = -1;
 
-  intersectScene(path.ray, si, false);
+  intersectScene(path.ray, si, false, true);
   if (!si.hit) {
     // Red stores catcher coverage. Keep it zero for pixels where the primary
     // ray did not hit the catcher so denoised shadows cannot bleed onto the

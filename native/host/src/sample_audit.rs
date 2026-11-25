@@ -15,19 +15,17 @@ pub(super) fn install_history(scene: &mut Scene, assets: &mut Assets, samples: u
         .and_then(|h| h.shader)
         .unwrap_or(scene.shader);
     let shader = String::from_utf8(assets.get(&id).ok_or("Missing validation shader")?.clone())?;
-    let direct = "\n  intersectScene(ray, &si, 0, false, false);";
-    let fused = "intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction);";
+    let direct = "\n  intersectScene(ray, &si, 0, false, false, true);";
     let (primary, first_query) = if shader.contains(direct) {
         (direct, "true")
     } else {
-        (
-            fused,
-            if shader.contains("var primaryReady = false;") {
-                "!primaryReady"
-            } else {
-                "event == 0"
-            },
-        )
+        [
+            ("intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction, !primaryReady);", "!primaryReady"),
+            ("intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction, event == 0);", "event == 0"),
+        ]
+        .into_iter()
+        .find(|(call, _)| shader.contains(call))
+        .ok_or("Shared shader changed; update sample audit anchors")?
     };
     let tail = "    accumulateDenoiseMoments(idx, dot(liAndAlpha.rgb, luminance));\n  }\n}";
     if shader.matches(primary).count() != 1

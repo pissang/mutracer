@@ -247,7 +247,7 @@ ${sharePrefix ? '  sampleIgnored = false;' : '  bool sampleIgnored = false;'}
       SampleMaterial(si, mat, path);
     }
     else {
-      path.ray.o = si.position + path.ray.d * EPS;
+      path.ray.o = transmissionRayOrigin(si.position, path.ray.d, path.ray.o);
     }
   }
 
@@ -298,7 +298,7 @@ ${sharePrefix ? /* glsl */ `  return;
 }
 void completeSurfaceVertex(inout Path path, inout int depth, inout SurfaceInteraction si, inout OpenPbrResolvedMaterial mat, bool sampleIgnored) {
 ` : ''}  // Next ray hit
-${sharePrefix ? '' : /* glsl */ `  intersectScene(path.ray, si, true);
+${sharePrefix ? '' : /* glsl */ `  intersectScene(path.ray, si, true, false);
   getMaterial(mat, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
   si.isTransparency = mat.transmissionWeight > 0.001 || mat.subsurfaceWeight > 0.001 || mat.alpha < 0.999;
 `}
@@ -513,7 +513,7 @@ ${intelMac ? '    if (idx < spEvent) continue;' : '    if (isOpaque && idx > act
     if (!spResume) {
       shadeSurfaceVertex(path, depth, si, mat, outAux, sampleIgnored);
       if (!path.abort) {
-        intersectScene(path.ray, si, true);
+        intersectScene(path.ray, si, true, false);
         getMaterial(mat, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
         si.isTransparency = mat.transmissionWeight > 0.001 || mat.subsurfaceWeight > 0.001 || mat.alpha < 0.999;
       }
@@ -542,10 +542,10 @@ vec4 integrateOnePath(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial ma
   // while the complementary branch continues straight to the scene behind it.
   // Secondary alpha hits remain stochastic to avoid exponential path growth.
   Ray backRay = ray;
-  backRay.o = si.position + ray.d * (EPS * 0.02);
+  backRay.o = transmissionRayOrigin(si.position, ray.d, ray.o);
   SurfaceInteraction backSi = si;
   backSi.albedoSampled = false;
-  intersectScene(backRay, backSi, false);
+  intersectScene(backRay, backSi, false, false);
   OpenPbrResolvedMaterial backMat;
   getMaterial(backMat, backSi.materialIndex, backSi.uv, backSi.uv1, backSi.instanceIndex, backSi.vertexColor);
   RayTraceAuxiliary backAux = outAux;
@@ -586,6 +586,8 @@ vec4 integrateOnePath(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial ma
 vec4 integrator(Ray ray, out RayTraceAuxiliary outAux) {
 
   SurfaceInteraction si;
+  si.triangleIndex = -1;
+  si.instanceIndex = -1;
   OpenPbrResolvedMaterial mat;
 
   si.albedoSampled = false;
@@ -596,7 +598,7 @@ vec4 integrator(Ray ray, out RayTraceAuxiliary outAux) {
   si.mediumAnisotropy = 0.0;
 #endif
 
-${sharePrefix ? '  if (spChannel == 1) {\n' : ''}  intersectScene(ray, si, false);
+${sharePrefix ? '  if (spChannel == 1) {\n' : ''}  intersectScene(ray, si, false, true);
   getMaterial(mat, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
   si.isTransparency = mat.transmissionWeight > 0.001 || mat.subsurfaceWeight > 0.001 || mat.alpha < 0.999;
 

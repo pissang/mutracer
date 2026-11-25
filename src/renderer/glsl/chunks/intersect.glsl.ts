@@ -9,7 +9,9 @@ import { createShaderMixin, glsl, Shader } from '../../shader.js';
 function getBVHTraverseCode(
   handleHitCode: string,
   skipTriangleCode = '',
-  initialTMax = 'RAY_MAX_DISTANCE'
+  initialTMax = 'RAY_MAX_DISTANCE',
+  closest = true,
+  resolveCoincident = 'resolveCoincident'
 ) {
   const intersectTriangles = glsl`
         ivec3 vertexOffset = ivec3(floatBitsToInt(fetchIns(insIdx * ${INSTANCE_VEC4_STRIDE}).y));
@@ -25,7 +27,7 @@ function getBVHTraverseCode(
           );
           TriangleIntersect hit = intersectTriangle(o, d, tri, maxDim, shear, tMax);
 
-          if (hit.t > 0.0) {
+          if (hit.t > 0.0 && hit.t <= tMax) {
             vec3 e1 = tri.p1 - tri.p0;
             vec3 e2 = tri.p2 - tri.p0;
             vec3 faceNormal = normalize(cross(e1, e2));
@@ -40,19 +42,41 @@ function getBVHTraverseCode(
               continue;
             }
 
-            tMax = hit.t;
+            ${closest ? glsl`
+              if (hit.t > tMax) continue;
+              if (traversalPass == 0) {
+                if (isHit && hit.t >= nearest) {
+                  tied = ${resolveCoincident};
+                  continue;
+                }
+                tied = ${resolveCoincident} && isHit && nearest <= hit.t + rayRoundoff(ray.o, hit.t);
+                nearest = hit.t;
+                tMax = ${resolveCoincident} ? min(queryLimit, nearest + rayRoundoff(ray.o, nearest)) : nearest;
+              } else {
+                if (hit.t < nearest) {
+                  nearest = hit.t;
+                  tMax = min(queryLimit, nearest + rayRoundoff(ray.o, nearest));
+                }
+                if (hit.t > tieLimit) continue;
+                uint savedHash = hashedCounter;
+                int material = surfaceMaterialIndex(sideMaterialIndex, index, hit.barycentric);
+                hashedCounter = savedHash;
+                bool catcher = int(getMatType(material)) == SHADOW_CATCHER;
+                if (isHit && !closestHitPreferred(catcher, node.z, triangleIndex, bestCatcher, bestInstance, bestTriangle)) continue;
+                bestCatcher = catcher;
+                bestInstance = node.z;
+                bestTriangle = triangleIndex;
+              }
+              hitInsIdx = insIdx;
+            ` : ''}
             ${handleHitCode}
           }
         }
 `;
   return glsl`
-  ivec2 stack[STACK_SIZE];
-  int top = -1;
-  int prevInsIdx = -1;
+  // The third lane carries source order through the BLAS traversal.
+  ivec3 stack[STACK_SIZE];
   float tMax = ${initialTMax};
-
-  vec3 o = ray.o;
-  vec3 d = ray.d;
 
   bool isHit = false;
   vec3 hitFaceNormal;
@@ -60,15 +84,32 @@ function getBVHTraverseCode(
   ivec3 hitIndex;
 
   Triangle hitTri;
+  ${closest ? glsl`
+  float queryLimit = tMax;
+  float tieLimit = queryLimit;
+  bool tied = false;
+  int hitInsIdx = -1;
+  bool bestCatcher = false;
+  int bestInstance = -1;
+  int bestTriangle = -1;
+  for (int traversalPass = 0; traversalPass < 2; traversalPass++) {
+    float nearest = queryLimit;
+    tMax = queryLimit;
+    isHit = false;
+  ` : ''}
+  int top = -1;
+  int prevInsIdx = -1;
+  vec3 o = ray.o;
+  vec3 d = ray.d;
 
   // TODO not sure why. but do root node check here will cause rendering wrong in windows.
     top = 0;
-    stack[0] = ivec2(0, -1);
+    stack[0] = ivec3(0, -1, -1);
 
   int iter = 0;
   while(top >= 0 && iter < 5000) {
     iter++;
-    ivec2 node = stack[top--];
+    ivec3 node = stack[top--];
 
     int insIdx = node.y;
 
@@ -162,8 +203,8 @@ function getBVHTraverseCode(
           if (localOffset >= 24u) {
             uint precedingMask = internalMask & ((1u << slot) - 1u);
             uint internalIndex = childBase + countBvhBits(precedingMask);
-            stack[++top] = ivec2(
-              blasInsOffset + int(internalIndex * 5u), insIdx
+            stack[++top] = ivec3(
+              blasInsOffset + int(internalIndex * 5u), insIdx, node.z
             );
           }
           else {
@@ -172,7 +213,7 @@ function getBVHTraverseCode(
             uint leafInfo = 0x80000000u |
               (triangleCount << 23u) |
               (primitiveAddress & 0x007fffffu);
-            stack[++top] = ivec2(int(leafInfo), insIdx);
+            stack[++top] = ivec3(int(leafInfo), insIdx, node.z);
           }
         }
       }
@@ -193,12 +234,12 @@ function getBVHTraverseCode(
         float d0 = intersectBox(o, d, gpu0.xyz, gpu1.xyz, tMax);
         float d1 = intersectBox(o, d, gpu2.xyz, gpu3.xyz, tMax);
         if (d0 > d1) {
-          if (d0 > 0.0) stack[++top] = ivec2(left, insIdx);
-          if (d1 > 0.0) stack[++top] = ivec2(right, insIdx);
+          if (d0 > 0.0) stack[++top] = ivec3(left, insIdx, node.z);
+          if (d1 > 0.0) stack[++top] = ivec3(right, insIdx, node.z);
         }
         else {
-          if (d1 > 0.0) stack[++top] = ivec2(right, insIdx);
-          if (d0 > 0.0) stack[++top] = ivec2(left, insIdx);
+          if (d1 > 0.0) stack[++top] = ivec3(right, insIdx, node.z);
+          if (d0 > 0.0) stack[++top] = ivec3(left, insIdx, node.z);
         }
       }
     }
@@ -256,7 +297,7 @@ function getBVHTraverseCode(
             if ((childInfo & 0x80000000u) == 0u) {
               childAddress += blasInsOffset;
             }
-            stack[++top] = ivec2(childAddress, insIdx);
+            stack[++top] = ivec3(childAddress, insIdx, node.z);
             childDistances[farthestChild] = -1.0;
           }
         }
@@ -275,18 +316,18 @@ function getBVHTraverseCode(
         float d1 = intersectBox(o, d, fetchBVH(right + bufferOff).xyz, fetchBVH(right + 1 + bufferOff).xyz, tMax);
         if (d0 > d1) {
           if (d0 > 0.0) {
-            stack[++top] = ivec2(left, insIdx);
+            stack[++top] = ivec3(left, insIdx, node.z);
           }
           if (d1 > 0.0) {
-            stack[++top] = ivec2(right, insIdx);
+            stack[++top] = ivec3(right, insIdx, node.z);
           }
         }
         else {
           if (d1 > 0.0) {
-            stack[++top] = ivec2(right, insIdx);
+            stack[++top] = ivec3(right, insIdx, node.z);
           }
           if (d0 > 0.0) {
-            stack[++top] = ivec2(left, insIdx);
+            stack[++top] = ivec3(left, insIdx, node.z);
           }
         }
       }
@@ -296,7 +337,7 @@ function getBVHTraverseCode(
             vec4 r3 = fetchBVH(i + 2 + k);
             int box = floatBitsToInt(r3.w);
             if (intersectBox(ray.o, ray.d, fetchBVH(box).xyz, fetchBVH(box + 1).xyz, tMax) > 0.0) {
-              stack[++top] = ivec2(floatBitsToInt(r3.y), floatBitsToInt(r3.x));
+              stack[++top] = floatBitsToInt(r3.yxz);
             }
           }
         }
@@ -310,6 +351,11 @@ function getBVHTraverseCode(
       ${intersectTriangles}
     }
   }
+${closest ? glsl`
+  if (!tied || traversalPass == 1) break;
+  tieLimit = tMax;
+  }
+` : ''}
 `;
 }
 
@@ -604,6 +650,19 @@ mat2x3 anisotropy_axes(vec3 normal, vec3 dp1, vec3 dp2, vec2 duv1, vec2 duv2, ve
   return mat2x3(t, b * (handedness < 0.0 ? -1.0 : 1.0));
 }
 
+bool closestHitPreferred(bool catcher, int instance, int triangle, bool bestCatcher, int bestInstance, int bestTriangle) {
+  if (catcher != bestCatcher) return !catcher;
+  return instance < bestInstance || (instance == bestInstance && triangle < bestTriangle);
+}
+
+int surfaceMaterialIndex(int fallback, ivec3 index, vec3 barycentric) {
+  ivec4 m0 = fetchVertexMaterial(index.x);
+  ivec4 m1 = fetchVertexMaterial(index.y);
+  ivec4 m2 = fetchVertexMaterial(index.z);
+  if (m0.x > 0 || m1.x > 0 || m2.x > 0) return randomPickMaterial(m0, m1, m2, barycentric);
+  return fallback;
+}
+
 void fetchAttributes(inout SurfaceInteraction si, Triangle tri, vec3 barycentric, ivec3 index) {
   si.hit = true;
   si.position = barycentric.x * tri.p0 + barycentric.y * tri.p1 + barycentric.z * tri.p2;
@@ -652,14 +711,8 @@ void fetchAttributes(inout SurfaceInteraction si, Triangle tri, vec3 barycentric
   }
   si.shadowOffset = smoothNormal * h;
 
-  ivec4 m0 = fetchVertexMaterial(index.x);
-  ivec4 m1 = fetchVertexMaterial(index.y);
-  ivec4 m2 = fetchVertexMaterial(index.z);
-  
-  if (m0.x > 0 || m1.x > 0 || m2.x > 0) {
-    si.materialIndex = randomPickMaterial(m0, m1, m2, barycentric);
-  }
-  
+  si.materialIndex = surfaceMaterialIndex(si.materialIndex, index, barycentric);
+
   vec2 uv0 = fetchVertexUv(index.x);
   vec2 uv1 = fetchVertexUv(index.y);
   vec2 uv2 = fetchVertexUv(index.z);
@@ -929,7 +982,7 @@ vec3 getShear(vec3 d, int maxDim) {
 }
 
 // Traverse BVH, find closest triangle intersection, and return surface information
-void intersectScene(in Ray ray, inout SurfaceInteraction si, bool doubleSided) {
+void intersectScene(in Ray ray, inout SurfaceInteraction si, bool doubleSided, bool resolveCoincident) {
   si.hit = false;
 
   if (isEmptyScene) {
@@ -938,7 +991,6 @@ void intersectScene(in Ray ray, inout SurfaceInteraction si, bool doubleSided) {
 
   int maxDim = maxDimension(abs(ray.d));
   vec3 shear = getShear(ray.d, maxDim);
-  int hitInsIdx;
   int sourceTriangle = si.triangleIndex;
   int sourceInstance = si.instanceIndex;
 
@@ -949,8 +1001,7 @@ ${getBVHTraverseCode(glsl`
   hitBarycentric = hit.barycentric;
   hitIndex = index;
   isHit = true;
-  hitInsIdx = insIdx;
-`, '#ifdef HAS_ADJACENT_MEDIA\nif (doubleSided && triangleIndex == sourceTriangle && insIdx == sourceInstance) continue;\n#endif')}
+`, 'if (triangleIndex == sourceTriangle && insIdx == sourceInstance) continue;')}
 
   if (isHit) {
     si.instanceIndex = hitInsIdx;
@@ -1007,7 +1058,6 @@ void intersectSceneBevel(in Ray ray, inout SurfaceInteraction si, int instanceIn
   bool doubleSided = true;
   int maxDim = maxDimension(abs(ray.d));
   vec3 shear = getShear(ray.d, maxDim);
-  int hitInsIdx;
 
 ${getBVHTraverseCode(
   glsl`
@@ -1017,14 +1067,15 @@ ${getBVHTraverseCode(
   hitBarycentric = hit.barycentric;
   hitIndex = index;
   isHit = true;
-  hitInsIdx = insIdx;
 `,
   glsl`
           if (insIdx != instanceIndex) {
             continue;
           }
 `,
-  'maxDistance'
+  'maxDistance',
+  true,
+  'false'
 )}
 
   if (isHit) {
@@ -1067,7 +1118,7 @@ ${getBVHTraverseCode(
   }
 }
 
-bool intersectSceneShadow(in Ray ray, float lightDistance, int currTriangleIndex) {
+bool intersectSceneShadow(in Ray ray, float lightDistance, int currTriangleIndex, int currInstanceIndex) {
 
   if (isEmptyScene) {
     return false;
@@ -1141,8 +1192,6 @@ ${getBVHTraverseCode(
       alpha, int(fetchMatData(ii + MAT_ROW_ALPHA).w), alphaCutoff
     );
     if (hashedSample(0u) > alpha) {
-      // Continue after a transparent hit without traversing beyond the light.
-      tMax = min(max(lightDistance, 0.0), RAY_MAX_DISTANCE);
       isOccluded = false;
     }
 #endif
@@ -1152,11 +1201,12 @@ ${getBVHTraverseCode(
   }
 `,
   glsl`
-  if (triangleIndex == currTriangleIndex) {
+  if (triangleIndex == currTriangleIndex && insIdx == currInstanceIndex) {
     continue;
   }
 `,
-  'min(max(lightDistance, 0.0), RAY_MAX_DISTANCE)'
+  'min(max(lightDistance, 0.0), RAY_MAX_DISTANCE)',
+  false
 )}
   return false;
 }

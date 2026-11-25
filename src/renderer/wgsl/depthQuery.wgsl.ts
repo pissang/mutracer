@@ -23,7 +23,7 @@ fn depthQuery(@builtin(global_invocation_id) id: vec3u) {
   // or pixel jitter. A bounded continuation prevents coincident surfaces
   // from keeping the query alive indefinitely.
   for (var layer = 0; layer < 32; layer++) {
-    intersectScene(ray, &si, 0, false, false);
+    intersectScene(ray, &si, 0, false, false, true);
     if (!si.hit) { return; }
     var material: OpenPbrResolvedMaterial;
     ${materialCall('&material', 'si', materialHooks)}
@@ -38,7 +38,7 @@ fn depthQuery(@builtin(global_invocation_id) id: vec3u) {
       }
       return;
     }
-    ray.o = si.position + ray.d * (EPS * 0.02);
+    ray.o = transmissionRayOrigin(si.position, ray.d, ray.o);
   }
 }
 `;

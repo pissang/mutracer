@@ -69,9 +69,12 @@ fn finishDirectLight(
   }
 
   var lightRay: Ray;
-  var shadowOrigin = (*si).position + EPS * lightDir;
-  if (isSurface) {
-    shadowOrigin = offsetSurfaceRay((*si).position, (*si).faceNormal, lightDir);
+  var shadowOrigin = (*si).position;
+  if (isSurface && dot((*si).faceNormal, lightDir) * dot((*si).faceNormal, (*path).ray.d) > 0.0) {
+    // A connection through the interface must see an occluder touching its far side.
+    shadowOrigin -= lightDir * surfaceRayRoundoff((*si).position, (*path).ray.o);
+  } else if (isSurface) {
+    shadowOrigin = offsetSurfaceRay((*si).position, (*si).faceNormal, lightDir, (*path).ray.o);
     let shadowTerminatorCutoff = 0.1;
     var normalLight = dot((*si).normal, lightDir);
 ${hasCoatNormals ? /* wgsl */ `    if (ma.coatNormalEnabled) { normalLight = dot((*si).faceNormal, lightDir); }` : ''}
@@ -98,11 +101,11 @@ ${hasCoatNormals ? /* wgsl */ `    if (ma.coatNormalEnabled) { normalLight = dot
   // offset, our any-hit traversal sees the sampled light triangle itself and
   // rejects virtually every emissive NEE sample as occluded.
   var visibilityDirection = lightDir;
-  var visibilityDistance = lightSample.dist - EPS;
+  var visibilityDistance = lightSample.dist - dot(shadowOrigin - (*si).position, lightDir);
   if (lightSample.sourceType == 1u) {
     let lightEndpoint =
       (*si).position + lightSample.direction * lightSample.dist;
-    let offsetLightEndpoint = lightEndpoint + EPS * lightSample.normal;
+    let offsetLightEndpoint = offsetSurfaceRay(lightEndpoint, lightSample.normal, -lightDir, (*si).position);
     let toOffsetLight = offsetLightEndpoint - shadowOrigin;
     visibilityDistance = length(toOffsetLight);
     visibilityDirection = normalize(toOffsetLight);
@@ -471,13 +474,10 @@ ${caustics ? /* wgsl */ `    causticAdvance(path, *ma, isNextRefraction, true);
     crossedBoundary = isNextRefraction & !(*ma).thinWalled;
     (*path).isNextRefraction = isNextRefraction;
     let incomingOrigin = (*path).ray.o;
-    (*path).ray.o = (*si).position + EPS * scatterDir;
-${hasCoatNormals ? /* wgsl */ `
-    if ((*ma).coatNormalEnabled) { (*path).ray.o = (*si).position + EPS * select(-${originalFace}, ${originalFace}, dot(${originalFace}, scatterDir) >= 0.0); }
-` : ''}
-    // A fixed forward step can cross the next surface of a filled glass.
-    if (HAS_ADJACENT_MEDIA && isNextRefraction) {
+    if (isNextRefraction) {
       (*path).ray.o = transmissionRayOrigin((*si).position, scatterDir, incomingOrigin);
+    } else {
+      (*path).ray.o = offsetSurfaceRay((*si).position, ${hasCoatNormals ? originalFace : '(*si).faceNormal'}, scatterDir, incomingOrigin);
     }
   }
   (*path).scatteringPdf = scatteringPdf;

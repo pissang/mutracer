@@ -134,8 +134,8 @@ describe('build-time shader identifier shortening', () => {
   it('derives production names from source without shrinking host-visible contracts', () => {
     const mapping = loadShaderIdentifierMap();
     expect(mapping.size).toBeGreaterThan(0);
-    expect(mapping.has('offsetSurfaceRay')).toBe(true);
-    for (const name of ['main', 'depthQuery', 'rtUniform', 'RayTraceUniform', 'reverseBits', 'sample_colorTex', 'load_colorTex', 'thinFilmWeight']) {
+    expect(mapping.has('transmissionRayOrigin')).toBe(true);
+    for (const name of ['main', 'depthQuery', 'rtUniform', 'RayTraceUniform', 'reverseBits', 'sample_colorTex', 'load_colorTex', 'thinFilmWeight', 'offsetSurfaceRay']) {
       expect(mapping.has(name), name).toBe(false);
     }
   });

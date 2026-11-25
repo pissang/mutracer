@@ -69,8 +69,11 @@ ${channelIndependentLight ? /* glsl */ `  // Test the full emission before filte
   }
 
   Ray lightRay;
-  vec3 shadowOrigin = si.position + EPS * lightDir;
-  if (isSurface) {
+  vec3 shadowOrigin = si.position;
+  if (isSurface && dot(si.faceNormal, lightDir) * dot(si.faceNormal, path.ray.d) > 0.0) {
+    shadowOrigin -= lightDir * surfaceRayRoundoff(si.position, path.ray.o);
+  } else if (isSurface) {
+    shadowOrigin = offsetSurfaceRay(si.position, si.faceNormal, lightDir, path.ray.o);
     const float shadowTerminatorCutoff = 0.1;
     float normalLight = dot(si.normal, lightDir);
 #ifdef USE_COAT_NORMAL_FRAMES
@@ -88,14 +91,16 @@ ${channelIndependentLight ? /* glsl */ `  // Test the full emission before filte
       : clamp(1.0 - geometricLight / shadowTerminatorCutoff, 0.0, 1.0);
     shadowOrigin += si.shadowOffset * offsetAmount;
   }
-  float shadowDistance=lightSample.dist-EPS;
-  vec3 shadowDirection=lightDir;
-  if(lightSample.sourceType==1){
-    vec3 endpoint=si.position+lightDir*lightSample.dist+EPS*lightSample.normal;
-    shadowDirection=normalize(endpoint-shadowOrigin);shadowDistance=distance(endpoint,shadowOrigin);
+  float shadowDistance = lightSample.dist - dot(shadowOrigin - si.position, lightDir);
+  vec3 shadowDirection = lightDir;
+  if (lightSample.sourceType == 1) {
+    vec3 endpoint = si.position + lightDir * lightSample.dist;
+    endpoint = offsetSurfaceRay(endpoint, lightSample.normal, -lightDir, si.position);
+    shadowDirection = normalize(endpoint - shadowOrigin);
+    shadowDistance = distance(endpoint, shadowOrigin);
   }
   initRay(lightRay, shadowOrigin, shadowDirection);
-  if (intersectSceneShadow(lightRay, shadowDistance, si.triangleIndex)) {
+  if (intersectSceneShadow(lightRay, shadowDistance, si.triangleIndex, si.instanceIndex)) {
     return vec3(0.0);
   }
 
@@ -281,13 +286,15 @@ ${fragments['sample5'] ?? ''}    path.beta *= f / scatteringPdf;
       isNextRefraction;
     path.isNextRefraction = isNextRefraction;
     vec3 incomingOrigin = path.ray.o;
-    path.ray.o = si.position + EPS * scatterDir;
+    if (isNextRefraction) {
+      path.ray.o = transmissionRayOrigin(si.position, scatterDir, incomingOrigin);
+    } else {
 #ifdef USE_COAT_NORMAL_FRAMES
-    if (mat.coatNormalEnabled) { path.ray.o = si.position + EPS * (dot(originalFace, scatterDir) >= 0.0 ? originalFace : -originalFace); }
+      path.ray.o = offsetSurfaceRay(si.position, originalFace, scatterDir, incomingOrigin);
+#else
+      path.ray.o = offsetSurfaceRay(si.position, si.faceNormal, scatterDir, incomingOrigin);
 #endif
-#ifdef HAS_ADJACENT_MEDIA
-    if (isNextRefraction) { path.ray.o = transmissionRayOrigin(si.position, scatterDir, incomingOrigin); }
-#endif
+    }
   }
 
   path.scatteringPdf = scatteringPdf;

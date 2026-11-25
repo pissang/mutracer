@@ -1,3 +1,5 @@
+import {INSTANCE_VEC4_STRIDE} from '../../src/renderer/bvhAccel.js';
+import {materialAlphaModeConstants} from '../../src/renderer/materialConstants.js';
 import {GROUP, HWRT_BINDING} from './layout.js';
 import {cameraJitterWgsl} from '../../src/renderer/wgsl/chunks/sampling.wgsl.js';
 import {createSceneHitQueryWgsl} from '../../src/renderer/wgsl/chunks/intersect.wgsl.js';
@@ -8,10 +10,11 @@ import type {WGPUShaderFeatures} from '../../src/renderer/wgpuShaderSource.js';
 // Both supply identity only, never a software hit test.
 export function nativeIntersections(features: WGPUShaderFeatures, empty: boolean, diagnostic = false, pathDiagnostic = false, indexed = false, opaqueClosest = false): string {
   if (empty) return /* wgsl */ `
-fn intersectScene(ray: Ray, si: ptr<function, SurfaceInteraction>, bounces: i32, doubleSided: bool, isRefractionRay: bool) { (*si).hit = false; }
+fn intersectScene(ray: Ray, si: ptr<function, SurfaceInteraction>, bounces: i32, doubleSided: bool, isRefractionRay: bool, resolveCoincident: bool) { (*si).hit = false; }
 fn intersectSceneShadow(ray: Ray, lightDistance: f32, currTriangleIndex: i32,currInstanceIndex:i32) -> bool { return false; }
 fn intersectSceneBevel(ray: Ray, si: ptr<function, SurfaceInteraction>, instanceIndex: i32, maxDistance: f32) { (*si).hit = false; }
 `;
+  const flat = !features.hasDisplacement && !diagnostic && indexed && !!features.compactVertices;
   return /* wgsl */ `
 ${diagnostic ? `var<private> mtWantedInstance: i32;
 var<private> mtWantedRecord: i32;
@@ -41,17 +44,30 @@ fn mtWorldToLocal(instance: i32) -> mat4x4f {
     instancesBuffer[instance * 10 + 3], instancesBuffer[instance * 10 + 4]);
 }
 fn mtTrace(ray: Ray, limit: f32, shadow: bool, onlyInstance: i32, skipRecord: i32, skipInstance:i32,
-    doubleSided: bool, isRefractionRay: bool) -> MtHit {
+    doubleSided: bool, isRefractionRay: bool, previousHit: MtHit, queryHash: u32) -> MtHit {
+  var best = previousHit;
+  let resolveTie = best.kind != RAY_QUERY_INTERSECTION_NONE;
+  var bestCatcher = false;
+  var minimum = 0.0;
+  var maximum = limit;
+  if (resolveTie) {
+    let tolerance = rayRoundoff(ray.o, best.t);
+    minimum = max(0.0, best.t - tolerance);
+    maximum = min(limit, best.t + tolerance);
+    if (HAS_SHADOW_CATCHER) {
+      let insData = instancesBuffer[best.instance * 10];
+      let material = mtSurfaceMaterial(i32(unpackMaterialIndex(bitcast<i32>(insData.z)).x),
+        mtIndices(best.instance, best.record), best.barycentric, best.record);
+      bestCatcher = materialsBuffer[material].matType == f32(SHADOW_CATCHER);
+    }
+  }
   var query: ray_query;
-  // OPAQUE is enabled only for all-double-sided, non-alpha, non-PDM geometry.
-  // A previous-record or instance restriction still requires every candidate.
-  // Shadow must expose opaque candidates too: the current triangle is excluded
-  // by the software query contract. Terminate only after accepting a candidate.
-  let flags = ${opaqueClosest ? 'select(select(0u, 2u, skipRecord >= 0 || onlyInstance >= 0), 6u, shadow)' : 'select(2u, 6u, shadow)'};
-  let minimum = select(0.0, 1e-7, shadow);
-  rayQueryInitialize(&query, mtAcceleration, RayDesc(flags, 255u, minimum, limit, ray.o, ray.d));
+  // The first pass can use the ordinary opaque fast path. The bounded
+  // second pass exposes all candidates without shrinking its interval.
+  let flags = ${opaqueClosest ? 'select(select(0u, 2u, resolveTie || skipRecord >= 0 || onlyInstance >= 0), 6u, shadow)' : 'select(2u, 6u, shadow)'};
+  rayQueryInitialize(&query, mtAcceleration, RayDesc(flags, 255u, minimum, maximum, ray.o, ray.d));
   var generated: MtHit;
-  generated.t = limit;
+  generated.t = maximum;
   while rayQueryProceed(&query) {
     let candidate = rayQueryGetCandidateIntersection(&query);
     let instance = i32(candidate.instance_custom_data);
@@ -60,6 +76,8 @@ fn mtTrace(ray: Ray, limit: f32, shadow: bool, onlyInstance: i32, skipRecord: i3
 ${diagnostic ? `    mtCandidateCount++;
     if (instance == mtWantedInstance && record == mtWantedRecord) { mtWantedSeen++; }` : ''}
     if (record == skipRecord && instance == skipInstance) { continue; }
+    if (resolveTie && record == best.record && instance == best.instance) { continue; }
+${flat ? flatTriangleCandidate(features) : /* wgsl */ `
     let index = mtIndices(instance, record);
     var tri = mtTriangle(index);
     let w2l = mtWorldToLocal(instance);
@@ -84,6 +102,11 @@ ${features.hasDisplacement ? /* wgsl */ `
       let minMaxH = bitcast<i32>(bvhBuffer[record].w);
       if (abs(insData.w) > 0.0 && minMaxH > 0) {
         let map = i32(matData.displacementMapIndex);
+        // The bounded query may visit procedural candidates in another
+        // order. Key marching jitter by primitive so it repeats that hit.
+        let savedHash = hashedCounter;
+        let primitiveHash = sampleSeed(sampleSeed(queryHash, u32(instance)), u32(record));
+        hashedCounter = primitiveHash;
         let hit = intersectDisplacement(o, d, generated.t, tri.p0, tri.p1, tri.p2,
           n0, n1, n2,
           vertexUv(index.x),
@@ -92,6 +115,8 @@ ${features.hasDisplacement ? /* wgsl */ `
           map, getMapSize(map), f32(minMaxH >> 8) / 255.0, f32(minMaxH & 255) / 255.0,
           insData.w, matData.displacementBias, matData.displacementStepSize, i32(matData.displacementUvProjection),
           vec2f(matData.displacementUvProjectionScale), shadow, isRefractionRay);
+        let sampled = hashedCounter != primitiveHash;
+        hashedCounter = savedHash + u32(sampled && !resolveTie);
         t = hit.t; barycentric = hit.barycentric; normal = hit.normal; micro = true;
       } else {
         // Zero-height triangles inside a procedural geometry still need a
@@ -101,8 +126,8 @@ ${features.hasDisplacement ? /* wgsl */ `
         t = hit.t; barycentric = hit.barycentric;
       }
 ` : ''}
-      if (!(t > minimum && t < generated.t)) { continue; }
     }
+    if (!(t > 0.0 && t >= minimum && t <= maximum)) { continue; }
 ${diagnostic ? `    if (instance == mtWantedInstance && record == mtWantedRecord) { mtWantedDot = dot(normal, d); }` : ''}
     if (!shadow && !micro && !doubleSided && materialsBuffer[materialIndex].doubleSided <= 0.5
         && dot(normal, d) > 0.0) { continue; }
@@ -110,23 +135,50 @@ ${diagnostic ? `    if (instance == mtWantedInstance && record == mtWantedRecord
     // filtering it here as well would square stochastic BLEND coverage.
     if (shadow && HAS_ALPHA && !intersectionAlphaPasses(materialIndex, index, barycentric, o + t * d, normal${features.compactVertices ? ", record" : ""}${features.materialHooks?.graph?.opacity ? ", instance" : ""})) { continue; }
 ${diagnostic ? `    if (instance == mtWantedInstance && record == mtWantedRecord) { mtWantedConfirmed++; }` : ''}
+    if (resolveTie) {
+      var catcher = false;
+      if (HAS_SHADOW_CATCHER) {
+        let material = mtSurfaceMaterial(materialIndex, index, barycentric, record);
+        catcher = materialsBuffer[material].matType == f32(SHADOW_CATCHER);
+      }
+      if (closestHitPreferred(catcher, instance, record, bestCatcher, best.instance, best.record)) {
+        best = MtHit(candidate.kind, t, instance, record, barycentric, normal, micro);
+        bestCatcher = catcher;
+      }
+      continue;
+    }
     // naga 30 requires the generated-distance expression to dominate the call.
     let generatedDistance = t;
     if (candidate.kind == RAY_QUERY_INTERSECTION_AABB) {
       generated = MtHit(2u, generatedDistance, instance, record, barycentric, normal, micro);
       rayQueryGenerateIntersection(&query, generatedDistance);
     } else { rayQueryConfirmIntersection(&query); }
+`}
   }
   let hit = rayQueryGetCommittedIntersection(&query);
+  if (resolveTie || hit.kind == RAY_QUERY_INTERSECTION_NONE) { return best; }
   if (hit.kind == RAY_QUERY_INTERSECTION_GENERATED) { return generated; }
-  var result: MtHit;
-  if (hit.kind == RAY_QUERY_INTERSECTION_NONE) { return result; }
-  result.kind = hit.kind; result.t = hit.t; result.instance = i32(hit.instance_custom_data);
-  result.record = mtRecord(result.instance, hit.primitive_index);
-  result.barycentric = vec3f(1.0 - hit.barycentrics.x - hit.barycentrics.y, hit.barycentrics);
-  let tri = mtTriangle(mtIndices(result.instance, result.record));
-  result.normal = normalize(cross(tri.p1 - tri.p0, tri.p2 - tri.p0));
-  return result;
+  let instance = i32(hit.instance_custom_data);
+  let record = mtRecord(instance, hit.primitive_index);
+  let tri = mtTriangle(mtIndices(instance, record));
+  let barycentric = vec3f(1.0 - hit.barycentrics.x - hit.barycentrics.y, hit.barycentrics);
+  let normal = normalize(cross(tri.p1 - tri.p0, tri.p2 - tri.p0));
+  return MtHit(hit.kind, hit.t, instance, record, barycentric, normal, false);
+}
+
+fn mtClosest(ray: Ray, limit: f32, onlyInstance: i32, skipRecord: i32, skipInstance: i32,
+    doubleSided: bool, isRefractionRay: bool, resolveCoincident: bool) -> MtHit {
+  let queryHash = hashedCounter;
+  var miss: MtHit;
+  let nearest = mtTrace(ray, limit, false, onlyInstance, skipRecord, skipInstance, doubleSided, isRefractionRay, miss, queryHash);
+  if (!resolveCoincident || nearest.kind == RAY_QUERY_INTERSECTION_NONE) { return nearest; }
+  return mtTrace(ray, limit, false, onlyInstance, skipRecord, skipInstance, doubleSided, isRefractionRay, nearest, queryHash);
+}
+fn mtSurfaceMaterial(fallback: i32, index: vec3i, barycentric: vec3f, record: i32) -> i32 {
+  let savedHash = hashedCounter;
+  let material = resolveSurfaceMaterialIndex(fallback, index, barycentric${features.compactVertices ? ', record' : ''});
+  hashedCounter = savedHash;
+  return material;
 }
 fn mtComplete(ray: Ray, si: ptr<function, SurfaceInteraction>, hit: MtHit) {
   (*si).hit = false;
@@ -139,26 +191,72 @@ fn mtComplete(ray: Ray, si: ptr<function, SurfaceInteraction>, hit: MtHit) {
   completeSurfaceInteraction(si, mtTriangle(index), hit.barycentric, index, hit.micro,
     hit.instance, hit.normal, o + hit.t * d, -1);
 }
-fn intersectScene(ray: Ray, si: ptr<function, SurfaceInteraction>, bounces: i32, doubleSided: bool, isRefractionRay: bool) {
-  let hit = mtTrace(ray, RAY_MAX_DISTANCE, false, -1, select(-1, (*si).triangleIndex, bounces > 0 || isRefractionRay), (*si).instanceIndex, doubleSided, isRefractionRay);
+fn intersectScene(ray: Ray, si: ptr<function, SurfaceInteraction>, bounces: i32, doubleSided: bool, isRefractionRay: bool, resolveCoincident: bool) {
+  let hit = mtClosest(ray, RAY_MAX_DISTANCE, -1, (*si).triangleIndex, (*si).instanceIndex, doubleSided, isRefractionRay, resolveCoincident);
 ${pathDiagnostic ? `  mtPathRecord(ray, (*si).albedoSampled, hit.kind != 0u, hit.instance, hit.record, hit.t, hit.barycentric, bounces, doubleSided, isRefractionRay, (*si).triangleIndex);` : ''}
   mtComplete(ray, si, hit);
 }
 fn intersectSceneShadow(ray: Ray, lightDistance: f32, currTriangleIndex: i32,currInstanceIndex:i32) -> bool {
   let limit = min(max(lightDistance, 0.0), RAY_MAX_DISTANCE);
-  if (limit <= 1e-7) { return false; }
-  return mtTrace(ray, limit, true, -1, currTriangleIndex, currInstanceIndex, true, false).kind != 0u;
+  if (limit <= 0.0) { return false; }
+  var miss: MtHit;
+  return mtTrace(ray, limit, true, -1, currTriangleIndex, currInstanceIndex, true, false, miss, hashedCounter).kind != 0u;
 }
 fn intersectSceneBevel(ray: Ray, si: ptr<function, SurfaceInteraction>, instanceIndex: i32, maxDistance: f32) {
-  mtComplete(ray, si, mtTrace(ray, maxDistance, false, instanceIndex, -1, -1, true, false));
+  mtComplete(ray, si, mtClosest(ray, maxDistance, instanceIndex, -1, -1, true, false, false));
 }
+`;
+}
+
+// Flat indexed candidates already carry their distance and barycentrics. Fetch
+// triangle geometry only for side tests, non-opaque shadows or the hit we keep.
+function flatTriangleCandidate(features: WGPUShaderFeatures): string {
+  return /* wgsl */ `
+    let t = candidate.t;
+    if (!(t > 0.0 && t >= minimum && t <= maximum)) { continue; }
+    // When catcher priority is absent, most replay candidates can be rejected
+    // using identity alone, including adjacent triangles in the same mesh.
+    if (resolveTie && !HAS_SHADOW_CATCHER &&
+        !closestHitPreferred(false, instance, record, false, best.instance, best.record)) { continue; }
+
+    let barycentric = vec3f(1.0 - candidate.barycentrics.x - candidate.barycentrics.y, candidate.barycentrics);
+    let insData = instancesBuffer[instance * ${INSTANCE_VEC4_STRIDE}];
+    let materialIndex = i32(unpackMaterialIndex(bitcast<i32>(insData.z)).x);
+    var catcher = false;
+    if (resolveTie && HAS_SHADOW_CATCHER) {
+      let material = triangleMaterial(materialIndex, record);
+      catcher = materialsBuffer[material].matType == f32(SHADOW_CATCHER);
+      if (!closestHitPreferred(catcher, instance, record, bestCatcher, best.instance, best.record)) { continue; }
+    }
+    let checkSide = !shadow && !doubleSided && materialsBuffer[materialIndex].doubleSided <= 0.5;
+    let checkAlpha = shadow && HAS_ALPHA &&
+      i32(materialsBuffer[triangleMaterial(materialIndex, record)].alphaMode) != ${materialAlphaModeConstants.opaque};
+    var normal: vec3f;
+    if (checkSide || checkAlpha || resolveTie) {
+      let index = mtIndices(instance, record);
+      let tri = mtTriangle(index);
+      normal = normalize(cross(tri.p1 - tri.p0, tri.p2 - tri.p0));
+      if (checkSide || checkAlpha) {
+        let w2l = mtWorldToLocal(instance);
+        let d = (w2l * vec4f(ray.d, 0.0)).xyz;
+        if (checkSide && dot(normal, d) > 0.0) { continue; }
+        if (checkAlpha) {
+          let o = (w2l * vec4f(ray.o, 1.0)).xyz;
+          if (!intersectionAlphaPasses(materialIndex, index, barycentric, o + t * d, normal, record${features.materialHooks?.graph?.opacity ? ', instance' : ''})) { continue; }
+        }
+      }
+    }
+    if (resolveTie) {
+      best = MtHit(candidate.kind, t, instance, record, barycentric, normal, false);
+      bestCatcher = catcher;
+    } else { rayQueryConfirmIntersection(&query); }
 `;
 }
 
 // A separate entry point is generated only for explicit diagnostic execution.
 // Integer identity bits are read back raw, never passed through AOV averaging.
 export function nativeHitDiagnostics(features: WGPUShaderFeatures, empty: boolean, backend: 'both' | 'software' | 'hardware' = 'both'): string {
-  return createSceneHitQueryWgsl(features.hasAnisotropyDirections || features.hasCoatNormals) + /* wgsl */ `
+  return createSceneHitQueryWgsl(features.hasAnisotropyDirections || features.hasCoatNormals, features.compactVertices) + /* wgsl */ `
 @compute @workgroup_size(8, 8, 1)
 fn diagnoseHits(@builtin(global_invocation_id) id: vec3u) {
   let size = rtUniform.outputSize;
@@ -181,7 +279,7 @@ ${cameraJitterWgsl('size', !!features.sampleIndexedRandomJitter)}
   }
   let software = ${backend === 'hardware' ? 'SceneQueryHit(false, -1, -1, RAY_MAX_DISTANCE, vec3f(0.0))' : 'querySceneSoftware(ray)'};
   ${empty || backend === 'software' ? '' : 'mtWantedInstance = software.instance; mtWantedRecord = software.record;'}
-  ${empty || backend === 'software' ? 'let hardware = software;' : `let hw = mtTrace(ray, RAY_MAX_DISTANCE, false, -1, -1, -1, false, false);
+  ${empty || backend === 'software' ? 'let hardware = software;' : `let hw = mtClosest(ray, RAY_MAX_DISTANCE, -1, -1, -1, false, false, true);
   let hardware = SceneQueryHit(hw.kind != 0u, select(-1, hw.instance, hw.kind != 0u),
     select(-1, hw.record, hw.kind != 0u), select(RAY_MAX_DISTANCE, hw.t, hw.kind != 0u), hw.barycentric);`}
   outColor[idx] = bitcast<vec4f>(vec4u(u32(software.hit), bitcast<u32>(software.instance), bitcast<u32>(software.record), bitcast<u32>(software.t)));

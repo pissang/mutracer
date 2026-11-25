@@ -40,8 +40,10 @@ vec2 sampleShadowCatcher(SurfaceInteraction si, int bounce, inout Path path) {
     if (lightSample.pdf > 0.0 && orientation >= 0.0) {
       if (dot(lightSample.emission, luminance) * abs(cosThetaL) > 0.0) {
         Ray ray;
-        initRay(ray, si.position + EPS * lightDir, lightDir);
-        bool occluded = intersectSceneShadow(ray, lightSample.dist - EPS, si.triangleIndex);
+        vec3 origin = offsetSurfaceRay(si.position, si.faceNormal, lightDir, path.ray.o);
+        float distance = lightSample.dist - dot(origin - si.position, lightDir);
+        initRay(ray, origin, lightDir);
+        bool occluded = intersectSceneShadow(ray, distance, si.triangleIndex, si.instanceIndex);
         counts += vec2(occluded ? 1.0 : 0.0, 1.0);
       }
     }

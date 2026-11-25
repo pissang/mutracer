@@ -174,7 +174,7 @@ ${sharePrefix ? /* glsl */ `  int spSlot = spCall++;
   }
 ` : ''}  for (int step = 0; step < ${(MAX_PATH_EVENTS_WEBGL + 1) * 2 + 2}; step++) {
     if (${sharePrefix ? '!spResume && query' : 'query'}) {
-      intersectScene(path.ray, si, event != 0);
+      intersectScene(path.ray, si, event != 0, false);
       getMaterial(mat, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
       if (event == 0 && si.hit && (mat.materialType == STANDARD || mat.materialType == UNLIT)) {
         outAux.albedo = mat.transmissionWeight > 0.5 ? vec3(1.0) : mat.baseColor;
@@ -200,7 +200,7 @@ ${sharePrefix ? /* glsl */ `    query = true;
       if (first && path.fromEye && si.hit && (mat.materialType == STANDARD || mat.materialType == UNLIT) && mat.alpha < 1.0) {
         split = true; coverage = clamp(mat.alpha, 0.0, 1.0); primarySi = si; primaryMat = mat;
         si.albedoSampled = false;
-        path.ray.o = si.position + ray.d * (EPS * 0.02); first = false; resample = true; continue;
+        path.ray.o = transmissionRayOrigin(si.position, ray.d, ray.o); first = false; resample = true; continue;
       }
       first = false;
 ${sharePrefix ? /* glsl */ `      if (spActive && (event > 0 || maximum < (si.hit ? distance(si.position, path.ray.o) : INF)) && mat.transmissionWeight > 0.001 && spDisperses(mat)) {
