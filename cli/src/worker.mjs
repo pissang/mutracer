@@ -72,6 +72,8 @@ export class Worker {
   #next = 0;
   #warnings = new Set();
   #queue = Promise.resolve();
+  // A copy of the last descriptor the worker accepted, for camera-only updates.
+  #descriptor;
 
   static async open() {
     const worker = new Worker();
@@ -103,7 +105,30 @@ export class Worker {
     this.child.stdin.on('error', () => {});
   }
 
+  /**
+   * Send a v8 descriptor, or only its camera record when nothing else changed.
+   * `camera` is the record's [start, end) byte range in this descriptor.
+   */
+  async scene(input, [start, end]) {
+    const descriptor = Buffer.from(input.buffer, input.byteOffset, input.byteLength);
+    const previous = this.#descriptor;
+    this.#descriptor = undefined;
+    if (previous && start > 0 && end - start === 128 && this.info?.capabilities.includes('descriptor-camera') &&
+        previous.length === descriptor.length && end <= descriptor.length &&
+        descriptor.compare(previous, 0, start, 0, start) === 0 &&
+        descriptor.compare(previous, end, descriptor.length, end, descriptor.length) === 0) {
+      await this.request('camera', {}, descriptor.subarray(start, end));
+      previous.set(descriptor.subarray(start, end), start);
+      this.#descriptor = previous;
+      return;
+    }
+    const copy = Buffer.from(descriptor);
+    await this.request('scene', {format: 'descriptor-v8'}, descriptor);
+    this.#descriptor = copy;
+  }
+
   request(type, fields, bytes) {
+    if (type === 'scene') this.#descriptor = undefined;
     const result = this.#queue.then(() => this.#send(type, fields, bytes));
     this.#queue = result.catch(() => {});
     return result;
@@ -169,8 +194,8 @@ export class Worker {
       if (header.type !== 'frames') throw new NativeError('Expected a temporal frame batch.');
       for (const item of header.frames) yield {frame:item.frame, bytes:bytes.subarray(item.offset, item.offset + item.bytes)};
     };
-    for await (const {frame, t, descriptor, cut} of inputs) {
-      if (descriptor) await this.request('scene', {format:'descriptor-v8'}, descriptor);
+    for await (const {frame, t, descriptor, camera, cut} of inputs) {
+      if (descriptor) await this.scene(descriptor, camera);
       if (cut) await this.request('cut', {});
       yield* unpack(await this.request('render', {frame, t, settings}));
     }
