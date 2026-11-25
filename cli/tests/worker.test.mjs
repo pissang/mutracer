@@ -54,3 +54,56 @@ input.on('line', line => {
     await rm(directory, {recursive: true, force: true});
   }
 });
+
+test('sends only the camera record when nothing else in the descriptor changes', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mutracer-worker-'));
+  const executable = join(directory, 'worker.mjs');
+  const log = join(directory, 'requests.jsonl');
+  await writeFile(executable, `#!/usr/bin/env node
+import {appendFileSync} from 'node:fs';
+let pending = Buffer.alloc(0), header;
+process.stdin.on('data', chunk => {
+  pending = Buffer.concat([pending, chunk]);
+  for (;;) {
+    if (!header) {
+      const end = pending.indexOf(10);
+      if (end < 0) return;
+      header = JSON.parse(pending.subarray(0, end));
+      pending = pending.subarray(end + 1);
+    }
+    const size = header.bytes === undefined ? 0 : 4 + header.bytes;
+    if (pending.length < size) return;
+    pending = pending.subarray(size);
+    appendFileSync(${JSON.stringify(log)}, JSON.stringify(header) + '\\n');
+    const capabilities = ['descriptor-v8', 'image-decode', 'descriptor-camera'];
+    process.stdout.write(JSON.stringify({type: 'ok', id: header.id, protocol: 1, capabilities}) + '\\n');
+    header = undefined;
+  }
+});
+`);
+  await chmod(executable, 0o755);
+  process.env.MUTRACER_BIN = executable;
+  const nativeWorker = await Worker.open();
+  try {
+    const base = new Uint8Array(1024);
+    const moved = base.slice();
+    moved[64 * 4 + 20] = 1;
+    const edited = moved.slice();
+    edited[900] = 1;
+    const camera = [256, 384];
+    await nativeWorker.scene(base, camera);
+    await nativeWorker.scene(moved, camera);
+    await nativeWorker.scene(moved, camera);
+    await nativeWorker.scene(edited, camera);
+    await nativeWorker.request('scene', {format: 'descriptor-v8'}, edited);
+    await nativeWorker.scene(edited, camera);
+    const {readFile} = await import('node:fs/promises');
+    const requests = (await readFile(log, 'utf8')).trim().split('\n').map(line => JSON.parse(line)).slice(1);
+    assert.deepEqual(requests.map(({type, bytes}) => [type, bytes]), [
+      ['scene', 1024], ['camera', 128], ['camera', 128], ['scene', 1024], ['scene', 1024], ['scene', 1024],
+    ]);
+  } finally {
+    await nativeWorker.close();
+    await rm(directory, {recursive: true, force: true});
+  }
+});

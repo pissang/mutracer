@@ -486,7 +486,8 @@ export class TemporalDenoiser {
     if (!this.history) return;
     const historyReady = readyThrough(this.frames, {...this.activeOptions, postRadius: 0}, flush);
     while (this.nextWindow <= historyReady) {
-      if (flush && this.finished.length >= TEMPORAL_MAX_FINISHED) return;
+      // Flush finishes one frame per step, so the tail is paced like the stream.
+      if (flush && this.finished.length) return;
       const i = this.nextWindow++;
       const radius = this.activeOptions.historyRadius.max;
       const neighbors = historyNeighbors(i, this.frames, this.activeOptions, radius).filter(j => this.epochs[j] === this.epochs[i]);
@@ -505,8 +506,8 @@ export class TemporalDenoiser {
 
   private async publishReady(outputReady: number) {
     while (this.nextOutput <= outputReady) {
+      if (this.flushing && this.finished.length) return;
       if (this.finished.length >= TEMPORAL_MAX_FINISHED) {
-        if (this.flushing) return;
         throw new Error('Too many finished temporal frames are waiting; drain output before pushing.');
       }
       const i = this.nextOutput++;

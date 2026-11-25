@@ -67,6 +67,10 @@ struct Edit {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
 enum Request {
+    Camera {
+        id: u32,
+        bytes: u32,
+    },
     Flush {
         id: u32,
     },
@@ -210,6 +214,8 @@ struct Session {
     fallback_reported: bool,
     scene: Option<Scene>,
     renderer: Option<(Settings, Renderer)>,
+    /// Replaces the descriptor's camera record until the next scene.
+    camera: Option<mutracer_native::api::Camera>,
     registered: BTreeMap<String, PathBuf>,
     directory: Option<tempfile::TempDir>,
 }
@@ -312,6 +318,17 @@ impl Session {
                 stream.filter.cut();
                 reply(writer, json!({"type":"ok","id":id}), None)
             }
+            Request::Camera { id, bytes } => {
+                if !matches!(self.scene, Some(Scene::Descriptor(_))) {
+                    return Err(invalid("/type", "Send a descriptor scene before its camera"));
+                }
+                let camera = (bytes as usize == payload.len())
+                    .then(|| mutracer_native::api::Camera::from_bytes(&payload))
+                    .flatten()
+                    .ok_or_else(|| invalid("/bytes", "Expected a 128-byte camera record"))?;
+                self.camera = Some(camera);
+                reply(writer, json!({"type":"ok","id":id}), None)
+            }
             Request::Flush { id } => {
                 let Some(stream) = self.temporal.as_mut() else {
                     return temporal_reply(writer, id, None, Format::Png, true, 0);
@@ -337,7 +354,7 @@ impl Session {
                 reply(
                     writer,
                     json!({"type":"ok","id":id,"protocol":1,"shotVersion":1,"descriptorVersions":[8],
-                    "capabilities":["shot-json","descriptor-v8","asset-path","asset-bytes","shot-edit","png","oidn","image-decode","exr","render-settings","display-settings","frame-sample-sequence","check-settings","oidn-clean-aux-large","structured-warnings","temporal-offline"],
+                    "capabilities":["shot-json","descriptor-v8","asset-path","asset-bytes","shot-edit","png","oidn","image-decode","exr","render-settings","display-settings","frame-sample-sequence","check-settings","oidn-clean-aux-large","structured-warnings","temporal-offline","descriptor-camera"],
                     "maxHeaderBytes":MAX_HEADER,"maxPayloadBytes":MAX_PAYLOAD,"build":env!("MUTRACER_CLI_BUILD_ID")}),
                     None,
                 )
@@ -423,6 +440,7 @@ impl Session {
                     self.renderer = None;
                 }
                 self.scene = Some(scene);
+                self.camera = None;
                 reply(
                     writer,
                     json!({"type":"ok","id":id,"sceneHash":scene_hash}),
@@ -691,6 +709,10 @@ impl Session {
                             .map_err(|e| Error::gpu(e.to_string()))?;
                         renderer
                             .engine
+                            .set_camera(self.camera)
+                            .map_err(|e| Error::gpu(e.to_string()))?;
+                        renderer
+                            .engine
                             .display()
                             .set_settings(display.unwrap_or_default())
                             .map_err(|e| Error::gpu(e.to_string()))?;
@@ -931,6 +953,39 @@ mod tests {
             read_packet(&mut output).unwrap().unwrap().header["type"],
             "ok"
         );
+    }
+
+    #[test]
+    fn camera_requires_a_descriptor_and_resets_with_the_scene() {
+        let mut session = Session {
+            hello: true,
+            ..Default::default()
+        };
+        let mut out = Vec::new();
+        let camera = mutracer_native::api::Camera::default().to_bytes().to_vec();
+        let request = |id| Request::Camera { id, bytes: 128 };
+        let error = session.handle(request(1), camera.clone(), &mut out).unwrap_err();
+        assert!(error.message.contains("descriptor scene"));
+        let shot = json!({
+            "version": 1, "output": {"duration": 1},
+            "objects": [{"name": "subject", "shape": "sphere"}],
+            "camera": {"position": [0, 0, 3], "target": "subject"},
+        });
+        let input = Input::from_bytes(&serde_json::to_vec(&shot).unwrap(), Path::new(".")).unwrap();
+        let descriptor = input.prepared.scene.descriptor().unwrap();
+        let scene = |id| Request::Scene {
+            id,
+            format: SceneFormat::DescriptorV8,
+            bytes: descriptor.len() as u32,
+            base_dir: None,
+        };
+        session.handle(scene(2), descriptor.to_vec(), &mut out).unwrap();
+        assert!(session.handle(Request::Camera { id: 3, bytes: 64 }, camera[..64].to_vec(), &mut out).is_err());
+        assert!(session.camera.is_none());
+        session.handle(request(4), camera.clone(), &mut out).unwrap();
+        assert!(session.camera.is_some());
+        session.handle(scene(5), descriptor.to_vec(), &mut out).unwrap();
+        assert!(session.camera.is_none());
     }
 
     #[test]

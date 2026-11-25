@@ -6,7 +6,7 @@ import {parseArgs} from 'node:util';
 import * as THREE from 'three';
 import * as mutracer from '../../src/main.ts';
 import {THREESync, fromTHREECamera} from '../../src/three.ts';
-import {HEADER as H} from '../../native/src/layout.ts';
+import {CAMERA as C, HEADER as H, WORD_BYTES} from '../../native/src/layout.ts';
 import {NativeSceneEncoder} from '../../viewer/src/engine/nativeScene.ts';
 import {loaders} from './load.mjs';
 import {strictConversion} from './strict.mjs';
@@ -27,6 +27,12 @@ const openWorker = async () => {
   return worker;
 };
 const digest = data => createHash('sha256').update(data).digest('hex');
+// The [start, end) bytes of a v8 descriptor's camera record.
+const cameraRange = descriptor => {
+  const start = new DataView(descriptor.buffer, descriptor.byteOffset, descriptor.byteLength)
+    .getUint32(H.CAMERA_OFFSET * WORD_BYTES, true) * WORD_BYTES;
+  return [start, start + C.WORDS * WORD_BYTES];
+};
 const hashJson = object => digest(JSON.stringify(object));
 const number = (value, label, min, max) => {
   const n = Number(value);
@@ -323,7 +329,8 @@ async function main() {
     const canCheck = worker.info.capabilities.includes('check-settings');
     let denoiserWeights, directLightCandidates;
     if (canCheck || command === 'validate') {
-      await worker.request('scene',{format:'descriptor-v8'},await frame(timeA,indexA));
+      const descriptor = await frame(timeA,indexA);
+      await worker.scene(descriptor,cameraRange(descriptor));
       if (canCheck) {
         const index = command === 'still' ? indexA : first + Math.floor((last-first)/stride)*stride;
         const {header} = await worker.request('check',{t:command === 'still' ? time : index/fps,frame:index,settings});
@@ -350,12 +357,13 @@ async function main() {
       }
     };
     const render = (descriptor, index, t) => retryGpu(() => index, async () => {
-      await worker.request('scene',{format:'descriptor-v8'},descriptor);
+      await worker.scene(descriptor,cameraRange(descriptor));
       return worker.request('render',{t,frame:index,settings});
     });
     const output = resolve(values.output);
     if (command === 'still' && settings.denoise === 'temporal') {
-      const inputs = [{frame:indexA,t:time,descriptor:await frame(time,indexA)}];
+      const descriptor = await frame(time,indexA);
+      const inputs = [{frame:indexA,t:time,descriptor,camera:cameraRange(descriptor)}];
       const bytes = await retryGpu(() => indexA, async () => {
         let image;
         for await (const result of worker.temporalFrames(inputs,settings)) {
@@ -403,7 +411,7 @@ async function main() {
           for (let index=begin; index<=end; index++) {
             const descriptor = await frame(index/fps,index);
             if (index>=next && index<=last) sources.set(index,digest(descriptor));
-            yield {frame:index,t:index/fps,descriptor};
+            yield {frame:index,t:index/fps,descriptor,camera:cameraRange(descriptor)};
           }
         }
         let expected = begin;

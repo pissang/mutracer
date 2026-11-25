@@ -20,6 +20,7 @@ there is no length prefix or payload. Read from one buffered stream throughout.
 | --- | --- | --- |
 | `hello` | `protocol: 1` | `ok` with `protocol`, `shotVersion`, `descriptorVersions`, `capabilities`, `maxHeaderBytes` and `maxPayloadBytes` |
 | `scene` | `format: "shot-json" \| "descriptor-v8"`, `bytes`; optional `baseDir` for shot JSON | `ok`; with `sceneHash`; replaces the current scene and clears prior edits |
+| `camera` | `bytes`, a 128-byte `mt_camera_v4` record | `ok`; replaces the current descriptor's camera until the next `scene`. Send it instead of the whole descriptor when only the camera moves |
 | `asset` | `name`, `format: "gltf" \| "image" \| "hdr" \| "exr"`, and either `path` or `bytes` | `ok`; registers a resource for later scene input |
 | `decode` | `format: "image" \| "hdr" \| "exr"`, `bytes` | `ok` with dimensions and an image payload |
 | `edit` | `changes`, an array of replacements with `path` (JSON pointer) and `value`; paths identify existing animatable properties in a shot JSON scene | `ok`; validates and applies the whole batch |
@@ -58,9 +59,9 @@ reply before sending the next request. Flush to completion before replacing
 a shot or changing the render settings.
 
 Check for `render-settings`, `display-settings`, `frame-sample-sequence`,
-`oidn-clean-aux-large` and `check-settings` in `hello.capabilities` before
-using those features. Large additionally needs the three
-[weight files](shot.md#output-and-animation). A `check` reply can be included
+`oidn-clean-aux-large`, `check-settings` and `descriptor-camera` in
+`hello.capabilities` before using those features. Large additionally needs the
+three [weight files](shot.md#output-and-animation). A `check` reply can be included
 in the frame reuse key so a change to external weights invalidates the cache.
 
 An embedded asset is referenced by `asset:<name>` in a shot
@@ -78,8 +79,8 @@ reply. Closing it ends the session and stops an active render.
 
 Render requests use the same frame index, seed and sample sequence rules as
 file mode. After a terminal GPU failure a restarted worker requires `hello`
-and the assets and scene again, plus the edits needed for the next frame.
-Clients that write image payloads to disk use a temporary file and rename after
-a complete reply. Reuse a frame only when the scene, assets, edits, time and
-effective render settings match. The scene reply hash covers shot JSON and its
+and the assets and scene again, plus the edits or camera needed for the next
+frame. Clients that write image payloads to disk use a temporary file and rename
+after a complete reply. Reuse a frame only when the scene, assets, edits,
+camera, time and effective render settings match. The scene reply hash covers shot JSON and its
 files, or the descriptor payload.

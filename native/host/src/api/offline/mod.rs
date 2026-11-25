@@ -346,7 +346,10 @@ impl TemporalDenoiser {
         } else {
             self.count.saturating_sub(plan.max)
         };
-        while self.window < ready && self.finished.len() < 4 {
+        // Flush finishes one frame per call, so the tail is paced like the
+        // stream instead of arriving in bursts of the queue capacity.
+        let capacity = if flush { 1 } else { 4 };
+        while self.window < ready && self.finished.len() < capacity {
             let i = self.window;
             let neighbors = self.neighbors(i, self.count, plan.max);
             let p = self.passes.as_ref().unwrap();
@@ -411,16 +414,16 @@ impl TemporalDenoiser {
                 p.store_display(i, &spatial);
             }
             self.window += 1;
-            self.publish(self.window.saturating_sub(plan.post_radius))?;
+            self.publish(self.window.saturating_sub(plan.post_radius), capacity)?;
         }
         if flush && self.window == self.count {
-            self.publish(plan.ready_count(self.count, true))?;
+            self.publish(plan.ready_count(self.count, true), capacity)?;
         }
         Ok(())
     }
-    fn publish(&mut self, ready: u32) -> Result<()> {
+    fn publish(&mut self, ready: u32, capacity: usize) -> Result<()> {
         let p = self.passes.as_ref().unwrap();
-        while self.output < ready && self.finished.len() < 4 {
+        while self.output < ready && self.finished.len() < capacity {
             let i = self.output;
             let denoised = if p.plan.post_radius == 0 {
                 self.frames.get_mut(&i).unwrap().spatial.take().unwrap()
