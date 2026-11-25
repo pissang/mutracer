@@ -62,8 +62,8 @@ describe('temporal memory planner', () => {
   });
 
   it('budgets the full offline OIDN guide ring and two window scratch images', () => {
-    const base = normalizeTemporalOptions({accumulateGuides: false});
-    const windowed = normalizeTemporalOptions();
+    const base = normalizeTemporalOptions();
+    const windowed = normalizeTemporalOptions({accumulateGuides: true});
     const w = 1280, h = 720;
     const budget = estimateTemporalMemory(w, h, base);
     expect(estimateTemporalMemory(w, h, windowed) - budget).toBe(w * h * (16 * 16 + 32));
@@ -75,8 +75,8 @@ describe('temporal memory planner', () => {
   });
 
   it('keeps the interactive plan independent of guide accumulation', () => {
-    const enabled = normalizeTemporalOptions({mode: 'interactive'});
-    const disabled = normalizeTemporalOptions({mode: 'interactive', accumulateGuides: false});
+    const enabled = normalizeTemporalOptions({mode: 'interactive', accumulateGuides: true});
+    const disabled = normalizeTemporalOptions({mode: 'interactive'});
     expect(planTemporalMemory(1280, 720, enabled, limits)).toEqual(planTemporalMemory(1280, 720, disabled, limits));
   });
 

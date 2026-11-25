@@ -189,10 +189,10 @@ reflections and shadows can leave trails, and newly visible surfaces have
 less history. The [shot options](../cli/schema/shot.md#output-and-animation)
 describe the radii, byte budget and spatial weights used for video.
 
-Offline OIDN averages albedo and normal guides across the history window by
-default when the history radius is positive. At 720p with a maximum radius of
-16, set `TemporalOptions::accumulate_guides` to `false` to save about 265 MB
-of temporal GPU memory.
+Set `TemporalOptions::accumulate_guides` to `true` to average offline OIDN
+albedo and normal guides when the history radius is positive. The option
+defaults to `false`. At 720p with a maximum history radius of 16, enabling
+it adds about 265 MB of temporal GPU memory.
 
 At 720p and below, offline OIDN may process the whole image on a supported GPU.
 This is faster and can use more temporary GPU memory. Set `memoryBudget` to

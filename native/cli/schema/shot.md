@@ -52,7 +52,7 @@ when available. Otherwise it uses bundled weights and reports warning `W3`.
 | `historyRadius` | Number of neighbors on each side, 0–32, or an adaptive range such as the default `{"min":8,"max":16}`. |
 | `postRadius` | Stabilization radius, 0–3. Default 3. |
 | `stabilizeSparkle` | Suppress isolated flashes. Default true. Set false when `postRadius` is 0. |
-| `accumulateGuides` | Default `true`. Set to `false` to save GPU memory. See [offline OIDN guide accumulation](../../docs/denoising.md#offline-animation). |
+| `accumulateGuides` | Default `false`. See [offline OIDN guide accumulation](../../docs/denoising.md#offline-animation). |
 | `historyInvalidation` | `"auto"` (default) reacts to scene and material changes. Choose `"manual"` when supplying shot boundaries yourself. |
 | `cuts` | Frame indices or `{"time": seconds}` entries. Each begins a new segment at the first frame at or after the cut. Default empty. |
 | `memoryBudget` | Maximum estimated temporal GPU bytes. Smaller budgets reduce the history and stabilization radii. A budget below the minimum plan fails. |

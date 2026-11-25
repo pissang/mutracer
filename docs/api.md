@@ -246,9 +246,9 @@ rendering cost and image-quality limitations.
 
 ## TemporalDenoiser
 
-Use `new TemporalDenoiser(engine, { accumulateGuides: false })` to use
-current-frame guides. See [guide accumulation](./temporal-denoising.md#options)
-for the default, supported mode and memory cost.
+Set `accumulateGuides: true` in the constructor to enable guide accumulation.
+See the [temporal options](./temporal-denoising.md#options) for applicability
+and memory cost.
 
 ## RenderLoop and Sync
 

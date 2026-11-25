@@ -10,7 +10,7 @@
         },
         "postRadius": 3,
         "stabilizeSparkle": true,
-        "accumulateGuides": true,
+        "accumulateGuides": false,
         "denoiser": {
           "type": "oidn",
           "model": "cleanAuxLarge"
@@ -46,6 +46,7 @@
           "min": 1,
           "max": 7
         },
+        "accumulateGuides": true,
         "memoryBudget": 4000000
       },
       "expected": {
@@ -139,7 +140,7 @@
           "max": 16
         },
         "postRadius": 3,
-        "bytes": 3004568392
+        "bytes": 2739147592
       }
     },
     {
@@ -154,7 +155,7 @@
           "max": 16
         },
         "postRadius": 3,
-        "bytes": 6754861336
+        "bytes": 6157664536
       }
     },
     {
@@ -171,14 +172,16 @@
           "max": 2
         },
         "postRadius": 1,
-        "bytes": 1203344
+        "bytes": 1169616
       }
     },
     {
       "width": 31,
       "height": 17,
       "materials": 3,
-      "input": {},
+      "input": {
+        "accumulateGuides": true
+      },
       "overrides": {
         "maxTextureArrayLayers": 10
       },

@@ -32,7 +32,7 @@ pub struct TemporalOptions {
     pub post_radius: u32,
     /// Suppress isolated impulses. Default true, requires post stabilization.
     pub stabilize_sparkle: bool,
-    /// Accumulate albedo and normal for offline OIDN when the history radius is positive. Default true.
+    /// Accumulate albedo and normal for offline OIDN when the history radius is positive. Default false.
     pub accumulate_guides: bool,
     /// Default Auto. Manual uses explicit cuts and frame gaps only.
     pub history_invalidation: HistoryInvalidation,
@@ -45,7 +45,7 @@ impl Default for TemporalOptions {
             history_radius: Default::default(),
             post_radius: 3,
             stabilize_sparkle: true,
-            accumulate_guides: true,
+            accumulate_guides: false,
             history_invalidation: HistoryInvalidation::Auto,
             memory_budget: None,
         }
@@ -252,8 +252,8 @@ mod tests {
     use super::*;
     #[test]
     fn guide_window_budget_reduces_the_enabled_plan_first() {
-        let enabled = TemporalOptions::default();
-        let disabled = TemporalOptions { accumulate_guides: false, ..enabled };
+        let disabled = TemporalOptions::default();
+        let enabled = TemporalOptions { accumulate_guides: true, ..disabled };
         let size = [1280, 720];
         let enabled_plan = enabled.estimate(size, 0).unwrap();
         let disabled_plan = disabled.estimate(size, 0).unwrap();

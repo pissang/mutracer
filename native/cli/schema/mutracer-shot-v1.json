@@ -606,7 +606,7 @@
             },
             "accumulateGuides": {
               "type": "boolean",
-              "default": true
+              "default": false
             },
             "historyInvalidation": {
               "enum": [

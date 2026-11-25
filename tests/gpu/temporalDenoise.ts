@@ -98,6 +98,7 @@ async function run() {
     check(reducedOutputs === 12, `Reduced ring overwrote or lost frames after exceeding capacity: ${reducedOutputs}`);
     reduced.dispose();
     const oom = new TemporalDenoiser(engine, {
+      accumulateGuides: true,
       denoiser: {type: 'oidn', model: 'standard', weightsBaseUrl: '/oidn/weights/'},
     });
     oom.attach(render);

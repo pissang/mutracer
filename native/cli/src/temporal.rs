@@ -185,9 +185,9 @@ mod tests {
 
     #[test]
     fn parses_guide_accumulation_in_temporal_settings() {
-        assert!(serde_json::from_str::<Config>("{}").unwrap().options.accumulate_guides);
-        let settings: Config = serde_json::from_str(r#"{"accumulateGuides":false}"#).unwrap();
-        assert!(!settings.options.accumulate_guides);
+        assert!(!serde_json::from_str::<Config>("{}").unwrap().options.accumulate_guides);
+        let settings: Config = serde_json::from_str(r#"{"accumulateGuides":true}"#).unwrap();
+        assert!(settings.options.accumulate_guides);
         assert!(serde_json::from_str::<Config>(r#"{"accumulateGuides":null}"#).is_err());
     }
 
