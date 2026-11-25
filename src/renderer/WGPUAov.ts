@@ -10,7 +10,7 @@ export const borrowedAovRevision = new WeakMap<GPUTexture, number>();
 /** One target's optional AOV allocations and accepted frame history. */
 export class WGPUAov {
   readonly history = new AovHistory();
-  width = 0; height = 0; samples = 0; centerReady = false; compact = false; primary = false;
+  width = 0; height = 0; samples = 0; centerReady = false; compact = false; primary = false; reflections = false;
   private revision = 0;
   private scenePrimitives?: Uint32Array;
   private scenePrimitiveOffset = 0;
@@ -34,28 +34,32 @@ export class WGPUAov {
       const encoder=this.device.createCommandEncoder();encoder.copyBufferToBuffer(this.center,0,this.previousCenter,0,this.previousCenter.size);this.device.queue.submit([encoder.finish()]);
     }
     this.samples = 0; this.centerReady = false; this.frame = undefined; }
-  resize(width: number, height: number, compact = false, primary = false) {
+  resize(width: number, height: number, compact = false, primary = false, reflections = false) {
+    const centerStride = AOV_LAYOUT.centerBytes + (primary ? AOV_LAYOUT.primaryBytes : 0) + (reflections ? 32 : 0);
+    const stride = compact ? 24 : AOV_LAYOUT.accumulatedBytes;
+    const bytes = width * height * Math.max(stride, compact ? 0 : centerStride);
+    if (bytes > Math.min(this.device.limits.maxStorageBufferBindingSize, this.device.limits.maxBufferSize)) {
+      throw new RangeError('AOV accumulation exceeds device buffer limits');
+    }
     if (width === this.width && height === this.height && compact === this.compact) {
-      if (primary === this.primary) return;
+      if (primary === this.primary && reflections === this.reflections) return;
       // A selection change keeps the same view and motion correspondence.
       this.reset();
       const oldCenter = this.center!;
-      this.center = this.device.createBuffer({label: 'AOV center', size: width * height * (AOV_LAYOUT.centerBytes + (primary ? AOV_LAYOUT.primaryBytes : 0)),
+      this.center = this.device.createBuffer({label: 'AOV center', size: width * height * centerStride,
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC});
       const encoder = this.device.createCommandEncoder();
       encoder.copyBufferToBuffer(oldCenter, 0, this.center, 0, width * height * AOV_LAYOUT.centerBytes);
       this.device.queue.submit([encoder.finish()]);
       void this.device.queue.onSubmittedWorkDone().catch(() => undefined).then(() => oldCenter.destroy());
-      this.primary = primary; this.displayPipeline = undefined;
+      this.primary = primary; this.reflections = reflections; this.displayPipeline = undefined;
       return;
     }
-    const stride = compact ? 24 : Math.max(AOV_LAYOUT.accumulatedBytes, AOV_LAYOUT.centerBytes + (primary ? AOV_LAYOUT.primaryBytes : 0));
-    if (width*height*stride>this.device.limits.maxStorageBufferBindingSize || width*height*stride>this.device.limits.maxBufferSize) throw new RangeError('AOV accumulation exceeds device buffer limits');
-    this.dispose(); this.history.clear(); this.reset(); this.width = width; this.height = height; this.compact = compact; this.primary = primary; this.displayPipeline = undefined;
+    this.dispose(); this.history.clear(); this.reset(); this.width = width; this.height = height; this.compact = compact; this.primary = primary; this.reflections = reflections; this.displayPipeline = undefined;
     const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
     this.accumulation = this.device.createBuffer({label: 'AOV accumulation', size: width * height * stride, usage});
     this.previousCenter = this.device.createBuffer({label: 'Previous AOV center', size: compact ? 32 : width*height*AOV_LAYOUT.centerBytes, usage});
-    this.center = this.device.createBuffer({label: 'AOV center', size: compact ? 32 : width * height * (AOV_LAYOUT.centerBytes + (primary ? AOV_LAYOUT.primaryBytes : 0)), usage});
+    this.center = this.device.createBuffer({label: 'AOV center', size: compact ? 32 : width * height * centerStride, usage});
   }
   setScene(words: Uint32Array, primitiveIds?: Uint32Array) {
     const primitiveOffset = words[17] * Uint32Array.BYTES_PER_ELEMENT;

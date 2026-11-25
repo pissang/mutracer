@@ -116,9 +116,16 @@ The extra history uses 40 bytes per pixel per slot. The formats are
 `rgba16float` reflected radiance, `rgba32uint` endpoint metadata and
 `rgba32float` optical motion. At 1280×720 and radius 16, the 33 slots add
 1,216,512,000 bytes. The reflection sum, capture tail and beauty output add
-64 bytes per pixel, with another 16 bytes budgeted for a native sampling
-checkpoint. The plan therefore reserves 1,290,240,000 extra bytes
-(1,230.47 MiB). The existing memory-budget tiers reduce the radius as needed.
+64 bytes per pixel. WebGPU therefore reserves 1,275,494,400 extra bytes
+(1,216.41 MiB). Native budgets another 16 bytes per pixel for a sampling
+checkpoint, for 1,290,240,000 extra bytes (1,230.47 MiB). The existing
+memory-budget tiers reduce the radius as needed.
+
+Capture adds a reflected ray per eligible pixel and may trace a neighbor to
+estimate curvature. The virtual landing walks the intervening frames and can
+try four inverse steps per future frame. In the worst case the additional
+window work grows with the square of the radius. Coverage and reflection
+confidence restrict this work to pixels with viable reflected histories.
 
 The opt-in native path is evaluated against A2 and an uncapped combined-color
 control. Compare planar and curvature-corrected landings with the same seeds and

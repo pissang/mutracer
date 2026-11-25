@@ -103,4 +103,14 @@ describe('temporal memory planner', () => {
     expect(next?.historyRadius).toEqual({min: 8, max: 8});
     expect(next?.postRadius).toBe(3);
   });
+
+  it('accounts for reflection motion history, capture and scratch only offline', () => {
+    const plain = normalizeTemporalOptions();
+    const enabled = normalizeTemporalOptions({reflectionMotion: true});
+    expect(estimateTemporalMemory(1280, 720, enabled) - estimateTemporalMemory(1280, 720, plain))
+      .toBe(1_275_494_400);
+    const interactive = normalizeTemporalOptions({mode: 'interactive', reflectionMotion: true});
+    expect(estimateTemporalMemory(1280, 720, interactive)).toBe(
+      estimateTemporalMemory(1280, 720, {...interactive, reflectionMotion: false}));
+  });
 });

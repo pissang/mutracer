@@ -18,6 +18,8 @@ export interface TemporalDenoiserOptions {
   denoiser?: TemporalSpatialDenoiser;
   /** Accumulate albedo and normal for offline OIDN when the history radius is positive. Default `false`. */
   accumulateGuides?: boolean;
+  /** Use virtual-image motion for reflected radiance in the offline WebGPU window. Default `false`. */
+  reflectionMotion?: boolean;
   /** History invalidation policy. Default `'auto'`. */
   historyInvalidation?: 'auto' | 'manual';
   /** GPU-byte budget for temporal history and scratch. Default `undefined` (full plan). */
@@ -31,6 +33,7 @@ export interface NormalizedTemporalOptions {
   readonly stabilizeSparkle: boolean;
   readonly denoiser: TemporalSpatialDenoiser;
   readonly accumulateGuides: boolean;
+  readonly reflectionMotion: boolean;
   readonly historyInvalidation: 'auto' | 'manual';
   readonly memoryBudget?: number;
 }
@@ -42,7 +45,7 @@ function integer(value: number, name: string, min: number, max: number) {
 
 export function normalizeTemporalOptions(value: TemporalDenoiserOptions = {}): NormalizedTemporalOptions {
   if (!value || typeof value !== 'object') throw new TypeError('Temporal denoiser options must be an object.');
-  const known = new Set(['mode', 'historyRadius', 'postRadius', 'stabilizeSparkle', 'denoiser', 'accumulateGuides', 'historyInvalidation', 'memoryBudget']);
+  const known = new Set(['mode', 'historyRadius', 'postRadius', 'stabilizeSparkle', 'denoiser', 'accumulateGuides', 'reflectionMotion', 'historyInvalidation', 'memoryBudget']);
   for (const key of Object.keys(value)) if (!known.has(key)) throw new Error(`Unknown temporal denoiser option ${key}.`);
   const mode = value.mode ?? 'offline';
   if (mode !== 'offline' && mode !== 'interactive') throw new Error("mode must be 'offline' or 'interactive'.");
@@ -67,9 +70,11 @@ export function normalizeTemporalOptions(value: TemporalDenoiserOptions = {}): N
   if (denoiser && 'schedule' in denoiser) throw new Error('Temporal spatial denoiser schedule is fixed.');
   const accumulateGuides = value.accumulateGuides === undefined ? false : value.accumulateGuides;
   if (typeof accumulateGuides !== 'boolean') throw new TypeError('accumulateGuides must be a boolean.');
+  const reflectionMotion = value.reflectionMotion === undefined ? false : value.reflectionMotion;
+  if (typeof reflectionMotion !== 'boolean') throw new TypeError('reflectionMotion must be a boolean.');
   const historyInvalidation = value.historyInvalidation ?? 'auto';
   if (historyInvalidation !== 'auto' && historyInvalidation !== 'manual') throw new Error("historyInvalidation must be 'auto' or 'manual'.");
   if (value.memoryBudget !== undefined && (!Number.isSafeInteger(value.memoryBudget) || value.memoryBudget < 0)) throw new RangeError('memoryBudget must be a non-negative safe integer.');
   return Object.freeze({mode, historyRadius: Object.freeze(historyRadius), postRadius, stabilizeSparkle,
-    denoiser: denoiser && Object.freeze({...denoiser}), accumulateGuides, historyInvalidation, memoryBudget: value.memoryBudget});
+    denoiser: denoiser && Object.freeze({...denoiser}), accumulateGuides, reflectionMotion, historyInvalidation, memoryBudget: value.memoryBudget});
 }

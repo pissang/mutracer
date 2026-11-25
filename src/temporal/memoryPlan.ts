@@ -35,6 +35,10 @@ export function usesTemporalGuideWindow(options: NormalizedTemporalOptions) {
     options.denoiser?.type === 'oidn' && options.historyRadius.max > 0;
 }
 
+export function usesTemporalReflectionWindow(options: NormalizedTemporalOptions) {
+  return options.reflectionMotion && options.mode === 'offline';
+}
+
 export function temporalGuideSlots(options: NormalizedTemporalOptions) {
   // The guide window addresses both textures with the same frame slot.
   if (usesTemporalGuideWindow(options)) return temporalHistorySlots(options);
@@ -60,7 +64,9 @@ export function estimateTemporalMemory(width: number, height: number, options: N
   const customAovs = options.denoiser?.type === 'custom' ? guideSlots * ((options.denoiser.aovs?.length ?? 0) + 2) * pixels * 16 : 0;
   const materialRevisionTable = Math.max(8, materialCount * 8);
   const changedMaterialIds = options.postRadius > 0 ? postSlots * Math.max(8, (materialCount + 1) * 4) : 0;
-  return history + window + post + composition + queuedFrames + pendingAndTransient + customAovs + materialRevisionTable + changedMaterialIds;
+  // Three history textures, one window sum, the extended center AOV and the beauty sum.
+  const reflection = usesTemporalReflectionWindow(options) ? pixels * (40 * historySlots + 64) : 0;
+  return history + window + reflection + post + composition + queuedFrames + pendingAndTransient + customAovs + materialRevisionTable + changedMaterialIds;
 }
 
 const scales = [2, 4, 8] as const;
@@ -82,7 +88,7 @@ function layerLimits(width: number, height: number, options: NormalizedTemporalO
   const revisionTable = Math.max(8, materialCount * 8);
   const changedMaterialIds = options.postRadius > 0 ? post * Math.max(8, (materialCount + 1) * 4) : 0;
   const buffers = [image, overflow, history * 80, image / 4, ceilDiv(pixels, 64) * 4, revisionTable, changedMaterialIds,
-    ...(post ? grids : [])];
+    ...(post ? grids : []), ...(usesTemporalReflectionWindow(options) ? [pixels * 96] : [])];
   return buffers.every(size => Number.isSafeInteger(size) &&
     size <= Math.min(limits.maxBufferSize, limits.maxStorageBufferBindingSize));
 }

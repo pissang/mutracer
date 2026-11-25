@@ -246,8 +246,9 @@ rendering cost and image-quality limitations.
 
 ## TemporalDenoiser
 
-Set `accumulateGuides: true` in the constructor to enable guide accumulation.
-See the [temporal options](./temporal-denoising.md#options) for applicability
+Pass `accumulateGuides: true` or `reflectionMotion: true` to opt into guide
+accumulation or virtual-image reflection motion. See the
+[temporal options](./temporal-denoising.md#options) for defaults, applicability
 and memory cost.
 
 ## RenderLoop and Sync

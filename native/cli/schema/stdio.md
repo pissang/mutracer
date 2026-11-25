@@ -44,7 +44,7 @@ descriptor input.
 
 `settings` accepts `size`, `spp`, `denoise`, `seed`, `seedValue`,
 `sampleSequence`, `sampleSequenceOffset`, `temporal`, `render`, `display`, `format`
-and `tracer`. The render and display objects use the
+and `tracer`. The temporal, render and display objects use the
 [shot output fields](shot.md#output-and-animation). A supplied object
 replaces its corresponding shot setting as a group. When omitted, the
 group comes from the shot or uses the v1 defaults for a descriptor.

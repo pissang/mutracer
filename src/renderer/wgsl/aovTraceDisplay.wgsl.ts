@@ -4,7 +4,7 @@ import {aovCompactStorage} from './aovCompact.wgsl.js';
 
 // Web-only storage specialization. The default shader (also used by native)
 // remains byte-identical; geometry/material evaluation comes from that source.
-export function createAovTraceDisplayWgsl(materialHooks: MaterialShaderHooks = {}) { return aovCompactStorage + '\noverride AOV_DISPLAY: bool = false;\n' + createAovTraceWgsl(materialHooks)
+export function createAovTraceDisplayWgsl(materialHooks: MaterialShaderHooks = {}, reflections = false, coatNormals = false) { return aovCompactStorage + '\noverride AOV_DISPLAY: bool = false;\n' + createAovTraceWgsl(materialHooks, reflections, coatNormals)
   .replace(`var<storage, read_write> aovAccum: array<AovAccumulation>;`, `var<storage, read_write> aovAccum: array<u32>;`)
   .replace(`fn aovMatrix(`, /* wgsl */ `fn aovLoad(index: u32) -> AovAccumulation {
   if(AOV_COMPACT){

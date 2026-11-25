@@ -312,6 +312,7 @@ mod tests {
                 "postRadius",
                 "stabilizeSparkle",
                 "accumulateGuides",
+                "reflectionMotion",
                 "historyInvalidation",
                 "memoryBudget",
             ] {

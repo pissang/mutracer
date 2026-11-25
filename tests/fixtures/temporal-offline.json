@@ -11,6 +11,7 @@
         "postRadius": 3,
         "stabilizeSparkle": true,
         "accumulateGuides": false,
+        "reflectionMotion": false,
         "denoiser": {
           "type": "oidn",
           "model": "cleanAuxLarge"
@@ -36,6 +37,7 @@
         "postRadius": 0,
         "stabilizeSparkle": false,
         "accumulateGuides": false,
+        "reflectionMotion": false,
         "denoiser": null,
         "historyInvalidation": "manual"
       }
@@ -47,6 +49,7 @@
           "max": 7
         },
         "accumulateGuides": true,
+        "reflectionMotion": true,
         "memoryBudget": 4000000
       },
       "expected": {
@@ -58,6 +61,7 @@
         "postRadius": 3,
         "stabilizeSparkle": true,
         "accumulateGuides": true,
+        "reflectionMotion": true,
         "denoiser": {
           "type": "oidn",
           "model": "cleanAuxLarge"
@@ -85,6 +89,9 @@
     },
     {
       "accumulateGuides": null
+    },
+    {
+      "reflectionMotion": null
     }
   ],
   "schedule": [

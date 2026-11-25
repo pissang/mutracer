@@ -55,6 +55,7 @@ independent noise. The example advances by its samples-per-frame count.
 | `postRadius` | `3` | Radius of post stabilization, from 0 to 3. Set to 0 with `stabilizeSparkle: false` to disable post stabilization. |
 | `stabilizeSparkle` | `true` | Suppresses one-frame bright impulses while preserving persistent highlights. |
 | `denoiser` | OIDN `cleanAuxLarge` | Spatial filter applied to the accumulated frame. Accepts OIDN options, a custom denoiser, or `null`. |
+| `reflectionMotion` | `false` | Uses virtual-image motion to accumulate reflections in the offline window. |
 | `accumulateGuides` | `false` | Averages OIDN albedo and normal guides across the offline window when the history radius is positive to reduce flicker. |
 | `historyInvalidation` | `'auto'` | Splits history on detected cuts and lighting or visibility changes. Material edits invalidate history on the affected surfaces. Use `'manual'` to control cuts in scenes with continuously changing light. |
 | `memoryBudget` | Full plan | GPU bytes for temporal history and scratch. A smaller budget can reduce the effective radii in `plan`. |
@@ -63,8 +64,9 @@ The default offline latency is 19 frames. Inspect `latency` and, after the
 first `push`, `plan` for the effective radii and GPU byte estimate.
 The default offline plan budgets about 2.74 GB at 720p and 6.16 GB at
 1080p. At 720p with a maximum history radius of 16, setting
-`accumulateGuides: true` adds about 265 MB. Renderer and OIDN allocations
-are additional.
+`accumulateGuides: true` adds about 265 MB. At the same size and radius,
+`reflectionMotion: true` adds about 1.28 GB, including its render inputs.
+Other renderer and OIDN allocations are additional.
 
 ## Limits and workflows
 
@@ -74,6 +76,8 @@ are additional.
 - `push()` requires a converged attached render with surface outputs at
   render resolution. Keep draining its finished frames. After device loss,
   create a new temporal denoiser.
+- Reflection motion requires 10 storage buffers per shader stage, or 11 with
+  bindless textures. Transmission through glass uses visible surface motion.
 - `frame.readPixels('denoised')` returns final RGBA float32 pixels in the
   spatial denoiser's color representation. `frame.readPixels('accumulated')`
   returns the windowed linear HDR before the spatial filter.
