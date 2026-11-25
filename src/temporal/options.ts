@@ -16,7 +16,7 @@ export interface TemporalDenoiserOptions {
   stabilizeSparkle?: boolean;
   /** Spatial denoiser applied once to the accumulated image. Default OIDN `cleanAuxLarge`. */
   denoiser?: TemporalSpatialDenoiser;
-  /** Accumulate albedo and normal for offline OIDN when the history radius is positive. Default `false`. */
+  /** Accumulate albedo and normal for offline OIDN when the history radius is positive. Default `true`. */
   accumulateGuides?: boolean;
   /** History invalidation policy. Default `'auto'`. */
   historyInvalidation?: 'auto' | 'manual';
@@ -65,7 +65,7 @@ export function normalizeTemporalOptions(value: TemporalDenoiserOptions = {}): N
   const denoiser = value.denoiser === undefined ? {type: 'oidn' as const, model: 'cleanAuxLarge' as const} : value.denoiser;
   if (denoiser && (denoiser as {type: string}).type === 'jnlm') throw new Error('JNLM cannot denoise a temporal window.');
   if (denoiser && 'schedule' in denoiser) throw new Error('Temporal spatial denoiser schedule is fixed.');
-  const accumulateGuides = value.accumulateGuides === undefined ? false : value.accumulateGuides;
+  const accumulateGuides = value.accumulateGuides === undefined ? true : value.accumulateGuides;
   if (typeof accumulateGuides !== 'boolean') throw new TypeError('accumulateGuides must be a boolean.');
   const historyInvalidation = value.historyInvalidation ?? 'auto';
   if (historyInvalidation !== 'auto' && historyInvalidation !== 'manual') throw new Error("historyInvalidation must be 'auto' or 'manual'.");
