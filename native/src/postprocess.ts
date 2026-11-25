@@ -195,14 +195,15 @@ import aovTraceWGSL from '../../src/renderer/wgsl/aovTrace.wgsl.js';
 import aovTraceDisplayWGSL from '../../src/renderer/wgsl/aovTraceDisplay.wgsl.js';
 
 import {captureWGSL} from '../../src/renderer/temporalCaptureShader.js';
-import {mixedWindowWGSL} from '../../src/renderer/temporalWindowShader.js';
+import {createMixedWindowWGSL, mixedWindowWGSL} from '../../src/renderer/temporalWindowShader.js';
 import {vetoShader} from '../../src/renderer/temporalSparkleShader.js';
-import {composePackWGSL, motionCoverageWGSL} from '../../src/renderer/temporalComposeShader.js';
+import {composePackWGSL, createComposePackWGSL, motionCoverageWGSL} from '../../src/renderer/temporalComposeShader.js';
 import {idSnapshot, snapshot, reproject, accumulate, blur} from '../../src/renderer/temporalKernels.js';
 import {combine, match, pyramid} from '../../src/renderer/temporalFlow.js';
 export function postprocessParameters(): Uint8Array {
   return new TextEncoder().encode(JSON.stringify({
     temporal: {capture:captureWGSL, window:mixedWindowWGSL, sparkle:vetoShader, pack:composePackWGSL, coverage:motionCoverageWGSL,
+      windowGuides: createMixedWindowWGSL(true), packGuides: createComposePackWGSL(true),
       idSnapshot: idSnapshot, snapshot: snapshot, reproject: reproject, accumulate: accumulate, blur: blur, combine: combine, match: match, pyramid: pyramid},
     bloom: nativeBloomShader(), auxiliary: nativeOidnAuxiliaryShader(),
     normalize: nativeOidnNormalizeShader, frame_resolve: frameResolve,

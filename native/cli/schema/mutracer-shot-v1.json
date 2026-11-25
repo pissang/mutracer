@@ -604,6 +604,10 @@
             "stabilizeSparkle": {
               "type": "boolean"
             },
+            "accumulateGuides": {
+              "type": "boolean",
+              "default": true
+            },
             "historyInvalidation": {
               "enum": [
                 "auto",

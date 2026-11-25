@@ -32,6 +32,8 @@ pub struct TemporalOptions {
     pub post_radius: u32,
     /// Suppress isolated impulses. Default true, requires post stabilization.
     pub stabilize_sparkle: bool,
+    /// Accumulate albedo and normal for offline OIDN when the history radius is positive. Default true.
+    pub accumulate_guides: bool,
     /// Default Auto. Manual uses explicit cuts and frame gaps only.
     pub history_invalidation: HistoryInvalidation,
     /// Maximum temporal GPU bytes. Default None selects the full plan.
@@ -43,6 +45,7 @@ impl Default for TemporalOptions {
             history_radius: Default::default(),
             post_radius: 3,
             stabilize_sparkle: true,
+            accumulate_guides: true,
             history_invalidation: HistoryInvalidation::Auto,
             memory_budget: None,
         }
@@ -70,6 +73,13 @@ impl TemporalPlan {
     }
     pub(super) fn slots(self) -> u32 {
         (2 * self.max).max(self.max + 2 * self.post_radius) + 1
+    }
+    pub(super) fn guide_slots(self, accumulate_guides: bool) -> u32 {
+        if accumulate_guides {
+            self.slots()
+        } else {
+            self.max + 1
+        }
     }
     pub(super) fn post_slots(self) -> u32 {
         if self.post_radius == 0 {
@@ -111,6 +121,9 @@ impl TemporalOptions {
             HistoryRadius::Adaptive { min, max } => (min, max),
         }
     }
+    pub(super) fn guide_window(self, spatial: SpatialCost, max: u32) -> bool {
+        self.accumulate_guides && matches!(spatial, SpatialCost::Oidn) && max > 0
+    }
     pub(super) fn plans(
         self,
         size: [u32; 2],
@@ -151,7 +164,8 @@ impl TemporalOptions {
             };
             let history = u64::from(plan.slots());
             let post = u64::from(plan.post_slots());
-            let guides = u64::from(max + 1);
+            let accumulate_guides = self.guide_window(spatial, max);
+            let guides = u64::from(plan.guide_slots(accumulate_guides));
             let px = w * h;
             let layer = |scale| w.div_ceil(scale) * h.div_ceil(scale) * 8;
             let pyramid = layer(2) + layer(4) + layer(8);
@@ -180,7 +194,7 @@ impl TemporalOptions {
                 + overflow
                 + guides * px * 16
                 + 32
-                + px * 32
+                + px * if accumulate_guides { 64 } else { 32 }
                 + 112
                 + post * (px * 16 + pyramid)
                 + if post > 0 { px * 76 + grid + 120 } else { 0 }

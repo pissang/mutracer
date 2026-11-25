@@ -10,7 +10,7 @@ use std::{
     path::PathBuf,
 };
 
-/// Optional GPU spatial filter for the windowed scene-linear color and original guides.
+/// Optional GPU spatial filter for the windowed scene-linear color and current-frame guides.
 /// All buffers are top row first, RGBA32F. Write the result before returning.
 pub trait OfflineSpatialFilter {
     fn denoise(
@@ -208,6 +208,7 @@ impl TemporalDenoiser {
                     plan,
                     materials,
                     self.options.stabilize_sparkle,
+                    self.options.guide_window(cost, plan.max),
                 )?;
                 let spatial = match &self.spatial {
                     TemporalSpatial::Oidn(weights) => Some((
@@ -379,14 +380,9 @@ impl TemporalDenoiser {
                     out
                 }
                 TemporalSpatial::Oidn(_) => {
-                    let [color, albedo, normal] =
-                        ["color", "albedo", "normal"].map(|name| p.alloc(name, p.bytes));
-                    let [w, h] = p.size;
-                    p.image_pass(
-                        "pack",
-                        &[w, h, f.samples, i % (plan.max + 1)],
-                        &[&acc, &p["guides"], &color, &albedo, &normal],
-                    );
+                    let packed = ["color", "albedo", "normal"].map(|name| p.alloc(name, p.bytes));
+                    p.pack(i, f.samples, &acc, &packed);
+                    let [color, albedo, normal] = packed;
                     let display = self.display.as_mut().unwrap();
                     display.capture(
                         color.buffer(),
