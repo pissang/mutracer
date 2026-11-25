@@ -579,6 +579,29 @@ mod tests {
         .validate(&module)
         .unwrap();
     }
+
+    #[test]
+    #[ignore = "requires native OIDN on a real GPU"]
+    fn offline_oidn_preserves_checked_tiles_for_explicit_budgets() {
+        let _test = crate::abi_test_lock();
+        let gpu = GpuDevice::with_backend(1).unwrap();
+        let size = [448, 32];
+        let budgeted = Denoiser::new_offline(&gpu, size, None, Some(128 << 20)).unwrap();
+        assert_eq!(budgeted.prepared.info().tile_count, 2);
+        assert!(budgeted.prepared.info().runtime_checks);
+
+        let default = Denoiser::new_offline(&gpu, size, None, None).unwrap();
+        let matrix = wgpu::Features::EXPERIMENTAL_COOPERATIVE_MATRIX;
+        let tiles = if gpu.adapter.features().contains(matrix) {
+            assert!(gpu.device.features().contains(matrix));
+            1
+        } else {
+            2
+        };
+        assert_eq!(default.prepared.info().tile_count, tiles);
+        assert!(default.prepared.info().runtime_checks);
+    }
+
     #[test]
     #[ignore = "requires native OIDN on a real GPU"]
     fn accumulated_inputs_match_the_documented_rust_api_and_retained_outputs() {
