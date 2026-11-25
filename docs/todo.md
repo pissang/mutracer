@@ -1,8 +1,8 @@
 # TODO
 
-Follow-ups deferred during the Engine / Display / Render API redesign. Each
-item says why it was deferred. None of them changes the current public API;
-the ones marked additive would only add to it.
+Follow-ups deferred during earlier work, and options evaluated and rejected.
+None of them changes the current public API; the ones marked additive would
+only add to it.
 
 ## Rendering and denoising
 
@@ -38,6 +38,14 @@ the ones marked additive would only add to it.
 - **Render target memory.** A WebGPU render target uses about 110 bytes per
   pixel. Check which buffers can be shared between renders or use narrower
   formats.
+- **Stall after a material graph install.** In loaded scenes the first frame
+  after any graph install waits 0.7–1.5 s (Sponza) to 5–6 s (Bistro), although
+  the install itself takes about 5 ms. The same wait delays some later edits by
+  about 2 s without a compile. The cause is not located.
+- **Edits that add a pipeline feature recompile.** A graph edit that adds an
+  opacity, normal, coat, emission, frame, UV1, transmission or metalness
+  terminal changes pipeline constants and compiles once. Its cost is not
+  measured.
 
 ## Additive capabilities
 
@@ -59,3 +67,13 @@ the ones marked additive would only add to it.
 - **Open material or light type extension.** Every new type needs shader support
   in both backends. Keep a closed set and maintain it through the internal
   field tables.
+- **Loading the WebGPU core in `init()`.** It shrinks the static first chunk
+  from 644 KB to 202 KB and starts the import 37–46% earlier, but the first
+  frame does not change. The remaining code is needed by the synchronous
+  `update()` (material packing, BVH preparation, change detection).
+- **Further shader text compression.** After whitespace removal, renaming WGSL
+  identifiers saves about 8 KB gzip and mangling `_` properties about 4.7 KB.
+  Brotli is a deployment setting. Static asset size, such as OIDN weights, is
+  not a target.
+- **Automatic material graph baking.** Graphs are evaluated at runtime.
+  Reconsider baking only if runtime evaluation cannot meet performance.
