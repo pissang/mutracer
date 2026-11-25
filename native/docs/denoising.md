@@ -189,6 +189,10 @@ reflections and shadows can leave trails, and newly visible surfaces have
 less history. The [shot options](../cli/schema/shot.md#output-and-animation)
 describe the radii, byte budget and spatial weights used for video.
 
+At 720p and below, offline OIDN may process the whole image on a supported GPU.
+This is faster and can use more temporary GPU memory. Set `memoryBudget` to
+keep OIDN tiled.
+
 A failed convergence leaves previously pushed frames available to flush. On
 an observed Metal queue, a failed input capture also leaves the window usable.
 If processing the window or its tail fails, recreate the denoiser and feed it
