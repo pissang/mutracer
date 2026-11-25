@@ -13,11 +13,11 @@ import {createSparklePost} from './renderer/WGPUTemporalSparkle.js';
 import {createOIDNFilter, type OIDNFilter} from './oidn.js';
 import {hasTemporalFrameGap, historyNeighbors, isTemporalCameraCut, readyThrough, temporalLatency} from './temporal/schedule.js';
 import {normalizeTemporalOptions, type NormalizedTemporalOptions} from './temporal/options.js';
-import {nextTemporalMemoryPlan, planTemporalMemory, temporalHistorySlots, TEMPORAL_MAX_FINISHED, type TemporalMemoryPlan} from './temporal/memoryPlan.js';
+import {nextTemporalMemoryPlan, planTemporalMemory, temporalGuideSlots, temporalHistorySlots, usesTemporalGuideWindow, TEMPORAL_MAX_FINISHED, type TemporalMemoryPlan} from './temporal/memoryPlan.js';
 export type {TemporalDenoiserOptions, TemporalHistoryRadius, TemporalMode, TemporalSpatialDenoiser} from './temporal/options.js';
 
 const CAPTURE_AOVS = ['centerPosition', 'centerDepth', 'centerNormal', 'roughness', 'motion', 'id'] as const;
-import {composePackWGSL,motionCoverageWGSL} from './renderer/temporalComposeShader.js';
+import {createComposePackWGSL,motionCoverageWGSL} from './renderer/temporalComposeShader.js';
 
 export type TemporalPixelKind = 'denoised' | 'accumulated';
 export interface TemporalPlan extends TemporalMemoryPlan {}
@@ -380,12 +380,12 @@ export class TemporalDenoiser {
 
   private async allocateResources(width: number, height: number, materialCount=0) {
     const device = this.engine.device!;
-    const {mode, historyRadius, denoiser} = this.activeOptions;
-    const guideSlots = mode === 'offline' ? historyRadius.max + 1 : 1;
+    const {historyRadius, denoiser} = this.activeOptions;
+    const accumulateGuides = usesTemporalGuideWindow(this.activeOptions);
     this.history = await TemporalHistoryGPU.create(device, width, height, temporalHistorySlots(this.activeOptions),
-      guideSlots, denoiser?.type === 'custom');
+      temporalGuideSlots(this.activeOptions), denoiser?.type === 'custom');
     // The selected mixed window stays enabled when the post sparkle pass is disabled.
-    this.window = await DirectWindowGPU.create(this.history, historyRadius.min !== historyRadius.max);
+    this.window = await DirectWindowGPU.create(this.history, historyRadius.min !== historyRadius.max, accumulateGuides);
     if (this.activeOptions.postRadius > 0) {
       const postSlots = this.activeOptions.mode === 'offline' ? this.activeOptions.postRadius * 2 + 1 : this.activeOptions.postRadius + 1;
       this.post = await TemporalPostGPU.create(this.history, postSlots, materialCount);
@@ -395,7 +395,7 @@ export class TemporalDenoiser {
       const {type: _type, ...oidnOptions} = this.activeOptions.denoiser;
       this.oidn = await createOIDNFilter(this.engine, oidnOptions as OIDNFilterOptions);
     }
-    const module = device.createShaderModule({label: 'Temporal composition pack', code: composePackWGSL});
+    const module = device.createShaderModule({label: 'Temporal composition pack', code: createComposePackWGSL(accumulateGuides)});
     this.composePipeline = await device.createComputePipelineAsync({layout: 'auto', compute: {module, entryPoint: 'main'}});
     const motionModule = device.createShaderModule({label: 'Temporal motion coverage', code: motionCoverageWGSL});
     this.motionCoveragePipeline = await device.createComputePipelineAsync({layout: 'auto', compute: {module: motionModule, entryPoint: 'main'}});
@@ -467,6 +467,8 @@ export class TemporalDenoiser {
     device.queue.writeBuffer(this.composeParams!, 0, new Uint32Array([history.width, history.height, samples, history.guideSlot(frame)]));
     const values = [this.composeParams!, accumulated, history.guides,
       buffers.color, buffers.albedo, buffers.normal];
+    const guides = this.window!.guides;
+    if (guides) values.push(guides.albedo, guides.normal);
     const group = device.createBindGroup({layout: this.composePipeline!.getBindGroupLayout(0), entries: values.map((value, binding) => ({binding,
       resource: value instanceof GPUBuffer ? {buffer: value} : value.createView({dimension: '2d-array'})}))});
     const encoder = device.createCommandEncoder({label: 'Temporal composition pack'}), pass = encoder.beginComputePass();

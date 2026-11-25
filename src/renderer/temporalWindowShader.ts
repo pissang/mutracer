@@ -285,15 +285,19 @@ fn recoverTap(x: vec2i, pos: vec4f, q: vec3f, original: HistoryTap) -> HistoryTa
 }
 `;
 
-const startWindowWGSL = /* wgsl */ `
+const startWindowWGSL = (guides = false) => /* wgsl */ `
 @compute @workgroup_size(8,8) fn main(@builtin(global_invocation_id) g:vec3u) {
   if(any(g.xy>=p.size)){return;}
   let x=vec2i(g.xy); let index=g.y*p.size.x+g.x;
   if(p.stage==0u){
-    total[index]=vec4f(radiance(x,p.current),1.0);
+    total[index]=vec4f(radiance(x,p.current),1.0);${guides ? `
+    albedoSum[index]=vec4f(loadAlbedo(x,p.current),0.);
+    normalSum[index]=vec4f(loadNormal(x,p.current),0.);` : ''}
     return;
   }
-  if(p.stage==2u){ output[index]=vec4f(total[index].rgb/total[index].a,loadRadiance(x,p.current,p.size.x).a); return; }
+  if(p.stage==2u){ output[index]=vec4f(total[index].rgb/total[index].a,loadRadiance(x,p.current,p.size.x).a);${guides ? `
+    albedoSum[index]/=total[index].a;
+    normalSum[index]/=total[index].a;` : ''} return; }
   if(overflowMissing(x,p.current)){return;}
   let pos=surface(x,p.current,0u);
   if(pos.w<=0.0001){return;}
@@ -310,7 +314,7 @@ const startWindowWGSL = /* wgsl */ `
 
 // Keep the original tap and weighting expressions for the strict and round-1 controls.
 export const directWindowWGSL = /* wgsl */ `${windowBindingsAndGeometry}
-${startWindowWGSL}  if(reason!=0u || overflowMissing(nearest,p.source)){atomicAdd(&rejects[reason],1u);return;}
+${startWindowWGSL()}  if(reason!=0u || overflowMissing(nearest,p.source)){atomicAdd(&rejects[reason],1u);return;}
   atomicAdd(&rejects[0],1u);
   var weight=(radius+1.0-abs(f32(p.delta)))/(radius+1.0);
   if(partial){weight*=footprintWeight(x,q.xy,nearest,q.z);}
@@ -318,9 +322,25 @@ ${startWindowWGSL}  if(reason!=0u || overflowMissing(nearest,p.source)){atomicAd
 }
 `;
 
-export const mixedWindowWGSL = /* wgsl */ `${windowBindingsAndGeometry}
-${recoverHistoryWGSL}
-${startWindowWGSL}  var tap=HistoryTap(nearest,0.);
+const windowGuidesWGSL = /* wgsl */ `
+@group(0) @binding(10) var guides: texture_2d_array<f32>;
+@group(0) @binding(11) var<storage, read_write> albedoSum: array<vec4f>;
+@group(0) @binding(12) var<storage, read_write> normalSum: array<vec4f>;
+fn loadAlbedo(at: vec2i, slot: u32) -> vec3f {
+  // Captured albedo already includes the neutral white contribution of glass hits.
+  return textureLoad(guides,at,i32(slot*2u),0).rgb;
+}
+fn loadNormal(at: vec2i, slot: u32) -> vec3f {
+  let n=textureLoad(guides,at,i32(slot*2u+1u),0);
+  // Decode before averaging, including zero vectors for misses. Retain the
+  // length of the mean, which carries subpixel normal variation.
+  return select(vec3f(0),(n.rgb-0.5)*2.0,n.a>0.0);
+}
+`;
+
+export const createMixedWindowWGSL = (guides: boolean) => /* wgsl */ `${windowBindingsAndGeometry}
+${guides ? windowGuidesWGSL : ''}${recoverHistoryWGSL}
+${startWindowWGSL(guides)}  var tap=HistoryTap(nearest,0.);
   if(reason==0u){
     tap.support=1.;
     if(partial){tap.support=footprintWeight(x,q.xy,nearest,q.z);}
@@ -332,6 +352,12 @@ ${startWindowWGSL}  var tap=HistoryTap(nearest,0.);
   atomicAdd(&rejects[0],1u);
   let weight=(radius+1.-abs(f32(p.delta)))/(radius+1.)*tap.support;
   let rgb=skyCorrection(x,tap.at,pos,radiance(tap.at,p.source));
-  total[index]+=vec4f(rgb*weight,weight);
+  total[index]+=vec4f(rgb*weight,weight);${guides ? `
+  if ((p.mode & 8u)!=0u) {
+    albedoSum[index]+=vec4f(loadAlbedo(tap.at,p.source)*weight,0.);
+    normalSum[index]+=vec4f(loadNormal(tap.at,p.source)*weight,0.);
+  }` : ''}
 }
 `;
+
+export const mixedWindowWGSL = createMixedWindowWGSL(false);

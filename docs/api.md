@@ -244,6 +244,12 @@ rendering cost and image-quality limitations.
 | `photonMapping.photonsPerSample` | pixel count / 4, at most 262144 | Emitted photons per batch; 28 bytes each plus up to 13 MiB of overhead. Positive finite values are rounded to at least 1 and reduced to fit device limits and a 128 MiB batch budget; other values use the default |
 | `photonMapping.initialRadius` | 3% of the caster bounding sphere radius | Positive first-batch gather radius in scene units, independent of `photonsPerSample`; shrinks as batches accumulate. Smaller radii preserve detail but require more photons |
 
+## TemporalDenoiser
+
+Set `accumulateGuides: true` in the constructor to enable guide accumulation.
+See the [temporal options](./temporal-denoising.md#options) for applicability
+and memory cost.
+
 ## RenderLoop and Sync
 
 `start()` uses requestAnimationFrame when available and a 16 ms setTimeout

@@ -10,6 +10,7 @@
         },
         "postRadius": 3,
         "stabilizeSparkle": true,
+        "accumulateGuides": false,
         "denoiser": {
           "type": "oidn",
           "model": "cleanAuxLarge"
@@ -23,6 +24,7 @@
         "postRadius": 0,
         "stabilizeSparkle": false,
         "denoiser": null,
+        "accumulateGuides": false,
         "historyInvalidation": "manual"
       },
       "expected": {
@@ -33,6 +35,7 @@
         },
         "postRadius": 0,
         "stabilizeSparkle": false,
+        "accumulateGuides": false,
         "denoiser": null,
         "historyInvalidation": "manual"
       }
@@ -43,6 +46,7 @@
           "min": 1,
           "max": 7
         },
+        "accumulateGuides": true,
         "memoryBudget": 4000000
       },
       "expected": {
@@ -53,6 +57,7 @@
         },
         "postRadius": 3,
         "stabilizeSparkle": true,
+        "accumulateGuides": true,
         "denoiser": {
           "type": "oidn",
           "model": "cleanAuxLarge"
@@ -77,6 +82,9 @@
     },
     {
       "memoryBudget": -1
+    },
+    {
+      "accumulateGuides": null
     }
   ],
   "schedule": [
@@ -171,7 +179,9 @@
       "width": 31,
       "height": 17,
       "materials": 3,
-      "input": {},
+      "input": {
+        "accumulateGuides": true
+      },
       "overrides": {
         "maxTextureArrayLayers": 10
       },
@@ -181,7 +191,7 @@
           "max": 2
         },
         "postRadius": 1,
-        "bytes": 1169616
+        "bytes": 1203344
       }
     },
     {

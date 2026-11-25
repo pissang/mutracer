@@ -28,6 +28,7 @@ pub(super) struct Passes {
     pub plan: TemporalPlan,
     pub bytes: u64,
     pub material_capacity: u32,
+    accumulate_guides: bool,
     pipelines: HashMap<String, wgpu::ComputePipeline>,
     resources: HashMap<&'static str, Resource>,
 }
@@ -41,6 +42,7 @@ impl Passes {
         plan: TemporalPlan,
         materials: usize,
         sparkle: bool,
+        accumulate_guides: bool,
     ) -> Result<Self> {
         let shaders = &crate::postprocess::sources()?.temporal;
         let pixels = u64::from(size[0]) * u64::from(size[1]);
@@ -50,6 +52,7 @@ impl Passes {
             plan,
             bytes: pixels * 16,
             material_capacity: materials.max(1) as u32,
+            accumulate_guides,
             pipelines: Default::default(),
             resources: Default::default(),
         };
@@ -61,7 +64,11 @@ impl Passes {
             ("motion", slots, Rgba32Float),
             ("id", slots, Rgba32Uint),
             ("raw", slots, Rgba16Float),
-            ("guides", 2 * (plan.max + 1), Rgba16Float),
+            (
+                "guides",
+                2 * plan.guide_slots(accumulate_guides),
+                Rgba16Float,
+            ),
         ] {
             pass.texture(name, layers, size, format);
         }
@@ -79,12 +86,24 @@ impl Passes {
         let mut names = vec![
             "resolve",
             "capture",
-            "window",
-            "pack",
+            if accumulate_guides {
+                "windowGuides"
+            } else {
+                "window"
+            },
+            if accumulate_guides {
+                "packGuides"
+            } else {
+                "pack"
+            },
             "idSnapshot",
             "snapshot",
             "coverage",
         ];
+        if accumulate_guides {
+            pass.buffer("albedoSum", pass.bytes);
+            pass.buffer("normalSum", pass.bytes);
+        }
         if post > 0 {
             for (name, length) in [
                 ("map", pass.bytes),
@@ -275,8 +294,18 @@ impl Passes {
     ) {
         let [w, h] = self.size;
         let s = i % self.plan.slots();
-        let g = i % (self.plan.max + 1);
-        let [depth, normal, rough, albedo, color, motion, id, guide_normal, _] = guides;
+        let g = self.guide_slot(i);
+        let [
+            depth,
+            normal,
+            rough,
+            albedo,
+            color,
+            motion,
+            id,
+            guide_normal,
+            _,
+        ] = guides;
         self.clear("overflow", u64::from(s) * 131072, 131072);
         self.image_pass(
             "capture",
@@ -318,12 +347,37 @@ impl Passes {
             );
         }
     }
+    fn guide_slot(&self, index: u32) -> u32 {
+        index % self.plan.guide_slots(self.accumulate_guides)
+    }
     pub fn window(&self, i: u32, j: u32, stage: u32, revisions: bool) {
         let [w, h] = self.size;
         let p = self.plan;
-        let mode = u32::from(p.min != p.max) | 2 | u32::from(revisions) << 2;
+        // Camera-cut validation skips material revisions and guide accumulation.
+        let mode = u32::from(p.min != p.max)
+            | 2
+            | u32::from(revisions) << 2
+            | u32::from(self.accumulate_guides && revisions) << 3;
+        let mut bindings = Vec::with_capacity(12);
+        bindings.extend([
+            &self["surface"],
+            &self["id"],
+            &self["raw"],
+            &self["meta"],
+            &self["sum"],
+            &self["window"],
+            &self["overflow"],
+            &self["rejects"],
+            &self["motion"],
+        ]);
+        let kernel = if self.accumulate_guides {
+            bindings.extend([&self["guides"], &self["albedoSum"], &self["normalSum"]]);
+            "windowGuides"
+        } else {
+            "window"
+        };
         self.image_pass(
-            "window",
+            kernel,
             &[
                 w,
                 h,
@@ -336,18 +390,34 @@ impl Passes {
                 p.min,
                 p.max,
             ],
-            &[
-                &self["surface"],
-                &self["id"],
-                &self["raw"],
-                &self["meta"],
-                &self["sum"],
-                &self["window"],
-                &self["overflow"],
-                &self["rejects"],
-                &self["motion"],
-            ],
+            &bindings,
         );
+    }
+    pub fn pack(&self, index: u32, samples: u32, accumulated: &Resource, output: &[Resource; 3]) {
+        let [w, h] = self.size;
+        let [color, albedo, normal] = output;
+        let params = [w, h, samples, self.guide_slot(index)];
+        if self.accumulate_guides {
+            self.image_pass(
+                "packGuides",
+                &params,
+                &[
+                    accumulated,
+                    &self["guides"],
+                    color,
+                    albedo,
+                    normal,
+                    &self["albedoSum"],
+                    &self["normalSum"],
+                ],
+            );
+        } else {
+            self.image_pass(
+                "pack",
+                &params,
+                &[accumulated, &self["guides"], color, albedo, normal],
+            );
+        }
     }
     pub fn camera_cut(&self, i: u32, positions: &Resource) -> Result<bool> {
         let [w, h] = self.size;

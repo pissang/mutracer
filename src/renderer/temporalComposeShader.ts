@@ -1,20 +1,26 @@
-export const composePackWGSL = /* wgsl */ `
+export const createComposePackWGSL = (windowedGuides: boolean) => /* wgsl */ `
 struct Frame { size: vec2u, samples: u32, guideSlot: u32 }
 @group(0) @binding(0) var<uniform> frame: Frame;
 @group(0) @binding(1) var<storage,read> accumulated: array<vec4f>;
 @group(0) @binding(2) var guides: texture_2d_array<f32>;
 @group(0) @binding(3) var<storage,read_write> color: array<vec4f>;
 @group(0) @binding(4) var<storage,read_write> albedo: array<vec4f>;
-@group(0) @binding(5) var<storage,read_write> normal: array<vec4f>;
+@group(0) @binding(5) var<storage,read_write> normal: array<vec4f>;${windowedGuides ? `
+@group(0) @binding(6) var<storage,read> windowAlbedo: array<vec4f>;
+@group(0) @binding(7) var<storage,read> windowNormal: array<vec4f>;` : ''}
 @compute @workgroup_size(8,8) fn main(@builtin(global_invocation_id) g: vec3u) {
   if (any(g.xy>=frame.size)) {return;}
   let at=vec2i(g.xy); let rgba=accumulated[g.y*frame.size.x+g.x];
-  let alb=textureLoad(guides,at,i32(frame.guideSlot*2u),0); let nrm=textureLoad(guides,at,i32(frame.guideSlot*2u+1u),0);
+  let alb=textureLoad(guides,at,i32(frame.guideSlot*2u),0);${windowedGuides ? '' : ' let nrm=textureLoad(guides,at,i32(frame.guideSlot*2u+1u),0);'}
   let n=f32(frame.samples); let hit=floor(alb.a*n+0.5); let dst=(frame.size.y-1-g.y)*frame.size.x+g.x;
   color[dst]=vec4f(rgba.rgb*select(n,hit,hit>0.0),rgba.a*n);
-  albedo[dst]=vec4f(alb.rgb*n,hit);
-  normal[dst]=vec4f(select(vec3f(0),(nrm.rgb-0.5)*2.0*n,nrm.a>0.0),n);
+  ${windowedGuides ? `// Current-frame coverage still controls beauty and presentation.
+  let src=g.y*frame.size.x+g.x;
+  albedo[dst]=vec4f(windowAlbedo[src].rgb*n,hit);
+  normal[dst]=vec4f(windowNormal[src].rgb*n,n);` : `albedo[dst]=vec4f(alb.rgb*n,hit);
+  normal[dst]=vec4f(select(vec3f(0),(nrm.rgb-0.5)*2.0*n,nrm.a>0.0),n);`}
 }`;
+export const composePackWGSL = createComposePackWGSL(false);
 export const motionCoverageWGSL = /* wgsl */ `
 @group(0) @binding(0) var<storage,read> position: array<vec4u>;
 struct Counts { values: array<atomic<u32>> }

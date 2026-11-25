@@ -60,6 +60,8 @@ pub(crate) fn sources() -> Result<&'static Sources> {
 fn shared_postprocess_sources_validate_and_match_js() {
     let sources = sources().unwrap();
     for source in [
+        &sources.temporal["windowGuides"],
+        &sources.temporal["packGuides"],
         &sources.bloom,
         &sources.auxiliary,
         &sources.normalize,
