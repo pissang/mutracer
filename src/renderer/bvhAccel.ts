@@ -6,7 +6,7 @@ import { readMeshInstance, meshInstancesLength, type MeshInstances } from './pac
 import Geometry from '../scene/Geometry.js';
 import { mat4, vec3 } from '../math.js';
 import { set as setVec3 } from '../math/sceneVec3.js';
-import { buildBinnedSahBvh, layoutBvh2 } from './binnedSahBvh.js';
+import { buildBinnedSahBvh, layoutBvh2, type BinnedSahBvh } from './binnedSahBvh.js';
 
 import { read, write } from '../math/access.js';
 import { attributeLength, attributeValue, indexStorage } from '../scene/attributeData.js';
@@ -16,6 +16,10 @@ export { Box3 } from './Box3.js';
 
 export const INSTANCE_VEC4_STRIDE = 10;
 export const INSTANCE_WORD_STRIDE = INSTANCE_VEC4_STRIDE * 4;
+/** Fourth lane of the instance color vec4. Zero keeps replay, one proves
+ * separation and two identifies a single triangle in the first source slot. */
+export const INSTANCE_TIE_ISOLATED_WORD = INSTANCE_WORD_STRIDE - 1;
+export const INSTANCE_TIE_ISOLATED_VEC4 = INSTANCE_TIE_ISOLATED_WORD >> 2;
 
 export type BvhLayout = 'bvh2' | 'bvh4' | 'bvh-gpu' | 'cwbvh';
 
@@ -321,6 +325,65 @@ function instanceBounds(instance: TLASInstance, out: Float32Array, o: number) {
   out[o + 3] = read(max, 0) + padX; out[o + 4] = read(max, 1) + padY; out[o + 5] = read(max, 2) + padZ;
 }
 
+// A single ordinary triangle cannot tie with itself. For all other instances,
+// including triangulations with shared edges, retain the full tie interval.
+// The first source slot with one triangle already wins any tie at an ordinary
+// hit. Encode that separately so a catcher material can still be rechecked.
+// The padding covers the largest rounding interval of a ray that can reach a
+// surface within RAY_MAX_DISTANCE, plus roundoff in its float32 world bounds.
+function isolatedInstances(
+  instances: MeshInstances,
+  triangleCounts: readonly number[],
+  boxes?: Float32Array,
+  hierarchy?: BinnedSahBvh
+): Uint8Array {
+  const count = meshInstancesLength(instances);
+  const isolated = new Uint8Array(count);
+  if (!triangleCounts.includes(1)) return isolated;
+  boxes ??= meshInstanceBounds(instances);
+  let scale = 0;
+  for (let i = 0; i < boxes.length; i++) scale = Math.max(scale, Math.abs(boxes[i]));
+  // Invalid bounds provide no separation certificate, even for other instances.
+  if (!Number.isFinite(scale)) return isolated;
+  const gap = (scale + 10000) * 0.00000762939453125;
+  const bvh = hierarchy ?? buildBinnedSahBvh(boxes, count);
+  const stack: number[] = [];
+  for (let source = 0; source < count; source++) {
+    const instance = readMeshInstance(instances, source);
+    if (triangleCounts[instance.blasIndex] !== 1 || instance.displacementScale) continue;
+    const offset = source * 6;
+    let overlap = false;
+    stack.push(0);
+    while (stack.length) {
+      const node = stack.pop()!;
+      if (!nearInstanceBounds(boxes, offset, bvh.bounds, node * 6, gap)) continue;
+      const first = bvh.leftFirst[node];
+      const n = bvh.primCount[node];
+      if (!n) {
+        stack.push(first, first + 1);
+        continue;
+      }
+      for (let i = first; i < first + n; i++) {
+        const other = bvh.primIndices[i];
+        if (other === source || !nearInstanceBounds(boxes, offset, boxes, other * 6, gap)) continue;
+        overlap = true;
+        break;
+      }
+      if (overlap) break;
+    }
+    stack.length = 0;
+    isolated[source] = overlap ? (source === 0 ? 2 : 0) : 1;
+  }
+  return isolated;
+}
+
+function nearInstanceBounds(a: Float32Array, i: number, b: Float32Array, j: number, gap: number): boolean {
+  for (let axis = 0; axis < 3; axis++) {
+    if (a[i + axis] - b[j + axis + 3] > gap || b[j + axis] - a[i + axis + 3] > gap) return false;
+  }
+  return true;
+}
+
 function writeInstanceColor(output: Float32Array, offset: number, instance: TLASInstance) {
   const color = instance.color;
   output[offset] = color ? color[0] : 1;
@@ -334,6 +397,7 @@ function writeInstanceRecord(
   targetIndex: number,
   instance: TLASInstance,
   placement: BlasPlacement,
+  tieIsolated: number,
   inverseScratch = new Float64Array(16)
 ) {
   const offset = targetIndex * INSTANCE_WORD_STRIDE;
@@ -345,7 +409,7 @@ function writeInstanceRecord(
   instanceInts[offset + 2] = instance.materialsIndices[0] || 0;
   instanceFloats[offset + 3] = instance.displacementScale || 0;
   writeInstanceColor(instanceFloats, offset + 36, instance);
-  instanceFloats[offset + 39] = 0;
+  instanceFloats[offset + INSTANCE_TIE_ISOLATED_WORD] = tieIsolated;
   const inverse = mat4.invert(inverseScratch, instance.transform)!;
   for (let i = 0; i < 16; i++) {
     instanceFloats[offset + 4 + i] = inverse[i];
@@ -355,25 +419,30 @@ function writeInstanceRecord(
 
 // Hardware adapters use the same instance/material/matrix packing without a
 // software hierarchy. Offsets are primitive offsets in their indexed geometry.
-export function packLinearInstances(instances: MeshInstances, primitiveOffsets: number[], vertexOffsets: number[]): ArrayBuffer {
+export function packLinearInstances(instances: MeshInstances, primitiveOffsets: number[], vertexOffsets: number[], triangleCounts: readonly number[] = []): ArrayBuffer {
   const buffer = new ArrayBuffer(meshInstancesLength(instances) * INSTANCE_WORD_STRIDE * 4);
   const words = new Int32Array(buffer), floats = new Float32Array(buffer);
   const placement: BlasPlacement = {blasOffsets: primitiveOffsets, vertexOffsets,
     layouts: primitiveOffsets.map(() => 'bvh2')};
+  const isolated = isolatedInstances(instances, triangleCounts);
   for (let i = 0; i < meshInstancesLength(instances); i++) {
-    writeInstanceRecord(words, floats, i, readMeshInstance(instances, i), placement);
+    writeInstanceRecord(words, floats, i, readMeshInstance(instances, i), placement, isolated[i]);
   }
   return buffer;
 }
 
-/** Repack only selected source-order instance slots for hardware adapters. */
-export function refitLinearInstances(buffer: ArrayBuffer, instances: MeshInstances, primitiveOffsets: number[], vertexOffsets: number[], dirty: ReadonlySet<number>): TLASRefitRange[] {
+/** Repack dirty records and any changed tie certificates in source order. */
+export function refitLinearInstances(buffer: ArrayBuffer, instances: MeshInstances, primitiveOffsets: number[], vertexOffsets: number[], dirty: ReadonlySet<number>, triangleCounts: readonly number[] = []): TLASRefitRange[] {
   const words = new Int32Array(buffer), floats = new Float32Array(buffer);
   const placement: BlasPlacement = {blasOffsets: primitiveOffsets, vertexOffsets, layouts: primitiveOffsets.map(() => 'bvh2')};
   const ranges: TLASRefitRange[] = [];
   for (const index of dirty) {
-    writeInstanceRecord(words, floats, index, readMeshInstance(instances, index), placement);
+    writeInstanceRecord(words, floats, index, readMeshInstance(instances, index), placement, 0);
     ranges.push({offset: index * INSTANCE_WORD_STRIDE * 4, size: INSTANCE_WORD_STRIDE * 4});
+  }
+  const isolated = isolatedInstances(instances, triangleCounts);
+  for (let index = 0; index < isolated.length; index++) {
+    updateTieIsolation(floats, index, isolated[index], ranges);
   }
   return mergeRefitRanges(ranges);
 }
@@ -397,6 +466,7 @@ export function buildTLAS(
   }
 
   const bvh = buildBinnedSahBvh(aabbs, meshInstancesLength(instances), bins);
+  const isolated = isolatedInstances(instances, blases.map(b => b.trainglesCount), aabbs, bvh);
   const { order, offsets, vec4Count, maxDepth, maxLeafPrimitives } = layoutBvh2(bvh);
   const { bounds, leftFirst, primCount, primIndices } = bvh;
   // Web TLAS leaves point at separate world boxes. Keep the shared/native
@@ -434,7 +504,7 @@ export function buildTLAS(
         floats.set(aabbs.subarray(source * 6, source * 6 + 3), box * 4);
         floats.set(aabbs.subarray(source * 6 + 3, source * 6 + 6), box * 4 + 4);
       }
-      writeInstanceRecord(instanceInts, instanceFloats, target, instance, placement);
+      writeInstanceRecord(instanceInts, instanceFloats, target, instance, placement, isolated[source]);
       target++;
     }
   }
@@ -468,6 +538,7 @@ export function packBuiltTLAS(instances: MeshInstances, blases: BLASInstance[], 
   const placement = getBlasPlacement(blases), words = new Int32Array(hierarchy.buffer);
   const instancesBuffer = new ArrayBuffer(count * INSTANCE_WORD_STRIDE * 4);
   const instanceInts = new Int32Array(instancesBuffer), instanceFloats = new Float32Array(instancesBuffer);
+  const isolated = isolatedInstances(instances, blases.map(b => b.trainglesCount));
   const stack: number[] = [0]; let target = 0;
   while (stack.length) {
     const node = stack.pop()!, o = node * 4, child = words[o + 3];
@@ -477,7 +548,7 @@ export function packBuiltTLAS(instances: MeshInstances, blases: BLASInstance[], 
       if (source < 0 || source >= count || target >= count) throw new Error('Invalid platform TLAS instance');
       const instance = readMeshInstance(instances, source);
       words[e] = target; words[e + 1] = placement.blasOffsets[instance.blasIndex]; words[e + 2] = source; words[e + 3] = 0;
-      writeInstanceRecord(instanceInts, instanceFloats, target++, instance, placement);
+      writeInstanceRecord(instanceInts, instanceFloats, target++, instance, placement, isolated[source]);
     }
   }
   if (target !== count) throw new Error('Platform TLAS instance count mismatch');
@@ -488,6 +559,15 @@ export function packBuiltTLAS(instances: MeshInstances, blases: BLASInstance[], 
 export interface TLASRefitRange {
   offset: number;
   size: number;
+}
+
+function updateTieIsolation(floats: Float32Array, target: number, value: number, ranges: TLASRefitRange[]) {
+  const base = target * INSTANCE_WORD_STRIDE;
+  const word = base + INSTANCE_TIE_ISOLATED_WORD;
+  if (floats[word] === value) return;
+  floats[word] = value;
+  // Native validates retained instance writes at record granularity.
+  ranges.push({offset: base * 4, size: INSTANCE_WORD_STRIDE * 4});
 }
 
 export interface TLASRefitResult {
@@ -593,13 +673,14 @@ export function refitTLAS(
   const instanceInts = new Int32Array(flattened.instancesBuffer);
 
   const placement = getBlasPlacement(blases);
+  const isolated = isolatedInstances(instances, blases.map(b => b.trainglesCount));
   const scratch = new Float32Array(6), inverseScratch = new Float64Array(16);
   // Adapters opt in to bounded bulk uploads for dense edits. Sparse updates
   // keep their dirty record and ancestor ranges.
   const dense = batchUploads && !!dirtySourceIndices && dirtySourceIndices.size > Math.max(64, meshInstancesLength(instances) / 8);
 
   function writeInstance(targetIndex: number, sourceIndex: number) {
-    writeInstanceRecord(instanceInts, instanceFloats, targetIndex, readMeshInstance(instances, sourceIndex), placement, inverseScratch);
+    writeInstanceRecord(instanceInts, instanceFloats, targetIndex, readMeshInstance(instances, sourceIndex), placement, isolated[sourceIndex], inverseScratch);
   }
 
   function addInstanceBounds(bounds: Box3, instance: TLASInstance) {
@@ -667,7 +748,7 @@ export function refitTLAS(
       maxX = Math.max(maxX, scratch[3]); maxY = Math.max(maxY, scratch[4]); maxZ = Math.max(maxZ, scratch[5]);
       if (!dirtySourceIndices || dirtySourceIndices.has(source)) {
         writeLeafBox(record, instance);
-        writeInstanceRecord(instanceInts, instanceFloats, ints[record], instance, placement, inverseScratch);
+        writeInstanceRecord(instanceInts, instanceFloats, ints[record], instance, placement, isolated[source], inverseScratch);
       }
     }
     floats[base] = minX; floats[base + 1] = minY; floats[base + 2] = minZ;
@@ -696,6 +777,11 @@ export function refitTLAS(
         instanceRanges.push({ offset: entry.target * INSTANCE_WORD_STRIDE * 4, size: INSTANCE_WORD_STRIDE * 4 });
       }
     }
+  }
+
+  // Moving one instance can revoke or restore a stationary neighbor's certificate.
+  for (const entries of metadata.instancesByLeaf.values()) {
+    for (const {source, target} of entries) updateTieIsolation(instanceFloats, target, isolated[source], instanceRanges);
   }
 
   const dirtyNodes = new Set<number>();

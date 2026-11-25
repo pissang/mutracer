@@ -832,10 +832,16 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
 
 interface HardwareGeometry {opaque: boolean; indexOffset: number; indexCount: number; vertexOffset: number; vertexCount: number; procedural: boolean; dynamic: boolean; boundsOffset: number}
 interface HardwareScene {geometries: HardwareGeometry[]; records: Uint32Array; bounds: Float32Array}
+function hardwareTieTriangleCounts(hardware: HardwareScene): number[] {
+  // Procedural primitives can have more than one surface and have their own
+  // acceleration bounds. Keep the full query interval for those scenes.
+  if (hardware.geometries.some(g => g.procedural)) return [];
+  return hardware.geometries.map(g => g.indexCount / 3);
+}
 function linearTlas(instances: MeshInstances, hardware: HardwareScene): FlattendBVH {
   return {buffer: new ArrayBuffer(0), maxDepth: 0,
     instancesBuffer: packLinearInstances(instances, hardware.geometries.map(g => g.indexOffset / 3),
-      hardware.geometries.map(g => g.vertexOffset))};
+      hardware.geometries.map(g => g.vertexOffset), hardwareTieTriangleCounts(hardware))};
 }
 function hardwareScene(prepared: PreparedScene, build: SceneSources): HardwareScene {
   const opaque = hardwareOpaqueGeometryFlags(prepared.materials, prepared.residentBindings, prepared.geometries.length);
@@ -871,10 +877,7 @@ export function nativeHardwareScene(bytes: Uint8Array, token: number): Uint8Arra
     preparationMark('mesh.end');
     const hardware = hardwareScene(prepared, build);
     preparationMark('hardware.end');
-    const primitiveOffsets = hardware.geometries.map(g => g.indexOffset / 3);
-    const vertexOffsets = prepared.geometries.map(g => prepared.geometryRegions.get(g)!.vertexOffset);
-    const tlas: FlattendBVH = {buffer: new ArrayBuffer(0), maxDepth: 0,
-      instancesBuffer: packLinearInstances(prepared.instances, primitiveOffsets, vertexOffsets)};
+    const tlas = linearTlas(prepared.instances, hardware);
     return composeScene(input, prepared, tlas, token, hardware);
   } catch (error) {retainedScenes.delete(token); return sceneErrorPacket(ERROR_CODE.HARDWARE_SCENE, error);}
 }
@@ -1002,7 +1005,7 @@ function incrementalInstanceWrites(stage: TransformStage, dirty: ReadonlySet<num
   // allocations are retained. Uploads below contain dirty records and ancestors.
   const tlas = copyTLASForRefit(state.tlas);
   const ranges = state.hardware ? {tlasRanges: [], instanceRanges: refitLinearInstances(tlas.instancesBuffer!, stage.instances,
-    state.hardware.geometries.map(g => g.indexOffset / 3), state.prepared.geometries.map(g => state.prepared.geometryRegions.get(g)!.vertexOffset), dirty)} :
+    state.hardware.geometries.map(g => g.indexOffset / 3), state.prepared.geometries.map(g => state.prepared.geometryRegions.get(g)!.vertexOffset), dirty, hardwareTieTriangleCounts(state.hardware))} :
     refitTLAS(tlas, stage.instances, prepared.blases, dirty, true);
   preparationMark('update.instances.refit.end');
   for (const [id, buffer, spans] of [[RESOURCE.BVH, tlas.buffer, ranges.tlasRanges], [RESOURCE.INSTANCES, tlas.instancesBuffer ?? new ArrayBuffer(0), ranges.instanceRanges]] as const) {

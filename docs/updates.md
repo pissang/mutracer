@@ -59,6 +59,10 @@ when only one object changed.
 | Material graph values or structure | Parameter repack, or a background compile; see [material graph edits](#material-graph-edits) |
 | Displacement, array replacement, or incompatible geometry/material structure | [Full mesh update](#full-mesh-updates) |
 
+Scenes containing single-triangle instances can also require a scene-wide
+bounds check after geometry, membership or transform edits. Material edits
+that leave the geometry in place reuse the previous bounds check.
+
 ## Transforms
 
 Edit `mesh.transform` in place while retaining the mesh objects and the

@@ -6,7 +6,7 @@ import MaterialState from '../../src/scene/MaterialState.js';
 import {prepareSceneMeshes, updateMeshInstanceTransforms, dirtyPreparedInstanceIndices} from '../../src/renderer/scenePreparation.js';
 import {computeGeometryBounds} from '../../src/renderer/geometryBvhBounds.js';
 import {PackedMeshInstances} from '../../src/renderer/packedMeshInstances.js';
-import {buildBLAS, buildTLAS, buildWebTLAS, copyTLASForRefit, refitTLAS, packLinearInstances, refitLinearInstances, refitBLAS} from '../../src/renderer/bvhAccel.js';
+import {buildBLAS, buildTLAS, buildWebTLAS, copyTLASForRefit, refitTLAS, packLinearInstances, refitLinearInstances, refitBLAS, tlasInstanceSlots, INSTANCE_WORD_STRIDE, INSTANCE_TIE_ISOLATED_WORD} from '../../src/renderer/bvhAccel.js';
 import {setGeometryBvh} from '../../src/renderer/geometryBvh.js';
 import {updatePreparedGeometries} from '../../src/renderer/geometryUpdates.js';
 import {quantizeDisplacementRange} from '../../src/renderer/displacementRange.js';
@@ -68,6 +68,49 @@ it.each([buildTLAS, buildWebTLAS])('refits a transactional TLAS using dirty slot
   expect(candidate.buffer).toEqual(full.buffer);expect(candidate.instancesBuffer).toEqual(full.instancesBuffer);
   expect(new Uint8Array(accepted.buffer)).toEqual(before);expect(writes.instanceRanges.reduce((n,r)=>n+r.size,0)).toBe(160);
 });
+it("updates a stationary instance's tie certificate when its neighbor moves", () => {
+  const {prepared, other} = scene();
+  const previous = prepared.instances;
+  const packed = buildWebTLAS(previous, prepared.blases);
+  const linear = packLinearInstances(previous, [0], [0], [1]);
+  const slots = tlasInstanceSlots(packed);
+  const first = slots.get(0)!;
+  const read = (buffer: ArrayBuffer, slot: number) =>
+    new Float32Array(buffer)[slot * INSTANCE_WORD_STRIDE + INSTANCE_TIE_ISOLATED_WORD];
+  expect(read(packed.instancesBuffer!, first)).toBe(2);
+  expect(read(linear, 0)).toBe(2);
+  expect(read(linear, 1)).toBe(0);
+  expect(read(linear, 3)).toBe(1);
+
+  other.transform[12] = 0.5;
+  const dirty = new Set([3]);
+  const next = updateMeshInstanceTransforms(prepared.instanceBindings, previous, dirty);
+  refitTLAS(packed, next, prepared.blases, dirty);
+  refitLinearInstances(linear, next, [0], [0], dirty, [1]);
+  expect(read(packed.instancesBuffer!, slots.get(3)!)).toBe(0);
+  expect(read(linear, 3)).toBe(0);
+
+  // Moving all but the first triangle away restores isolation even though
+  // the first triangle's record is untouched by the transform edit.
+  const {mesh: batch} = prepared.instanceBindings[0];
+  const batchTransforms = batch.instanceData!.transforms;
+  batchTransforms[16 + 12] = 4;
+  batchTransforms[32 + 12] = 6;
+  other.transform[12] = 10;
+  const departing = new Set([1, 2, 3]);
+  const separated = updateMeshInstanceTransforms(prepared.instanceBindings, next, departing);
+  const writes = refitTLAS(packed, separated, prepared.blases, departing);
+  const changes = refitLinearInstances(linear, separated, [0], [0], departing, [1]);
+  expect(read(packed.instancesBuffer!, first)).toBe(1);
+  expect(read(linear, 0)).toBe(1);
+  const bytes = INSTANCE_WORD_STRIDE * 4;
+  for (const [ranges, slot] of [[writes.instanceRanges, first], [changes, 0]] as const) {
+    const byte = slot * bytes;
+    expect(ranges.every(({offset, size}) => offset % bytes === 0 && size % bytes === 0)).toBe(true);
+    expect(ranges.some(({offset, size}) => byte >= offset && byte + bytes <= offset + size)).toBe(true);
+  }
+});
+
 it('copies changed hardware attributes and bounds without requiring software BLAS data',()=>{
   const {geometry,prepared}=scene(false), merged=prepared.geometry;
   geometry.position.array[0]=-.5;geometry.markVerticesUpdated();

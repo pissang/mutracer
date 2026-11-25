@@ -3,7 +3,7 @@ import { mapAlphaUsageConstants } from '../../materialConstants.js';
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
 
-import { INSTANCE_VEC4_STRIDE } from '../../bvhAccel.js';
+import { INSTANCE_VEC4_STRIDE, INSTANCE_TIE_ISOLATED_VEC4 } from '../../bvhAccel.js';
 import { createShaderMixin, glsl, Shader } from '../../shader.js';
 
 function getBVHTraverseCode(
@@ -66,6 +66,7 @@ function getBVHTraverseCode(
                 bestInstance = node.z;
                 bestTriangle = triangleIndex;
               }
+              hitInsIdx = insIdx;
             ` : ''}
             ${handleHitCode}
           }
@@ -86,6 +87,7 @@ function getBVHTraverseCode(
   float queryLimit = tMax;
   float tieLimit = queryLimit;
   bool tied = false;
+  int hitInsIdx = -1;
   bool bestCatcher = false;
   int bestInstance = -1;
   int bestTriangle = -1;
@@ -350,6 +352,15 @@ function getBVHTraverseCode(
   }
 ${closest ? glsl`
   if (!tied || traversalPass == 1) break;
+  float tieIsolation = fetchIns(hitInsIdx * ${INSTANCE_VEC4_STRIDE} + ${INSTANCE_TIE_ISOLATED_VEC4}).w;
+  if (tieIsolation == 1.0) break;
+  if (tieIsolation == 2.0) {
+    uint savedHash = hashedCounter;
+    int fallback = int(unpackMaterialIndex(floatBitsToInt(fetchIns(hitInsIdx * ${INSTANCE_VEC4_STRIDE}).z)).x);
+    int material = surfaceMaterialIndex(fallback, hitIndex, hitBarycentric);
+    hashedCounter = savedHash;
+    if (int(getMatType(material)) != SHADOW_CATCHER) break;
+  }
   tieLimit = tMax;
   }
 ` : ''}
@@ -988,7 +999,6 @@ void intersectScene(in Ray ray, inout SurfaceInteraction si, bool doubleSided) {
 
   int maxDim = maxDimension(abs(ray.d));
   vec3 shear = getShear(ray.d, maxDim);
-  int hitInsIdx;
   int sourceTriangle = si.triangleIndex;
   int sourceInstance = si.instanceIndex;
 
@@ -999,7 +1009,6 @@ ${getBVHTraverseCode(glsl`
   hitBarycentric = hit.barycentric;
   hitIndex = index;
   isHit = true;
-  hitInsIdx = insIdx;
 `, 'if (triangleIndex == sourceTriangle && insIdx == sourceInstance) continue;')}
 
   if (isHit) {
@@ -1057,7 +1066,6 @@ void intersectSceneBevel(in Ray ray, inout SurfaceInteraction si, int instanceIn
   bool doubleSided = true;
   int maxDim = maxDimension(abs(ray.d));
   vec3 shear = getShear(ray.d, maxDim);
-  int hitInsIdx;
 
 ${getBVHTraverseCode(
   glsl`
@@ -1067,7 +1075,6 @@ ${getBVHTraverseCode(
   hitBarycentric = hit.barycentric;
   hitIndex = index;
   isHit = true;
-  hitInsIdx = insIdx;
 `,
   glsl`
           if (insIdx != instanceIndex) {

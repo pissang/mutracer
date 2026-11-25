@@ -41,6 +41,24 @@ export function fixture(gap: number, scale: number, subdivisions: number, grazin
   return {scene, camera};
 }
 
+export function firstSourceOverlapFixture(catcherFirst = false) {
+  const {scene, camera} = fixture(0, 1, 1, false);
+  scene.clear();
+  const positions = [0, 0, -2, -2, 0, 2, 2, 0, 2];
+  const triangle = (material: THREE.Material) => {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setIndex([0, 1, 2]);
+    geometry.computeVertexNormals();
+    return new THREE.Mesh(geometry, material);
+  };
+  const receiver = new THREE.MeshBasicMaterial({color: 0x00ff00});
+  const other = catcherFirst ? new THREE.MeshStandardMaterial() : new THREE.MeshBasicMaterial({color: 0xff0000});
+  if (catcherFirst) other.userData.mutracerShadowCatcher = true;
+  scene.add(...(catcherFirst ? [triangle(other), triangle(receiver)] : [triangle(receiver), triangle(other)]));
+  return {scene, camera};
+}
+
 export const cases = [
   {name: 'glass-contact', gap: 0, scale: 1, subdivisions: 0, grazing: false},
   {name: 'glass-0.1mm', gap: .0001, scale: 1, subdivisions: 0, grazing: false},
@@ -51,7 +69,9 @@ export const cases = [
     name: `catcher-${gap ? '0.01mm' : subdivisions === 1 ? 'contact' : 'tessellated'}-${grazing ? 'grazing' : 'normal'}`,
     gap, scale: 1, subdivisions, grazing
   }))),
-  {name: 'catcher-reversed', gap: 0, scale: 1, subdivisions: 5, grazing: true, reverse: true}
+  {name: 'catcher-reversed', gap: 0, scale: 1, subdivisions: 5, grazing: true, reverse: true},
+  {name: 'first-source-overlap', gap: 0, scale: 1, subdivisions: 1, grazing: false},
+  {name: 'first-source-overlap-catcher', gap: 0, scale: 1, subdivisions: 1, grazing: false}
 ];
 
 export async function captureCoincidentFaces(backend: 'webgpu' | 'webgl', verify = true) {
@@ -62,7 +82,9 @@ export async function captureCoincidentFaces(backend: 'webgpu' | 'webgl', verify
     const info = await engine.init();
     if (engine.backend !== backend) throw Error(`Expected ${backend}, got ${engine.backend}`);
     for (const entry of cases) {
-      const sync = new THREESync(engine, fixture(entry.gap, entry.scale, entry.subdivisions, entry.grazing, entry.reverse));
+      const sync = new THREESync(engine, entry.name.startsWith('first-source-overlap') ?
+        firstSourceOverlapFixture(entry.name.endsWith('-catcher')) :
+        fixture(entry.gap, entry.scale, entry.subdivisions, entry.grazing, entry.reverse));
       try {
         sync.update(); engine.update();
         await render.converge({samples, sampleSequenceOffset: 17, timeoutMs: 60000});

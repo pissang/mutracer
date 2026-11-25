@@ -4,7 +4,7 @@
 
 import type {MaterialShaderHooks} from '../materialShaderHooks.js';
 import { uvProjectionConstants } from '../../materialConstants.js';
-import { INSTANCE_VEC4_STRIDE } from '../../bvhAccel.js';
+import { INSTANCE_VEC4_STRIDE, INSTANCE_TIE_ISOLATED_VEC4 } from '../../bvhAccel.js';
 import pdm_displacementWgsl from './pdm_displacement.wgsl.js';
 import { createIntersectionAlphaWgsl } from './intersectionAlpha.wgsl.js';
 
@@ -240,6 +240,7 @@ function getBVHTraverseCode(
       bestInstance = sourceInstance;
       bestTriangle = triangleIndex;
     }
+    hitInsIdx = insIdx;
 `;
   const intersectTriangles = /* wgsl */ `
       let insData = instancesBuffer[insIdx * ${INSTANCE_VEC4_STRIDE}];
@@ -291,6 +292,7 @@ var hitT = 0.0;
 ${closest ? /* wgsl */ `
 let queryLimit = tMax;
 var nearest = queryLimit;
+var hitInsIdx = -1;
 var tieLimit = queryLimit;
 var tied = false;
 let initialHash = hashedCounter;
@@ -680,6 +682,8 @@ ${perInstanceBounds ? /* wgsl */ `      // Reject a leaf candidate before transf
 ${closest ? /* wgsl */ `
   if (traversalPass == 1) { hashedCounter = finalHash; break; }
   if (!tied) { break; }
+  let tieIsolation = instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + ${INSTANCE_TIE_ISOLATED_VEC4}].w;
+  if (tieIsolation == 1.0 || (tieIsolation == 2.0 && !HAS_SHADOW_CATCHER)) { break; }
   tieLimit = tMax;
   finalHash = hashedCounter;
   hashedCounter = initialHash;
@@ -698,13 +702,13 @@ fn intersectSceneQuery(ray: Ray, si: ptr<function, SurfaceInteraction>, bounces:
   let shadowRayTMax = min(max(maximum, 0.0), RAY_MAX_DISTANCE);
   var tMax = select(RAY_MAX_DISTANCE, shadowRayTMax, mode == 1);
   var maxDim: i32; var shear: vec3f;
-  var hitIndex: vec3i; var hitTri: Triangle; var hitInsIdx: i32;
+  var hitIndex: vec3i; var hitTri: Triangle;
   ${getBVHTraverseCode(/* wgsl */ `
     if (mode == 1) {
       if (!HAS_ALPHA || intersectionAlphaPasses(i32(unpackMaterialIndex(bitcast<i32>(insData.z)).x), index, hitBarycentric, hitPosition, hitNormal, triangleIndex, insIdx)) { return true; }
       tMax = shadowRayTMax;
     } else {
-      (*si).triangleIndex = triangleIndex; hitTri = tri; hitIndex = index; hitInsIdx = insIdx;
+      (*si).triangleIndex = triangleIndex; hitTri = tri; hitIndex = index;
     }
   `, hasDisplacement, 'mode == 1', 1, hasAnisotropyDirections, '', perInstanceBounds, compactVertices)}
   if (isHit && mode == 0) {
@@ -735,9 +739,10 @@ fn querySceneSoftware(ray: Ray) -> SceneQueryHit {
   var maxDim: i32;
   var shear: vec3f;
   ${getBVHTraverseCode(`
-    result.hit = true; result.instance = insIdx; result.record = triangleIndex;
+    result.hit = true; result.record = triangleIndex;
     result.t = hitT; result.barycentric = hitBarycentric;
   `, false, false, 1, hasAnisotropyDirections, '', false, compactVertices)}
+  result.instance = hitInsIdx;
   return result;
 }
 `;
@@ -767,7 +772,6 @@ fn ${closestName}(ray: Ray, si: ptr<function, SurfaceInteraction>, bounces: i32,
 
   var hitIndex: vec3i;
   var hitTri: Triangle;
-  var hitInsIdx: i32;
   var currentTriangleIndex: i32 = (*si).triangleIndex;
   let currentInstanceIndex = (*si).instanceIndex;
 
@@ -776,7 +780,6 @@ fn ${closestName}(ray: Ray, si: ptr<function, SurfaceInteraction>, bounces: i32,
 (*si).triangleIndex = triangleIndex;
 hitTri = tri;
 hitIndex = index;
-hitInsIdx = insIdx;
   `,
     hasDisplacement,
     false,
@@ -815,7 +818,6 @@ fn ${bevelName}(ray: Ray, si: ptr<function, SurfaceInteraction>, instanceIndex: 
   var shear: vec3f;
   var hitIndex: vec3i;
   var hitTri: Triangle;
-  var hitInsIdx: i32;
   var currentTriangleIndex: i32 = -1;
   let currentInstanceIndex = instanceIndex;
 
@@ -824,7 +826,6 @@ fn ${bevelName}(ray: Ray, si: ptr<function, SurfaceInteraction>, instanceIndex: 
 (*si).triangleIndex = triangleIndex;
 hitTri = tri;
 hitIndex = index;
-hitInsIdx = insIdx;
     `,
     hasDisplacement,
     false,
