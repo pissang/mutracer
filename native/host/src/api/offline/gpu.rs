@@ -30,8 +30,6 @@ pub(super) struct Passes {
     pub material_capacity: u32,
     accumulate_guides: bool,
     reflection_motion: bool,
-    curved_reflections: bool,
-    uncapped: bool,
     diagnostic: Option<std::path::PathBuf>,
     pipelines: HashMap<String, wgpu::ComputePipeline>,
     resources: HashMap<&'static str, Resource>,
@@ -51,8 +49,6 @@ impl Passes {
     ) -> Result<Self> {
         let shaders = &crate::postprocess::sources()?.temporal;
         let pixels = u64::from(size[0]) * u64::from(size[1]);
-        let experiment =
-            std::env::var("MUTRACER_TEMPORAL_REFLECTION_EXPERIMENT").unwrap_or_default();
         let diagnostic =
             std::env::var_os("MUTRACER_TEMPORAL_WINDOW_DUMP").map(std::path::PathBuf::from);
         let mut pass = Self {
@@ -63,8 +59,6 @@ impl Passes {
             material_capacity: materials.max(1) as u32,
             accumulate_guides,
             reflection_motion,
-            curved_reflections: experiment == "curved",
-            uncapped: experiment == "unlimited",
             diagnostic,
             pipelines: Default::default(),
             resources: Default::default(),
@@ -113,7 +107,7 @@ impl Passes {
             "snapshot",
             "coverage",
         ];
-        if pass.uncapped || reflection_motion {
+        if reflection_motion {
             names.push(if accumulate_guides {
                 "windowGuidesUncapped"
             } else {
@@ -123,10 +117,9 @@ impl Passes {
         if reflection_motion {
             pass.texture("reflected", slots, size, Rgba16Float);
             pass.texture("endpoints", slots, size, Rgba32Uint);
-            pass.texture("virtualMotions", slots, size, Rgba32Float);
             pass.buffer(
                 "reflectedTotal",
-                pass.bytes * if pass.diagnostic.is_some() { 2 } else { 1 },
+                pass.bytes * if pass.diagnostic.is_some() { 3 } else { 1 },
             );
             names.push("captureReflections");
             names.push(if accumulate_guides {
@@ -389,7 +382,6 @@ impl Passes {
                 hdr,
                 &self["reflected"],
                 &self["endpoints"],
-                &self["virtualMotions"],
             ],
         );
     }
@@ -439,7 +431,6 @@ impl Passes {
             | 2
             | u32::from(revisions) << 2
             | u32::from(self.accumulate_guides && revisions) << 3
-            | u32::from(self.curved_reflections) << 4
             | u32::from(self.diagnostic.is_some()) << 5;
         let mut bindings = Vec::with_capacity(12);
         bindings.extend([
@@ -461,14 +452,13 @@ impl Passes {
             bindings.extend([
                 &self["reflected"],
                 &self["endpoints"],
-                &self["virtualMotions"],
                 &self["reflectedTotal"],
             ]);
         }
         let kernel = match (
             self.accumulate_guides,
             reflections,
-            self.uncapped || (self.reflection_motion && !revisions),
+            self.reflection_motion && !revisions,
         ) {
             (true, true, _) => "windowGuidesReflections",
             (false, true, _) => "windowReflections",

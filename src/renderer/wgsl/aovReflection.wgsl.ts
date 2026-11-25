@@ -2,6 +2,7 @@
 // stable identities come from the same AOV metadata as surface motion.
 export function aovReflectionWgsl(hasCoatNormals: boolean) {
   return /* wgsl */ `
+override AOV_REFLECTION_CURVATURE: bool = false;
 // Tangent-plane image construction from MuTracer's DLSS integration (ec0f0c3c).
 fn reflectionImage(point: vec3f, normal: vec3f, endpoint: vec3f) -> vec3f {
   return endpoint - 2.0 * dot(endpoint - point, normal) * normal;
@@ -72,6 +73,9 @@ ${hasCoatNormals ? `  if (material.coatNormalEnabled) { n = normalize(mix(n, coa
   let center = (vec2f(pixel)+0.5-0.5*vec2f(size)) * vec2f(1.0,-1.0);
   let projected = reflectionProjection(previous, size);
   let planar = projected-center;
+  if (!all(abs(planar) < vec2f(size))) { return record; }
+  record.motion = vec4f(planar, vec2f(1e20));
+  if (!AOV_REFLECTION_CURVATURE) { return record; }
   var curved = planar;
   // Estimate the directional normal derivative near the surface-motion landing.
   // A positive derivative is convex and shortens the apparent feature depth.
@@ -95,8 +99,8 @@ ${hasCoatNormals ? `  if (material.coatNormalEnabled) { n = normalize(mix(n, coa
       }
     }
   }
-  if (all(abs(vec4f(planar,curved)) < vec4f(vec2f(size),vec2f(size)))) {
-    record.motion = vec4f(planar,curved);
+  if (all(abs(curved) < vec2f(size))) {
+    record.motion = vec4f(curved,vec2f(1e20));
   }
   return record;
 }

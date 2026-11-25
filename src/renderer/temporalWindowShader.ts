@@ -295,7 +295,7 @@ const startWindowWGSL = (guides = false, reflections = false) => /* wgsl */ `
     let reflected = reflection(x,p.current);
     total[index] = vec4f(total[index].rgb-reflected,1.0);
     reflectedTotal[index] = vec4f(reflected,1.0);
-    if ((p.mode&32u)!=0u) { reflectedTotal[index+p.size.x*p.size.y]=vec4f(0); }` : ''}${guides ? `
+    if ((p.mode&32u)!=0u) { reflectedTotal[index+p.size.x*p.size.y]=vec4f(0); reflectedTotal[index+2u*p.size.x*p.size.y]=vec4f(0); }` : ''}${guides ? `
     albedoSum[index]=vec4f(loadAlbedo(x,p.current),0.);
     normalSum[index]=vec4f(loadNormal(x,p.current),0.);` : ''}
     return;
@@ -307,13 +307,13 @@ const startWindowWGSL = (guides = false, reflections = false) => /* wgsl */ `
   if(overflowMissing(x,p.current)){return;}
   let pos=surface(x,p.current,0u);
   if(pos.w<=0.0001){return;}
-  let path=traceMotion(vec2f(x),ident(x,p.current));
-  let q=path.xyz;
-  if(path.w<=.5){return;}
-  let nearest=clamp(vec2i(floor(q.xy+0.5)),vec2i(0),vec2i(p.size)-1);
   var radius=f32(p.radiusMax);
   if((p.mode & 1u)!=0u){radius=clamp(f32(p.radiusMin)+f32(p.radiusMax-p.radiusMin)*max(coc(pos.w,p.current)-2.0,0.0),f32(p.radiusMin),f32(p.radiusMax));}
   if(abs(f32(p.delta))>radius){return;}
+  let path=traceMotion(vec2f(x),ident(x,p.current));
+  let q=path.xyz;
+  if(path.w<=.5){${reflections ? ' countReflectionTap(index,1u);' : ''}return;}
+  let nearest=clamp(vec2i(floor(q.xy+0.5)),vec2i(0),vec2i(p.size)-1);
   let partial=(p.mode & 2u)!=0u;
   let reason=rejection(x,q,nearest,partial);
 `;

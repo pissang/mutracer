@@ -54,7 +54,7 @@ export class DirectWindowGPU {
     const resources = [this.params, h.surface, h.id, h.raw, h.meta, this.total, this.output, h.overflow, this.rejects, h.motion];
     if (this.guides) resources.push(h.guides, this.guides.albedo, this.guides.normal);
     if (h.reflections && includeMaterialRevisions) {
-      resources.push(h.reflections.radiance, h.reflections.endpoint, h.reflections.motion, this.reflectionSum!);
+      resources.push(h.reflections.radiance, h.reflections.endpoint, this.reflectionSum!);
     }
     const pipeline = includeMaterialRevisions ? this.pipeline : this.cameraCutPipeline ?? this.pipeline;
     const group = d.createBindGroup({layout: pipeline.getBindGroupLayout(0), entries: resources.map((resource, binding) => ({

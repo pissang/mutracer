@@ -563,7 +563,7 @@ fn reflection_window_accumulates_a_translating_highlight_in_both_directions() {
     for (frame, at, intensity) in [(0, 8, 3.), (1, 6, 1.)] {
         let color: Vec<_> = (0..pixels)
             .map(|i| {
-                let highlight = if i / 16 == 2 { 10 } else { at };
+                let highlight = if [2, 3].contains(&(i / 16)) { 10 } else { at };
                 let v = if i % 16 == highlight { intensity } else { 0. };
                 [v, v, v, 1.]
             })
@@ -576,9 +576,12 @@ fn reflection_window_accumulates_a_translating_highlight_in_both_directions() {
                 6.,
                 f32::from_bits(0x3c000000),
             ];
-            // Center capture is bottom-first. Keep one output row's motion invalid.
+            // Center capture is bottom-first. One output row is invalid and
+            // another holds a stationary reflection with valid motion.
             entry[1] = if frame == 0 || i / 16 == 5 {
                 [1e20; 4]
+            } else if i / 16 == 4 {
+                [0.; 4]
             } else {
                 [2., 0., 2., 0.]
             };
@@ -596,10 +599,11 @@ fn reflection_window_accumulates_a_translating_highlight_in_both_directions() {
         ]
         .map(|values| Resource::Buffer(buffer(&values)));
         passes.capture(frame, &guides, &camera, &[]);
+        let reflected: Vec<_> = color.chunks_exact(16).rev().flatten().copied().collect();
         passes.capture_reflections(
             frame,
             1,
-            buffer(&color),
+            buffer(&reflected),
             buffer(&records),
             &guides[3],
             &guides[4],
@@ -608,16 +612,20 @@ fn reflection_window_accumulates_a_translating_highlight_in_both_directions() {
             assert!(!passes.camera_cut(frame, &guides[8]).unwrap());
         }
     }
-    for (frame, at, expected) in [(0, 8, 7. / 3.), (1, 6, 5. / 3.)] {
+    for (frame, at, expected, current) in [(0, 8, 7. / 3., 3.), (1, 6, 5. / 3., 1.)] {
         passes.window(frame, frame, 0, true);
         passes.window(frame, 1 - frame, 1, true);
         passes.window(frame, frame, 2, true);
         let result = passes.read::<[f32; 4]>(&passes["window"]).unwrap();
-        for index in [4 * 16 + at, 2 * 16 + 10] {
+        for (index, expected) in [
+            (4 * 16 + at, expected),
+            (3 * 16 + 10, expected),
+            (2 * 16 + 10, current),
+        ] {
             let pixel = result[index];
             assert!(
                 pixel[..3].iter().all(|v| (v - expected).abs() < 1e-6),
-                "{pixel:?}"
+                "frame {frame}, pixel {index}: expected {expected}, got {pixel:?}"
             );
             assert_eq!(pixel[3], 1.);
         }

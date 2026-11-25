@@ -10,7 +10,16 @@ struct Record { endpoint: vec4u, motion: vec4f }
 @group(0) @binding(4) var<storage, read> hdr: array<vec4f>;
 @group(0) @binding(5) var radianceOut: texture_storage_2d_array<rgba16float, write>;
 @group(0) @binding(6) var endpointOut: texture_storage_2d_array<rgba32uint, write>;
-@group(0) @binding(7) var motionOut: texture_storage_2d_array<rgba32float, write>;
+fn packReflectionMetadata(raw: vec4u) -> u32 {
+  let distance = bitcast<f32>(raw.z);
+  // A logarithmic fixed-point code preserves relative distance precision from
+  // close-ups to large scenes. Zero marks an invalid record and 65535 is sky.
+  let logarithm = clamp(log2(max(distance, exp2(-120.))),-120.,120.);
+  let finiteDistance = 1u + u32(round((logarithm+120.)*256.));
+  let depth = select(select(finiteDistance,65535u,distance<0.),0u,raw.z==0u);
+  let lobes = vec2u(round(clamp(unpack2x16float(raw.w),vec2f(0),vec2f(1))*255.));
+  return depth | (lobes.x<<16u) | (lobes.y<<24u);
+}
 @compute @workgroup_size(8,8) fn main(@builtin(global_invocation_id) g:vec3u) {
   if (any(g.xy >= p.size)) { return; }
   let source = (p.size.y - 1u - g.y) * p.size.x + g.x;
@@ -20,8 +29,10 @@ struct Record { endpoint: vec4u, motion: vec4f }
   let reflected = clamp(radianceSum[source].rgb/max(1.0,samples),vec3f(0),max(hdr[targetIndex].rgb,vec3f(0)));
   let finite = all(abs(reflected) <= vec3f(65504));
   textureStore(radianceOut,vec2i(g.xy),i32(p.slot),vec4f(select(vec3f(0),reflected,finite),1.0));
-  textureStore(endpointOut,vec2i(g.xy),i32(p.slot),record.endpoint);
-  textureStore(motionOut,vec2i(g.xy),i32(p.slot),record.motion);
+  // Keep invalid motion outside the viewport, including after conversion to half.
+  let displacement = pack2x16float(clamp(record.motion.xy,vec2f(-65504),vec2f(65504)));
+  textureStore(endpointOut,vec2i(g.xy),i32(p.slot),
+    vec4u(record.endpoint.xy,displacement,packReflectionMetadata(record.endpoint)));
 }
 `;
 
@@ -29,8 +40,7 @@ export function reflectionWindowWGSL(binding: number) {
   return /* wgsl */ `
 @group(0) @binding(${binding}) var reflected: texture_2d_array<f32>;
 @group(0) @binding(${binding + 1}) var endpoints: texture_2d_array<u32>;
-@group(0) @binding(${binding + 2}) var virtualMotions: texture_2d_array<f32>;
-@group(0) @binding(${binding + 3}) var<storage, read_write> reflectedTotal: array<vec4f>;
+@group(0) @binding(${binding + 2}) var<storage, read_write> reflectedTotal: array<vec4f>;
 
 fn reflection(at: vec2i, frame: u32) -> vec3f {
   return textureLoad(reflected,at,i32(frame),0).rgb;
@@ -38,6 +48,10 @@ fn reflection(at: vec2i, frame: u32) -> vec3f {
 
 fn endpoint(at: vec2i, frame: u32) -> vec4u {
   return textureLoad(endpoints,at,i32(frame),0);
+}
+fn distanceCode(record: vec4u) -> u32 { return record.w & 65535u; }
+fn roughnessCosine(record: vec4u) -> vec2f {
+  return vec2f((vec2u(record.w)>>vec2u(16u,24u)) & vec2u(255u))/255.;
 }
 
 fn virtualStep(q: vec2f, frame: u32, id: vec3u, revision: u32, key: vec2u) -> vec3f {
@@ -47,9 +61,9 @@ fn virtualStep(q: vec2f, frame: u32, id: vec3u, revision: u32, key: vec2u) -> ve
   var motion = vec2f(0); var support = 0.;
   for (var dy=0; dy<2; dy++) { for (var dx=0; dx<2; dx++) {
     let at = min(origin+vec2i(dx,dy),vec2i(p.size)-1);
-    if (!sameMaterial(at,frame,id,revision) || any(endpoint(at,frame).xy!=key)) { continue; }
-    let field = textureLoad(virtualMotions,at,i32(frame),0);
-    let delta = select(field.xy,field.zw,(p.mode&16u)!=0u);
+    let record = endpoint(at,frame);
+    if (!sameMaterial(at,frame,id,revision) || any(record.xy!=key)) { continue; }
+    let delta = unpack2x16float(record.z);
     if (any(abs(delta) >= vec2f(p.size))) { continue; }
     let w = select(1.-phase.x,phase.x,dx==1)*select(1.-phase.y,phase.y,dy==1);
     support += w;
@@ -59,18 +73,40 @@ fn virtualStep(q: vec2f, frame: u32, id: vec3u, revision: u32, key: vec2u) -> ve
 }
 
 fn reflectionAgreement(a: vec4u, b: vec4u) -> f32 {
-  if (a.z == 0u || b.z == 0u) { return 0.; }
-  let ra = unpack2x16float(a.w).x;
-  let rb = unpack2x16float(b.w).x;
+  let d0 = distanceCode(a);
+  let d1 = distanceCode(b);
+  if (d0 == 0u || d1 == 0u) { return 0.; }
+  let ra = roughnessCosine(a).x;
+  let rb = roughnessCosine(b).x;
   let roughness = exp(-8.*abs(ra*ra-rb*rb));
-  let d0 = bitcast<f32>(a.z);
-  let d1 = bitcast<f32>(b.z);
-  if (d0 < 0. && d1 < 0.) { return roughness; }
-  let error = abs(d1-d0)/max(max(d1,d0),1e-4);
+  if (d0 == 65535u || d1 == 65535u) { return select(0.,roughness,d0==d1); }
+  let error = 1.-exp2(-abs(f32(d1)-f32(d0))/256.);
   return roughness * (1.-smoothstep(.08,.35,error));
 }
 
-fn virtualLanding(x: vec2i, id: vec3u, revision: u32, record: vec4u, surfaceQ: vec2f) -> vec3f {
+// Debug counts pack four eight-bit bins in each lane. A window has at most 64 neighbors.
+fn countReflectionTap(index: u32, reason: u32) {
+  if ((p.mode&32u)==0u) { return; }
+  let offset = index + p.size.x*p.size.y*2u;
+  var bins = bitcast<vec4u>(reflectedTotal[offset]);
+  bins[reason/4u] += 1u << (8u*(reason%4u));
+  reflectedTotal[offset] = bitcast<vec4f>(bins);
+}
+
+fn invertVirtualStep(q: vec2f, seed: vec2f, frame: u32, id: vec3u, revision: u32, key: vec2u) -> vec4f {
+  var guess = seed;
+  for (var iteration=0; iteration<4; iteration++) {
+    let m = virtualStep(guess,frame,id,revision,key);
+    if (m.z < .5) { return vec4f(0,0,0,4); }
+    guess = q-m.xy;
+  }
+  let check = virtualStep(guess,frame,id,revision,key);
+  if (check.z < .5) { return vec4f(0,0,0,4); }
+  if (distance(guess+check.xy,q) > .25) { return vec4f(0,0,0,5); }
+  return vec4f(guess,check.z,0);
+}
+
+fn virtualLanding(x: vec2i, id: vec3u, revision: u32, record: vec4u, surfaceQ: vec2f) -> vec4f {
   let count = arrayLength(&cameras);
   let signDelta = select(-1,1,p.delta>0);
   var q = vec2f(x);
@@ -80,97 +116,102 @@ fn virtualLanding(x: vec2i, id: vec3u, revision: u32, record: vec4u, surfaceQ: v
     let next = u32((i32(frame)+signDelta+i32(count))%i32(count));
     if (signDelta < 0) {
       let m = virtualStep(q,frame,id,revision,record.xy);
-      if (m.z < .5) { return vec3f(0); }
+      if (m.z < .5) { return vec4f(0,0,0,3); }
       q += m.xy;
       confidence = min(confidence,m.z);
     } else {
-      let surfaceSeed = surfaceQ-vec2f(x);
-      let displacement = surfaceSeed/f32(p.delta);
+      let surfaceSeed = q+(surfaceQ-vec2f(x))/f32(p.delta);
       let previousMotion = virtualStep(q,frame,id,revision,record.xy);
-      let starting = q + select(displacement,-previousMotion.xy,previousMotion.z >= .5);
-      var guess = starting;
-      for (var iteration=0; iteration<4; iteration++) {
-        let m = virtualStep(guess,next,id,revision,record.xy);
-        if (m.z < .5) { break; }
-        guess = q - m.xy;
+      let starting = select(surfaceSeed,q-previousMotion.xy,previousMotion.z>=.5);
+      var inverted = invertVirtualStep(q,starting,next,id,revision,record.xy);
+      // This alternative only seeds the inverse. The later endpoint and the
+      // residual of its actual virtual motion still have to agree.
+      if (inverted.z <= 0. && distance(starting,surfaceSeed) > .5) {
+        inverted = invertVirtualStep(q,surfaceSeed,next,id,revision,record.xy);
       }
-      let check = virtualStep(guess,next,id,revision,record.xy);
-      if (check.z < .5 || distance(guess+check.xy,q) > .25) { return vec3f(0); }
-      q = guess;
-      confidence = min(confidence,check.z);
+      if (inverted.z <= 0.) { return inverted; }
+      q = inverted.xy;
+      confidence = min(confidence,inverted.z);
     }
-    if (!inFrame(q)) { return vec3f(0); }
+    if (!inFrame(q)) { return vec4f(0,0,0,6); }
     let candidate = vec2i(floor(q+0.5));
-    if (!sameMaterial(candidate,next,id,revision)) { return vec3f(0); }
+    if (!sameMaterial(candidate,next,id,revision)) { return vec4f(0,0,0,7); }
     let prior = endpoint(candidate,next);
-    if (any(prior.xy != record.xy)) { return vec3f(0); }
+    if (any(prior.xy != record.xy)) { return vec4f(0,0,0,8); }
     // Test the reflected path on intermediate frames, including the landing.
     confidence = min(confidence,reflectionAgreement(record,prior));
-    if (confidence <= 0.) { return vec3f(0); }
+    if (confidence <= 0.) { return vec4f(0,0,0,9); }
     frame = next;
   }
-  return vec3f(q,confidence);
+  return vec4f(q,confidence,0);
 }
 
-fn virtualWeight(x: vec2i, landing: vec3f, q: vec3f, record: vec4u) -> f32 {
-  if (landing.z <= 0.) { return 0.; }
+fn virtualWeight(x: vec2i, landing: vec4f, surfaceDepth: f32, record: vec4u) -> vec2f {
+  if (landing.z <= 0.) { return vec2f(0,landing.w); }
   let nearest = vec2i(floor(landing.xy+0.5));
   let pos = surface(x,p.current,0u);
   let oldPos = surface(nearest,p.source,0u);
-  if (oldPos.w<=0.0001 || abs(coc(pos.w,p.current)-coc(oldPos.w,p.source))>.5 ||
-      abs(oldPos.w-q.z)>.05*q.z || overflowMissing(nearest,p.source)) { return 0.; }
+  if (oldPos.w<=0.0001 || abs(oldPos.w-surfaceDepth)>.05*surfaceDepth) { return vec2f(0,10); }
+  if (abs(coc(pos.w,p.current)-coc(oldPos.w,p.source))>.5) { return vec2f(0,11); }
+  if (overflowMissing(nearest,p.source)) { return vec2f(0,10); }
   let normal = surface(x,p.current,1u).xyz;
   let oldNormal = surface(nearest,p.source,1u).xyz;
   let alignment = clamp(dot(normal,oldNormal),-1.,1.);
-  // The GGX lobe broadens continuously with alpha. Surface depth and
-  // projected displacement bound the extra normal rotation at a curved hit.
-  let roughness = unpack2x16float(record.w).x;
+  // The GGX lobe broadens continuously with alpha. For a tighter lobe,
+  // even small normal changes can put the reflected feature outside the tap.
+  let roughness = roughnessCosine(record).x;
   let lobe = max(.04,2.*roughness*roughness);
   let angle = acos(alignment);
-  let discrepancy = distance(landing.xy,q.xy);
   let normalWeight = 1.-smoothstep(lobe,lobe*2.+.01,angle);
-  if (alignment <= 0.) { return 0.; }
+  if (normalWeight <= 0.) { return vec2f(0,12); }
   let coverage = smoothstep(.94,1.,min(hitCoverage(x,p.current),hitCoverage(nearest,p.source)));
   let footprint = footprintWeight(x,landing.xy,nearest,oldPos.w);
-  return landing.z * normalWeight * coverage * footprint * smoothstep(.1,1.,discrepancy);
+  if (coverage <= 0. || footprint <= 0.) { return vec2f(0,13); }
+  return vec2f(landing.z * normalWeight * coverage * footprint,0);
 }
 
 fn accumulateReflection(
   x: vec2i, index: u32, tap: HistoryTap, q: vec3f, weight: f32, surfaceRgb: vec3f, tent: f32
 ) {
   let record = endpoint(x,p.current);
-  let roughnessCosine = unpack2x16float(record.w);
-  let smoothness = clamp(1.-roughnessCosine.x,0.,1.);
+  let lobes = roughnessCosine(record);
+  let smoothness = 1.-lobes.x;
   // A continuous dominant-lobe estimate. As the lobe broadens or becomes
   // grazing, the surface-motion candidate contributes more.
-  let dominant = smoothness*smoothness*(.5+.5*roughnessCosine.y);
+  let roughness = lobes.x;
+  let dominant = mix(1.,smoothness*smoothness*(.5+.5*lobes.y),
+    smoothstep(0.,.25,roughness));
   let id = ident(x,p.current);
   let revision = revisionAt(x,p.current);
-  var land = vec3f(0);
-  if (record.z != 0u && dominant > 0.01 && hitCoverage(x,p.current)>.94) {
+  var land = vec4f(0,0,0,2);
+  if (distanceCode(record) != 0u && dominant > 0.01 && hitCoverage(x,p.current)>.94) {
     land = virtualLanding(x,id,revision,record,q.xy);
   }
-  let amount = dominant*virtualWeight(x,land,q,record);
+  let validation = virtualWeight(x,land,q.z,record);
+  let amount = dominant*validation.x;
   let virtualTap = vec2i(floor(land.xy+0.5));
   let srcHdr = radiance(tap.at,p.source);
   let positiveSurface = max(surfaceRgb,vec3f(0));
   let reflectedSurface = min(positiveSurface,reflection(tap.at,p.source) *
     (positiveSurface/max(srcHdr,vec3f(1e-12))));
   let srcEndpoint = endpoint(tap.at,p.source);
-  let oldShift = textureLoad(virtualMotions,x,i32(p.current),0);
-  let delta = select(oldShift.xy,oldShift.zw,(p.mode&16u)!=0u);
+  let delta = unpack2x16float(record.z);
   let localMotion = motionSample(x,p.current).xy;
   let slip = length(delta-localMotion)*f32(abs(p.delta));
   let matchSurface = select(0.,reflectionAgreement(record,srcEndpoint),all(srcEndpoint.xy==record.xy));
-  let validDelta = record.z != 0u && all(abs(delta) < vec2f(p.size));
+  let validDelta = distanceCode(record) != 0u && all(abs(delta) < vec2f(p.size));
   let mismatch = select(0.,dominant*smoothstep(.25,2.,slip)*(1.-matchSurface),validDelta);
-  let surfaceWeight = weight*(1.-amount)*(1.-mismatch);
+  // Surface identity alone cannot locate a feature within the reflected object.
+  // Prefer the current sample as the lobe approaches a perfect mirror.
+  let fallback = smoothstep(.05,.20,roughness);
+  let surfaceWeight = weight*(1.-amount)*(1.-mismatch)*fallback;
   let virtualW = tent*amount;
   total[index] += vec4f((surfaceRgb-reflectedSurface)*weight,weight);
   reflectedTotal[index] += vec4f(reflectedSurface*surfaceWeight +
     reflection(virtualTap,p.source)*virtualW,surfaceWeight+virtualW);
   if ((p.mode&32u)!=0u) {
     let offset = p.size.x*p.size.y;
+    countReflectionTap(index, u32(validation.y));
     reflectedTotal[index+offset] += vec4f(f32(weight>0.), f32(virtualW>0.), f32(land.z>0.), 1.);
   }
 }

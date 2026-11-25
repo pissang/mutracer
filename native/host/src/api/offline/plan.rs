@@ -197,9 +197,9 @@ impl TemporalOptions {
                 };
             plan.bytes = history * (px * 56 + 80)
                 + overflow
-                // Specular RGB, endpoint records and two motion hypotheses per history
+                // Specular RGB, endpoint records and half-precision motion per history
                 // slot. Include the window sum, center capture and beauty/checkpoint sums.
-                + if self.reflection_motion { px * (40 * history + 80) } else { 0 }
+                + if self.reflection_motion { px * (24 * history + 80) } else { 0 }
                 + guides * px * 16
                 + 32
                 + px * if accumulate_guides { 64 } else { 32 }
@@ -283,7 +283,7 @@ mod tests {
         let original = legacy.estimate(size, 0).unwrap();
         let reflected = options.estimate(size, 0).unwrap();
         assert_eq!(reflected.max, 16);
-        assert_eq!(reflected.bytes - original.bytes, 1_290_240_000);
+        assert_eq!(reflected.bytes - original.bytes, 803_635_200);
         let constrained = TemporalOptions {
             memory_budget: Some(original.bytes),
             ..options

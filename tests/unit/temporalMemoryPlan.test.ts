@@ -108,7 +108,7 @@ describe('temporal memory planner', () => {
     const plain = normalizeTemporalOptions();
     const enabled = normalizeTemporalOptions({reflectionMotion: true});
     expect(estimateTemporalMemory(1280, 720, enabled) - estimateTemporalMemory(1280, 720, plain))
-      .toBe(1_275_494_400);
+      .toBe(788_889_600);
     const interactive = normalizeTemporalOptions({mode: 'interactive', reflectionMotion: true});
     expect(estimateTemporalMemory(1280, 720, interactive)).toBe(
       estimateTemporalMemory(1280, 720, {...interactive, reflectionMotion: false}));

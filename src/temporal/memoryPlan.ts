@@ -64,8 +64,8 @@ export function estimateTemporalMemory(width: number, height: number, options: N
   const customAovs = options.denoiser?.type === 'custom' ? guideSlots * ((options.denoiser.aovs?.length ?? 0) + 2) * pixels * 16 : 0;
   const materialRevisionTable = Math.max(8, materialCount * 8);
   const changedMaterialIds = options.postRadius > 0 ? postSlots * Math.max(8, (materialCount + 1) * 4) : 0;
-  // Three history textures, one window sum, the extended center AOV and the beauty sum.
-  const reflection = usesTemporalReflectionWindow(options) ? pixels * (40 * historySlots + 64) : 0;
+  // Two history textures, one window sum, the extended center AOV and the beauty sum.
+  const reflection = usesTemporalReflectionWindow(options) ? pixels * (24 * historySlots + 64) : 0;
   return history + window + reflection + post + composition + queuedFrames + pendingAndTransient + customAovs + materialRevisionTable + changedMaterialIds;
 }
 

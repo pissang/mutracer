@@ -21,7 +21,7 @@ export class TemporalHistoryGPU {
   private guidePipeline!: GPUComputePipeline;
   private idPipeline!: GPUComputePipeline;
   private reflectionPipeline?: GPUComputePipeline;
-  reflections?: {radiance: GPUTexture; endpoint: GPUTexture; motion: GPUTexture};
+  reflections?: {radiance: GPUTexture; endpoint: GPUTexture};
   private params!: GPUBuffer;
   surface!: GPUTexture;
   motion!: GPUTexture;
@@ -85,8 +85,7 @@ export class TemporalHistoryGPU {
     if (reflections) {
       this.reflections = {
         radiance: this.texture('Temporal reflected radiance', this.capacity),
-        endpoint: this.texture('Temporal reflection endpoints', this.capacity, 'rgba32uint'),
-        motion: this.texture('Temporal virtual-image motion', this.capacity, 'rgba32float')
+        endpoint: this.texture('Temporal reflection endpoints and motion', this.capacity, 'rgba32uint')
       };
       this.reflectionPipeline = await createPipeline('Temporal reflection capture', captureReflectionsWGSL);
     }
@@ -116,7 +115,7 @@ export class TemporalHistoryGPU {
     if (this.reflections && reflection) {
       this.dispatch(this.reflectionPipeline!, [slot, reflection.samples],
         [reflection.radiance, reflection.albedo, reflection.records, buffers.color,
-          this.reflections.radiance, this.reflections.endpoint, this.reflections.motion]);
+          this.reflections.radiance, this.reflections.endpoint]);
     }
     const revisionTable = await this.revisions.write(revisionEntries);
     this.dispatch(this.idPipeline, [slot, 0, 0, 0, 0, revisionEntries.length], [buffers.id, revisionTable, this.id]);
