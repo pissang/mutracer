@@ -1,7 +1,8 @@
+import {aovReflectionWgsl} from './aovReflection.wgsl.js';
 import {materialCall, type MaterialShaderHooks} from './materialShaderHooks.js';
 // These entry points use their own output bindings and never mutate beauty RNG
 // state or accumulation. Storage usage remains four scene + three AOV buffers.
-export function createAovTraceWgsl(materialHooks: MaterialShaderHooks = {}) { return /* wgsl */ `
+export function createAovTraceWgsl(materialHooks: MaterialShaderHooks = {}, reflections = false, coatNormals = false) { return /* wgsl */ `
 override AOV_REFLECTANCE: bool = true;
 override AOV_PRIMARY: bool = false;
 struct AovAccumulation {
@@ -115,7 +116,7 @@ fn aovTrace(@builtin(global_invocation_id) id: vec3u) {
   }
   aovAccum[index].position += vec4f(si.position, 1.0);
 }
-@compute @workgroup_size(8, 8)
+${reflections ? aovReflectionWgsl(coatNormals) : ''}@compute @workgroup_size(8, 8)
 fn aovTraceCenter(@builtin(global_invocation_id) id: vec3u) {
   let size = aovParameters.xy;
   if (any(id.xy >= size)) { return; }
@@ -124,7 +125,9 @@ fn aovTraceCenter(@builtin(global_invocation_id) id: vec3u) {
   // Optional tail shares the binding without changing identity/history layout.
   let primaryIndex = index + size.x * size.y;
   if (AOV_PRIMARY) { aovCenter[primaryIndex] = AovCenter(vec4u(0u), vec4f(0.0)); }
-  let uv = (vec2f(id.xy) + 0.5) / vec2f(size);
+${reflections ? `  let reflectionIndex = primaryIndex + select(0u, size.x*size.y, AOV_PRIMARY);
+  aovCenter[reflectionIndex] = AovCenter(vec4u(0u), vec4f(1e20));
+` : ''}  let uv = (vec2f(id.xy) + 0.5) / vec2f(size);
   let ray = initCameraRay(uv);
   var si: SurfaceInteraction; var material: OpenPbrResolvedMaterial;
   if (!aovSurface(ray, &si, &material)) { return; }
@@ -133,7 +136,8 @@ fn aovTraceCenter(@builtin(global_invocation_id) id: vec3u) {
     aovCenter[primaryIndex] = AovCenter(bitcast<vec4u>(vec4f(si.normal, depth)), vec4f(si.position, 1.0));
   }
   let offset = 52u + u32(si.instanceIndex) * 24u;
-  let materialOffset = aovScene[16u];
+${reflections ? `  aovCenter[reflectionIndex] = traceReflection(id.xy, size, ray, si, material, offset);
+` : ''}  let materialOffset = aovScene[16u];
   let primitiveOffset = aovScene[17u];
   aovCenter[index].identity = vec4u(aovScene[offset], aovScene[offset+1u],
     aovScene[materialOffset + u32(si.materialIndex)], aovScene[primitiveOffset + u32(si.triangleIndex)]);

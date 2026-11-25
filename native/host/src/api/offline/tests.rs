@@ -94,6 +94,7 @@ fn frozen_offline_replay() {
                 index,
                 Capture {
                     raw: false,
+                    reflections: None,
                     check_camera: j["frameSequence"].is_number(),
                     size,
                     samples: j["samples"].as_u64().unwrap() as u32,
@@ -475,7 +476,7 @@ fn window_guides_match_web_packed_guides() {
         ..Default::default()
     };
     let plan = options.plan(size, 0, &gpu.device.limits()).unwrap();
-    let passes = Passes::new(gpu.clone(), size, plan, 0, false, true).unwrap();
+    let passes = Passes::new(gpu.clone(), size, plan, 0, false, true, false).unwrap();
     let mut camera = [0.; 20];
     for i in [0, 5, 10, 15, 18] {
         camera[i] = 1.;
@@ -528,4 +529,92 @@ fn window_guides_match_web_packed_guides() {
     assert!((normal[2] - expected).abs() < 1e-6);
     assert_eq!(normal[3], 2.);
     println!("Packed guide parity: {}", serde_json::json!({ "albedo": albedo, "normal": normal }));
+}
+
+#[test]
+#[ignore = "requires real GPU"]
+fn reflection_window_accumulates_a_translating_highlight_in_both_directions() {
+    let engine = super::super::aov_tests::aov_engine(crate::api::Backend::Software);
+    let gpu = engine.inner.gpu.clone();
+    let size = [16, 8];
+    let pixels = 128;
+    let options = TemporalOptions {
+        history_radius: HistoryRadius::Fixed(1),
+        post_radius: 0,
+        stabilize_sparkle: false,
+        reflection_motion: true,
+        ..Default::default()
+    };
+    let plan = options.plan(size, 0, &gpu.device.limits()).unwrap();
+    let passes = Passes::new(gpu.clone(), size, plan, 0, false, false, true).unwrap();
+    let mut camera = [0.; 20];
+    for i in [0, 5, 10, 15, 18] {
+        camera[i] = 1.;
+    }
+    camera[16] = 4.;
+    let buffer = |values: &[[f32; 4]]| {
+        gpu.device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Synthetic reflection window input"),
+                contents: bytemuck::cast_slice(values),
+                usage: wgpu::BufferUsages::STORAGE,
+            })
+    };
+    for (frame, at, intensity) in [(0, 8, 3.), (1, 6, 1.)] {
+        let color: Vec<_> = (0..pixels)
+            .map(|i| {
+                let v = if i % 16 == at { intensity } else { 0. };
+                [v, v, v, 1.]
+            })
+            .collect();
+        let mut records = vec![[0.; 4]; pixels * 6];
+        for entry in &mut records[4 * pixels..].chunks_exact_mut(2) {
+            entry[0] = [
+                f32::from_bits(1),
+                f32::from_bits(2),
+                6.,
+                f32::from_bits(0x3c000000),
+            ];
+            entry[1] = if frame == 0 {
+                [1e20; 4]
+            } else {
+                [2., 0., 2., 0.]
+            };
+        }
+        let guides = [
+            vec![[1., 0., 0., 1.]; pixels],
+            vec![[0., 0., 1., 1.]; pixels],
+            vec![[0., 1., 0., 1.]; pixels],
+            vec![[1.; 4]; pixels],
+            color.clone(),
+            vec![[0., 0., 1., 3.]; pixels],
+            vec![[f32::from_bits(1), 0., 0., 0.]; pixels],
+            vec![[0.5, 0.5, 1., 1.]; pixels],
+            vec![[0., 0., 0., 1.]; pixels],
+        ]
+        .map(|values| Resource::Buffer(buffer(&values)));
+        passes.capture(frame, &guides, &camera, &[]);
+        passes.capture_reflections(
+            frame,
+            1,
+            buffer(&color),
+            buffer(&records),
+            &guides[3],
+            &guides[4],
+        );
+        if frame == 1 {
+            assert!(!passes.camera_cut(frame, &guides[8]).unwrap());
+        }
+    }
+    for (frame, at, expected) in [(0, 8, 7. / 3.), (1, 6, 5. / 3.)] {
+        passes.window(frame, frame, 0, true);
+        passes.window(frame, 1 - frame, 1, true);
+        passes.window(frame, frame, 2, true);
+        let result = passes.read::<[f32; 4]>(&passes["window"]).unwrap()[4 * 16 + at];
+        assert!(
+            result[..3].iter().all(|v| (v - expected).abs() < 1e-6),
+            "{result:?}"
+        );
+        assert_eq!(result[3], 1.);
+    }
 }

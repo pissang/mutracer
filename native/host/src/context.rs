@@ -393,6 +393,7 @@ pub(crate) fn set_target(
     quality: u32,
     alpha_blend_strategy: u32,
     camera: &[u8; 128],
+    capture_reflections: bool,
 ) -> Result<()> {
     let snapshot = with_registry(|registry| {
         let (current, source) = target_contexts(registry, handle, owner)?;
@@ -413,7 +414,7 @@ pub(crate) fn set_target(
     // AOT thread. Keep the registry free for other contexts' render/poll/cancel.
     let packet = std::panic::catch_unwind(AssertUnwindSafe(|| {
         retained
-            .target(
+            .target_with_reflections(
                 settings,
                 size,
                 quality,
@@ -422,6 +423,7 @@ pub(crate) fn set_target(
                 camera,
                 &loss,
                 false,
+                capture_reflections,
             )
             .map_err(rejected)
     }));
@@ -3748,6 +3750,20 @@ pub unsafe extern "C" fn mt_context_backend(
         })
     };
     write_result(error, capacity, result)
+}
+
+pub(crate) fn reflected_radiance(handle: u64) -> Result<wgpu::Buffer> {
+    with_registry(|registry| {
+        let (state, linked) = with_scene(registry, handle)?;
+        idle(state)?;
+        let (_, target) = render_parts(state, linked)?;
+        target.reflected_radiance.clone().ok_or_else(|| {
+            fail(
+                Status::InvalidState,
+                "Enable RenderSettings::capture_reflections before rendering",
+            )
+        })
+    })
 }
 
 /// Snapshot only; AOT packaging and GPU work happen after releasing REGISTRY.

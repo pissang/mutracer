@@ -1,3 +1,4 @@
+import {reflectionWindowWGSL} from './temporalReflectionShader.js';
 import {temporalMetadataWGSL, temporalOverflowWGSL, temporalRadianceWGSL} from './temporalKernels.js';
 
 export const directGeometryWGSL = /* wgsl */ `
@@ -285,17 +286,22 @@ fn recoverTap(x: vec2i, pos: vec4f, q: vec3f, original: HistoryTap) -> HistoryTa
 }
 `;
 
-const startWindowWGSL = (guides = false) => /* wgsl */ `
+const startWindowWGSL = (guides = false, reflections = false) => /* wgsl */ `
 @compute @workgroup_size(8,8) fn main(@builtin(global_invocation_id) g:vec3u) {
   if(any(g.xy>=p.size)){return;}
   let x=vec2i(g.xy); let index=g.y*p.size.x+g.x;
   if(p.stage==0u){
-    total[index]=vec4f(radiance(x,p.current),1.0);${guides ? `
+    total[index]=vec4f(radiance(x,p.current),1.0);${reflections ? `
+    let reflected = reflection(x,p.current);
+    total[index] = vec4f(total[index].rgb-reflected,1.0);
+    reflectedTotal[index] = vec4f(reflected,1.0);
+    if ((p.mode&32u)!=0u) { reflectedTotal[index+p.size.x*p.size.y]=vec4f(0); }` : ''}${guides ? `
     albedoSum[index]=vec4f(loadAlbedo(x,p.current),0.);
     normalSum[index]=vec4f(loadNormal(x,p.current),0.);` : ''}
     return;
   }
-  if(p.stage==2u){ output[index]=vec4f(total[index].rgb/total[index].a,loadRadiance(x,p.current,p.size.x).a);${guides ? `
+  if(p.stage==2u){ output[index]=vec4f(total[index].rgb/total[index].a,loadRadiance(x,p.current,p.size.x).a);${reflections ? `
+    output[index] += vec4f(reflectedTotal[index].rgb/reflectedTotal[index].a,0.0);` : ''}${guides ? `
     albedoSum[index]/=total[index].a;
     normalSum[index]/=total[index].a;` : ''} return; }
   if(overflowMissing(x,p.current)){return;}
@@ -338,9 +344,11 @@ fn loadNormal(at: vec2i, slot: u32) -> vec3f {
 }
 `;
 
-export const createMixedWindowWGSL = (guides: boolean) => /* wgsl */ `${windowBindingsAndGeometry}
+export const createMixedWindowWGSL = (guides: boolean, reflections = false, uncapped = false) => /* wgsl */ `${uncapped || reflections
+  ? windowBindingsAndGeometry.replace('(flags & SURFACE_CAPPED) != 0u', 'false')
+  : windowBindingsAndGeometry}
 ${guides ? windowGuidesWGSL : ''}${recoverHistoryWGSL}
-${startWindowWGSL(guides)}  var tap=HistoryTap(nearest,0.);
+${reflections ? reflectionWindowWGSL(guides ? 13 : 10) : ''}${startWindowWGSL(guides, reflections)}  var tap=HistoryTap(nearest,0.);
   if(reason==0u){
     tap.support=1.;
     if(partial){tap.support=footprintWeight(x,q.xy,nearest,q.z);}
@@ -348,11 +356,16 @@ ${startWindowWGSL(guides)}  var tap=HistoryTap(nearest,0.);
   if(partial && abs(p.delta)<=3 && (reason>=5u || (reason==0u && tap.support<1.))){
     tap=recoverTap(x,pos,q,tap);
   }
-  if(tap.support<=0. || overflowMissing(tap.at,p.source)){atomicAdd(&rejects[reason],1u);return;}
+${reflections ? `  let accepted = tap.support>0. && !overflowMissing(tap.at,p.source);
+  atomicAdd(&rejects[select(reason,0u,accepted)],1u);
+  let tent = (radius+1.-abs(f32(p.delta)))/(radius+1.);
+  let weight = select(0.,tent*tap.support,accepted);
+  let rgb = select(vec3f(0),skyCorrection(x,tap.at,pos,radiance(tap.at,p.source)),accepted);
+  accumulateReflection(x,index,tap,q,weight,rgb,tent);` : `  if(tap.support<=0. || overflowMissing(tap.at,p.source)){atomicAdd(&rejects[reason],1u);return;}
   atomicAdd(&rejects[0],1u);
   let weight=(radius+1.-abs(f32(p.delta)))/(radius+1.)*tap.support;
   let rgb=skyCorrection(x,tap.at,pos,radiance(tap.at,p.source));
-  total[index]+=vec4f(rgb*weight,weight);${guides ? `
+  total[index]+=vec4f(rgb*weight,weight);` }${guides ? `
   if ((p.mode & 8u)!=0u) {
     albedoSum[index]+=vec4f(loadAlbedo(tap.at,p.source)*weight,0.);
     normalSum[index]+=vec4f(loadNormal(tap.at,p.source)*weight,0.);

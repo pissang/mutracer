@@ -727,6 +727,7 @@ fn render_settings(options: &MtRenderOptions) -> Result<RenderSettings> {
                 target_frame_ms: options.adaptive_target_frame_ms,
                 min_scale: options.adaptive_min_scale,
             }),
+        capture_reflections: false,
     };
     settings.validate()?;
     Ok(settings)

@@ -29,6 +29,10 @@ pub(super) struct Passes {
     pub bytes: u64,
     pub material_capacity: u32,
     accumulate_guides: bool,
+    reflection_motion: bool,
+    curved_reflections: bool,
+    uncapped: bool,
+    diagnostic: Option<std::path::PathBuf>,
     pipelines: HashMap<String, wgpu::ComputePipeline>,
     resources: HashMap<&'static str, Resource>,
 }
@@ -43,9 +47,14 @@ impl Passes {
         materials: usize,
         sparkle: bool,
         accumulate_guides: bool,
+        reflection_motion: bool,
     ) -> Result<Self> {
         let shaders = &crate::postprocess::sources()?.temporal;
         let pixels = u64::from(size[0]) * u64::from(size[1]);
+        let experiment =
+            std::env::var("MUTRACER_TEMPORAL_REFLECTION_EXPERIMENT").unwrap_or_default();
+        let diagnostic =
+            std::env::var_os("MUTRACER_TEMPORAL_WINDOW_DUMP").map(std::path::PathBuf::from);
         let mut pass = Self {
             gpu,
             size,
@@ -53,6 +62,10 @@ impl Passes {
             bytes: pixels * 16,
             material_capacity: materials.max(1) as u32,
             accumulate_guides,
+            reflection_motion,
+            curved_reflections: experiment == "curved",
+            uncapped: experiment == "unlimited",
+            diagnostic,
             pipelines: Default::default(),
             resources: Default::default(),
         };
@@ -100,6 +113,28 @@ impl Passes {
             "snapshot",
             "coverage",
         ];
+        if pass.uncapped || reflection_motion {
+            names.push(if accumulate_guides {
+                "windowGuidesUncapped"
+            } else {
+                "windowUncapped"
+            });
+        }
+        if reflection_motion {
+            pass.texture("reflected", slots, size, Rgba16Float);
+            pass.texture("endpoints", slots, size, Rgba32Uint);
+            pass.texture("virtualMotions", slots, size, Rgba32Float);
+            pass.buffer(
+                "reflectedTotal",
+                pass.bytes * if pass.diagnostic.is_some() { 2 } else { 1 },
+            );
+            names.push("captureReflections");
+            names.push(if accumulate_guides {
+                "windowGuidesReflections"
+            } else {
+                "windowReflections"
+            });
+        }
         if accumulate_guides {
             pass.buffer("albedoSum", pass.bytes);
             pass.buffer("normalSum", pass.bytes);
@@ -334,6 +369,52 @@ impl Passes {
         }
         self.write("meta", u64::from(s) * 80, meta);
     }
+    pub fn capture_reflections(
+        &self,
+        index: u32,
+        samples: u32,
+        radiance: wgpu::Buffer,
+        records: wgpu::Buffer,
+        albedo: &Resource,
+        hdr: &Resource,
+    ) {
+        let [w, h] = self.size;
+        self.image_pass(
+            "captureReflections",
+            &[w, h, index % self.plan.slots(), samples],
+            &[
+                &Resource::Buffer(radiance),
+                albedo,
+                &Resource::Buffer(records),
+                hdr,
+                &self["reflected"],
+                &self["endpoints"],
+                &self["virtualMotions"],
+            ],
+        );
+    }
+    pub fn dump_window(&self, frame: u32) -> Result<()> {
+        let Some(path) = &self.diagnostic else {
+            return Ok(());
+        };
+        let frames = std::env::var("MUTRACER_TEMPORAL_WINDOW_DUMP_FRAMES").unwrap_or_default();
+        if !frames.is_empty() && !frames.split(',').any(|s| s.parse() == Ok(frame)) {
+            return Ok(());
+        }
+        std::fs::create_dir_all(path)?;
+        let mut fields = vec!["window", "sum"];
+        if self.reflection_motion {
+            fields.push("reflectedTotal");
+        }
+        for name in fields {
+            let data = self.read::<f32>(&self[name])?;
+            std::fs::write(
+                path.join(format!("{frame:04}-{name}.f32")),
+                bytemuck::cast_slice(&data),
+            )?;
+        }
+        Ok(())
+    }
     pub fn resize_materials(&mut self, count: u32) {
         if count <= self.material_capacity {
             return;
@@ -357,7 +438,9 @@ impl Passes {
         let mode = u32::from(p.min != p.max)
             | 2
             | u32::from(revisions) << 2
-            | u32::from(self.accumulate_guides && revisions) << 3;
+            | u32::from(self.accumulate_guides && revisions) << 3
+            | u32::from(self.curved_reflections) << 4
+            | u32::from(self.diagnostic.is_some()) << 5;
         let mut bindings = Vec::with_capacity(12);
         bindings.extend([
             &self["surface"],
@@ -370,11 +453,29 @@ impl Passes {
             &self["rejects"],
             &self["motion"],
         ]);
-        let kernel = if self.accumulate_guides {
+        if self.accumulate_guides {
             bindings.extend([&self["guides"], &self["albedoSum"], &self["normalSum"]]);
-            "windowGuides"
-        } else {
-            "window"
+        }
+        let reflections = self.reflection_motion && revisions;
+        if reflections {
+            bindings.extend([
+                &self["reflected"],
+                &self["endpoints"],
+                &self["virtualMotions"],
+                &self["reflectedTotal"],
+            ]);
+        }
+        let kernel = match (
+            self.accumulate_guides,
+            reflections,
+            self.uncapped || (self.reflection_motion && !revisions),
+        ) {
+            (true, true, _) => "windowGuidesReflections",
+            (false, true, _) => "windowReflections",
+            (true, false, true) => "windowGuidesUncapped",
+            (false, false, true) => "windowUncapped",
+            (true, false, false) => "windowGuides",
+            (false, false, false) => "window",
         };
         self.image_pass(
             kernel,

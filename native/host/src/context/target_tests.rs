@@ -87,6 +87,7 @@ impl Fixture {
                 0,
                 0,
                 &self.camera,
+                false,
             ),
         )
     }
@@ -105,6 +106,7 @@ impl Fixture {
                     0,
                     0,
                     &camera,
+                    false,
                 ),
             )
         })

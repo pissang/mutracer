@@ -58,6 +58,8 @@ export interface RayTraceShaderOptions {
   independentTextures?: boolean;
   /** WebGPU display AOV storage specialization. Default false preserves the native/default shader. */
   displayAovStorage?: boolean;
+  /** Add path-radiance split writes to the beauty invocation. Default false. */
+  radianceOutputs?: boolean;
   hasDisplacement: boolean;
   /** Browser camera extension; false preserves the native uniform layout. */
   cameraProjectionInverse?: boolean;
@@ -102,6 +104,7 @@ export interface RayTraceShaderOptions {
 export default function rayTraceCompute(options: RayTraceShaderOptions, sceneIntersections = '', pathDiagnostic = false, inputHooks?: RayTraceInputHooks) {
   const indexedJitter = !!options.sampleIndexedRandomJitter && !inputHooks?.uniformJitter;
   const materialHooks = options.materialHooks ?? {};
+  const radianceInstrumentation = !!options.radianceOutputs;
   const sharedGraph = materialHooks.graph?.precomputed !== undefined;
   const maxPathEvents = options.maxPathEvents ?? MAX_PATH_EVENTS_WEBGL;
   const research = researchTransport()?.compute(options);
@@ -120,6 +123,7 @@ export default function rayTraceCompute(options: RayTraceShaderOptions, sceneInt
   spectral,
   sceneCapabilities,
   dynamicEnvironment = false,
+  radianceOutputs = false,
   materialCapabilities = ALL_MATERIAL_SHADER_CAPABILITIES,
   lightCapabilities
 } = options;
@@ -222,7 +226,7 @@ ${queryPoints ? `    if (${pendingQuery}.pending) { continue; }\n` : ''}    // R
 
 ${commonWgsl}
 
-${rayTraceCoreWgsl({ materialHooks, independentTextures: options.independentTextures, compactVertices, runtimeVertexLayout: options.runtimeVertexLayout, cameraProjectionInverse: options.cameraProjectionInverse, analyticLightStorage: options.analyticLightStorage, hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals, lightCapabilities, caustics: enabled || lightTracing || photonMapping })}
+${rayTraceCoreWgsl({ materialHooks, independentTextures: options.independentTextures, compactVertices, runtimeVertexLayout: options.runtimeVertexLayout, cameraProjectionInverse: options.cameraProjectionInverse, analyticLightStorage: options.analyticLightStorage, hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals, lightCapabilities, caustics: enabled || lightTracing || photonMapping, radianceOutputs: radianceInstrumentation })}
 
 ${uvProjectionWgsl}
 
@@ -238,7 +242,7 @@ ${envMapWgsl}
 
 ${samplingWgsl}${indexedJitter ? haltonWgsl : ''}
 ${spectrumWgsl}
-${createOpenPbrBsdfWgsl(hasAnisotropyDirections, hasCoatNormals, materialHooks)}
+${createOpenPbrBsdfWgsl(hasAnisotropyDirections, hasCoatNormals, materialHooks, radianceInstrumentation)}
 ${createSampleLightWgsl(options.emissiveInstanceIndices, !!materialHooks.graph?.emission, materialHooks.graph?.precomputed !== undefined)}${inputHooks?.declarations ?? ''}
 
 // Index of the path vertex currently being shaded.
@@ -292,14 +296,14 @@ ${enabled || lightTracing || photonMapping ? causticPartitionWGSL(enabled, light
 const CAUSTIC_MNEE=${enabled};
 const CAUSTIC_MNEE_MAX_DEPTH=${partitionDepth}u;
 const CAUSTIC_PHOTON_MAX_DEPTH=${photonMaxDepth}u;
-`+photonQuerySource(debugGroup, !lightTracing && (options.photonDirectSubset ?? true)):''}${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals, enabled || lightTracing || photonMapping, research?.contribution,photonMapping,options.channelIndependentRis,materialHooks.graph?.precomputed !== undefined, queryPoints, earlyScattering)}
+`+photonQuerySource(debugGroup, !lightTracing && (options.photonDirectSubset ?? true)):''}${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals, enabled || lightTracing || photonMapping, research?.contribution,photonMapping,options.channelIndependentRis,materialHooks.graph?.precomputed !== undefined, queryPoints, earlyScattering, radianceOutputs)}
 ${createSampleShadowCatcherWgsl(queryPoints, earlyScattering)}
-${queryPoints ? createQueryPointsWgsl(earlyScattering) + '\n' : ''}
+${queryPoints ? createQueryPointsWgsl(earlyScattering, radianceInstrumentation) + '\n' : ''}
 // Output
 @group(3) @binding(0) var<storage, read_write> outColor: array<vec4f>;
 @group(3) @binding(1) var<storage, read_write> outNormal: array<vec4f>;
 @group(3) @binding(2) var<storage, read_write> outAlbedo: array<vec4f>;
-
+${radianceOutputs ? '@group(3) @binding(14) var<storage, read_write> outRadiance: array<vec4f>;\n' : ''}
 ${shadowCatcherAccumulationWGSL}
 @group(3) @binding(3) var<storage, read_write> outShadowCatcher: array<ShadowCatcherAccumulation>;
 
@@ -333,7 +337,9 @@ struct RayTraceAuxiliary {
   isBlank: bool,
   // Shadow-catcher hits: occluded and total light sample counts.
   shadowCounts: vec2f,
-}
+${radianceInstrumentation ? `  // First-surface reflected radiance from the beauty invocation.
+  specularRadiance: vec3f,
+` : ''}}
 
 ${backgroundWgsl}fn sampleSpectralSceneBackground(ray: Ray, channel: i32) -> vec4f {
   let bg = sampleSceneBackground(ray);
@@ -717,7 +723,12 @@ fn getBevelNormal(source: SurfaceInteraction, radius: f32) -> vec3f {
   return source.normal;
 }
 
-${sharePrefix ? spectralPrefixWgsl(!enabled) + prefixCheckpoint('spSurface', surfacePrefix) + prefixCheckpoint('spFlat', flatPrefix) : ''}fn integrateOnePathSample(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray: Ray, ma: ptr<function, OpenPbrResolvedMaterial>, outAux: ptr<function, RayTraceAuxiliary>, initialQuery: bool) -> vec4f {
+${sharePrefix ? spectralPrefixWgsl(!enabled, radianceInstrumentation) + prefixCheckpoint('spSurface', surfacePrefix) + prefixCheckpoint('spFlat', flatPrefix) : ''}${radianceInstrumentation ? `fn finalizeRadianceSplit(path: ptr<function, Path>, outAux: ptr<function, RayTraceAuxiliary>) {
+  (*outAux).specularRadiance = primarySpecularDirect +
+    ((*path).li - primaryContinuationStart) * primarySpecularFraction;
+}
+
+` : ''}fn integrateOnePathSample(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray: Ray, ma: ptr<function, OpenPbrResolvedMaterial>, outAux: ptr<function, RayTraceAuxiliary>, initialQuery: bool) -> vec4f {
   var path: Path;
   path.ray = ray;
   path.li = vec3f(0.0);
@@ -728,7 +739,7 @@ ${sharePrefix ? spectralPrefixWgsl(!enabled) + prefixCheckpoint('spSurface', sur
   path.scatteringIsDelta = false;
   path.isNextRefraction = false;
   path.abort = false;
-
+${radianceInstrumentation ? '  resetRadianceSplit();\n' : ''}
   let bounceLimit = max(rtUniform.bounces, 0);
   let eventLimit = min(bounceLimit * 3, ${maxPathEvents});
   var depth = 0;
@@ -772,7 +783,7 @@ ${sharePrefix ? '    spResume = false;\n' : ''}    if (isNotTransparent & (event
     if (path.abort) { break; }
   }
 
-  return ${sharePrefix ? 'spFinish(spSlot, vec4f(path.li, path.alpha), *outAux)' : 'vec4f(path.li, path.alpha)'};
+${radianceInstrumentation ? '  finalizeRadianceSplit(&path, outAux);\n' : ''}  return ${sharePrefix ? 'spFinish(spSlot, vec4f(path.li, path.alpha), *outAux)' : 'vec4f(path.li, path.alpha)'};
 }
 
 fn integrateOnePath(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray: Ray, ma: ptr<function, OpenPbrResolvedMaterial>, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
@@ -809,7 +820,8 @@ fn integrateOnePath(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray: Ray, 
       (*outAux).isBlank = backAux.isBlank & branchAux.isBlank;
       (*outAux).isShadowCatcher = backAux.isShadowCatcher & branchAux.isShadowCatcher;
       (*outAux).shadowCounts = mix(backAux.shadowCounts, branchAux.shadowCounts, coverage);
-      return mix(back, result, coverage);
+${radianceInstrumentation ? `      (*outAux).specularRadiance = mix(backAux.specularRadiance, branchAux.specularRadiance, coverage);
+` : ''}      return mix(back, result, coverage);
     }
   }
   return vec4f(0.0);` : /* wgsl */ `return integrateOnePathSample(uv, si, ray, ma, outAux, false);`}
@@ -832,7 +844,7 @@ ${primaryVariables}
   var path: Path; path.ray = ray;
   path.alpha = select(1.0, 0.0, rtUniform.transmissiveOutputAlphaMin < 1.0);
   path.beta = vec3f(1.0); path.fromEye = true;
-  let bounceLimit = max(rtUniform.bounces, 0);
+${radianceInstrumentation ? '  resetRadianceSplit();\n' : ''}  let bounceLimit = max(rtUniform.bounces, 0);
   let eventLimit = min(bounceLimit * 3, ${maxPathEvents});
   var event = 0; var depth = 0; var sampleIgnored = false;
   var isNotTransparent = false;
@@ -874,7 +886,7 @@ ${primaryGuides}
     }
     if (path.abort | (event >= eventLimit)) {
       let result = vec4f(path.li, path.alpha);
-      if (!split | (coverage <= 0.0)) { return result; }
+${radianceInstrumentation ? '      finalizeRadianceSplit(&path, outAux);\n' : ''}      if (!split | (coverage <= 0.0)) { return result; }
       if (front) {
         (*outAux).albedo = mix(backAux.albedo, (*outAux).albedo, coverage);
         let blendedNormal = mix(backAux.normal, (*outAux).normal, coverage);
@@ -882,13 +894,14 @@ ${primaryGuides}
         (*outAux).isBlank = backAux.isBlank & (*outAux).isBlank;
         (*outAux).isShadowCatcher = backAux.isShadowCatcher & (*outAux).isShadowCatcher;
         (*outAux).shadowCounts = mix(backAux.shadowCounts, (*outAux).shadowCounts, coverage);
-        return mix(back, result, coverage);
+${radianceInstrumentation ? `        (*outAux).specularRadiance = mix(backAux.specularRadiance, (*outAux).specularRadiance, coverage);
+` : ''}        return mix(back, result, coverage);
       }
       back = result; backAux = *outAux;
       front = true; query = false; event = 0; depth = 0; sampleIgnored = false;
       si = primarySi; ma = primaryMa; ma.alpha = 1.0; *outAux = primaryAux;
       path = Path(); path.ray = ray; path.beta = vec3f(1.0); path.fromEye = true;
-      path.alpha = select(1.0, 0.0, rtUniform.transmissiveOutputAlphaMin < 1.0);
+${radianceInstrumentation ? '      resetRadianceSplit();\n' : ''}      path.alpha = select(1.0, 0.0, rtUniform.transmissiveOutputAlphaMin < 1.0);
     } else { event++; }
   }
   return vec4f(0.0);
@@ -900,7 +913,7 @@ ${queryPoints ? primaryVariablesFor(mainSi, 'var querySurfaces: array<SurfaceInt
   ${mainPath}.alpha = select(1.0, 0.0, rtUniform.transmissiveOutputAlphaMin < 1.0);
   ${mainPath}.beta = vec3f(1.0);
   ${mainPath}.fromEye = true;
-  let bounceLimit = max(rtUniform.bounces, 0);
+${radianceInstrumentation ? '  resetRadianceSplit();\n' : ''}  let bounceLimit = max(rtUniform.bounces, 0);
   let eventLimit = min(bounceLimit * 3, ${maxPathEvents});
   var isNotTransparent = false;
   var depth = 0;
@@ -939,15 +952,16 @@ ${primaryGuidesFor(mainSi, mainMaterial, mainPath, pathDeclaration)}
       completeVertex(&${mainPath}, &depth, &${mainSi}, &${mainMaterial}, sampleIgnored);
     }
     if (isNotTransparent && event > bounceLimit) { ${mainPath}.abort = true; }
-    if (${mainPath}.abort || event >= eventLimit) { ${queryPoints ? `return vec4f(${mainPath}.li, ${mainPath}.alpha);` : 'break;'} }
+    if (${mainPath}.abort || event >= eventLimit) { ${queryPoints ? `${radianceInstrumentation ? `finalizeRadianceSplit(&${mainPath}, outAux);` : ''} return vec4f(${mainPath}.li, ${mainPath}.alpha);` : 'break;'} }
 ${queryPoints ? '      }' : ''}
     shadeVertex(uv, &${mainPath}, &depth, &${mainSi}, &${mainMaterial}, outAux, &sampleIgnored${queryPoints ? ', queryStage != 0u' : ''});
 ${queryPoints ? `      if (${pendingQuery}.pending) { continue; }` : ''}
-    if (${mainPath}.abort) { ${queryPoints ? `return vec4f(${mainPath}.li, ${mainPath}.alpha);` : 'break;'} }
+    if (${mainPath}.abort) { ${queryPoints ? `${radianceInstrumentation ? `finalizeRadianceSplit(&${mainPath}, outAux);` : ''} return vec4f(${mainPath}.li, ${mainPath}.alpha);` : 'break;'} }
 ${queryPoints ? `      break;
     }` : ''}
   }
-  return vec4f(${mainPath}.li, ${mainPath}.alpha);
+${radianceInstrumentation ? `  finalizeRadianceSplit(&${mainPath}, outAux);
+` : ''}  return vec4f(${mainPath}.li, ${mainPath}.alpha);
 }
 ` : spectral === true && !deterministicPrimaryAlpha ? /* wgsl */ `
 fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
@@ -971,7 +985,8 @@ ${primaryVariables}
   var color = vec3f(0.0); var alpha = 0.0;
   var accumulatedGuideAlbedo = vec3f(0.0);
   var accumulatedGuideNormal = vec3f(0.0);
-  var allBlank = true;
+${radianceInstrumentation ? `  var accumulatedSpecularRadiance = vec3f(0.0);
+` : ''}  var allBlank = true;
   // Flatten the wavelength/path loops to share primary and secondary queries.
   // Each of the three paths uses at most MAX_PATH_EVENTS + 1 iterations,
   // including completion of its final query. The primary hit is reused.
@@ -994,7 +1009,9 @@ ${primaryGuides}
         wavelengthRngState = s0; wavelengthHashedCounter = hashedCounter;
       }
       si = primarySi; ma = primaryMa; wavelengthAux = *outAux;
-      if (!singleWavelength) {
+${radianceInstrumentation ? `      wavelengthAux.specularRadiance = vec3f(0.0);
+      resetRadianceSplit();
+` : ''}      if (!singleWavelength) {
         s0 = wavelengthRngState; hashedCounter = wavelengthHashedCounter; samplingBounce = 0u;
         wavelengthAux.isBlank = false; wavelengthAux.isShadowCatcher = false;
       }
@@ -1031,19 +1048,22 @@ ${sharePrefix ? /* wgsl */ `      if (spActive && wavelengthIndex > 0 && spForkC
       shadeVertex(uv, &path, &depth, &si, &ma, &wavelengthAux, &sampleIgnored${queryPoints ? ', false' : ''});
     }
     if (path.abort | (event >= eventLimit)) {
-      let result = vec4f(path.li, path.alpha);
+${radianceInstrumentation ? '      finalizeRadianceSplit(&path, &wavelengthAux);\n' : ''}      let result = vec4f(path.li, path.alpha);
       if (singleWavelength) {
         *outAux = wavelengthAux;
         let scale = select(1.0, 3.0, dispersivePrimary);
-        return vec4f(result.rgb * scale, result.a);
+${radianceInstrumentation ? `        (*outAux).specularRadiance *= scale;
+` : ''}        return vec4f(result.rgb * scale, result.a);
       }
 ${sharePrefix ? /* wgsl */ `      if (spActive) {
         (*outAux).isBlank = wavelengthAux.isBlank;
         // Match the original three identical guide additions and division.
         (*outAux).albedo = (wavelengthAux.albedo + wavelengthAux.albedo + wavelengthAux.albedo) / 3.0;
         (*outAux).normal = (wavelengthAux.normal + wavelengthAux.normal + wavelengthAux.normal) / 3.0;
-        return result;
+${radianceInstrumentation ? `        (*outAux).specularRadiance = wavelengthAux.specularRadiance;
+` : ''}        return result;
       }
+` : ''}${radianceInstrumentation ? `      accumulatedSpecularRadiance += wavelengthAux.specularRadiance;
 ` : ''}      color += result.rgb; alpha = max(alpha, result.a);
       accumulatedGuideAlbedo += wavelengthAux.albedo;
       accumulatedGuideNormal += wavelengthAux.normal;
@@ -1053,7 +1073,8 @@ ${sharePrefix ? /* wgsl */ `      if (spActive) {
         (*outAux).albedo = accumulatedGuideAlbedo / 3.0;
         (*outAux).normal = accumulatedGuideNormal / 3.0;
         (*outAux).isBlank = allBlank;
-        return vec4f(color, alpha);
+${radianceInstrumentation ? `        (*outAux).specularRadiance = accumulatedSpecularRadiance;
+` : ''}        return vec4f(color, alpha);
       }
       event = 0;
     } else { event++; }
@@ -1074,7 +1095,8 @@ ${primaryGuides}
       var alpha = 0.0;
       var accumulatedGuideAlbedo = vec3f(0.0);
       var accumulatedGuideNormal = vec3f(0.0);
-      var allBlank = true;
+${radianceInstrumentation ? `      var accumulatedSpecularRadiance = vec3f(0.0);
+` : ''}      var allBlank = true;
       var si2 = si;
       var ma2 = ma;
       var wavelengthSample = sample1D(CAMERA_WAVELENGTH);
@@ -1124,14 +1146,17 @@ ${sharePrefix ? /* wgsl */ `          spBegin(channel + 1, si.wavelength, spDisp
           wavelengthAux.normal = (*outAux).normal;
           wavelengthAux.isBlank = false;
           wavelengthAux.isShadowCatcher = false;
-        }
+${radianceInstrumentation ? `          wavelengthAux.specularRadiance = vec3f(0.0);
+` : ''}        }
         let res = integrateOnePath(uv, &si, ray, &ma, &wavelengthAux);
         if (singleWavelength) {
           *outAux = wavelengthAux;
           let scale = select(1.0, 3.0, dispersivePrimary);
-          return vec4f(res.rgb * scale, res.a);
+${radianceInstrumentation ? `          (*outAux).specularRadiance *= scale;
+` : ''}          return vec4f(res.rgb * scale, res.a);
         }
-        colAccum += res.rgb;
+${radianceInstrumentation ? `        accumulatedSpecularRadiance += wavelengthAux.specularRadiance;
+` : ''}        colAccum += res.rgb;
         alpha = max(alpha, res.a);
         accumulatedGuideAlbedo += wavelengthAux.albedo;
         accumulatedGuideNormal += wavelengthAux.normal;
@@ -1142,7 +1167,8 @@ ${sharePrefix ? /* wgsl */ `          spBegin(channel + 1, si.wavelength, spDisp
       (*outAux).albedo = accumulatedGuideAlbedo / 3.0;
       (*outAux).normal = accumulatedGuideNormal / 3.0;
       (*outAux).isBlank = allBlank;
-      return vec4f(colAccum, alpha);
+${radianceInstrumentation ? `      (*outAux).specularRadiance = accumulatedSpecularRadiance;
+` : ''}      return vec4f(colAccum, alpha);
     }
     else {
       return integrateOnePath(uv, &si, ray, &ma, outAux);
@@ -1212,12 +1238,13 @@ ${cameraJitterWgsl('outputSize', indexedJitter, !!inputHooks?.uniformJitter)}
   outAux.normal = vec3f(0.0);
   outAux.isBlank = false;
   outAux.isShadowCatcher = false;
-${pathDiagnostic ? '  mtPathBegin(coord);\n' : ''}${inputHooks?.begin ?? ''}  var liAndAlpha = integrator(uv + jitter, cam, &outAux);
+${radianceInstrumentation ? `  outAux.specularRadiance = vec3f(0.0);
+` : ''}${pathDiagnostic ? '  mtPathBegin(coord);\n' : ''}${inputHooks?.begin ?? ''}  var liAndAlpha = integrator(uv + jitter, cam, &outAux);
 ${inputHooks?.unclampedColor ?? ''}
 ${(enabled||lightTracing||photonMapping) && debugGroup >= 0 ? /* wgsl */ `  liAndAlpha=${debugGroup>=50?`vec4f(photonQueryStats,1.0)`:debugGroup>=30?`vec4f(causticHot[${debugGroup-30}],1.0)`:research?.debugOutput ?? 'liAndAlpha'};
 ` : ''}  // Clamp at Integration Level to reduce fireflies.
   // TODO Path level configuration?
-  if (rtUniform.clamping > 0.0) {
+${radianceOutputs ? '  let unclampedColor = liAndAlpha.rgb;\n' : ''}  if (rtUniform.clamping > 0.0) {
     let clamping = rtUniform.clamping;
     liAndAlpha = vec4(clamp(liAndAlpha.rgb, -vec3f(clamping), vec3f(clamping)), liAndAlpha.a);
   }
@@ -1263,13 +1290,19 @@ ${(enabled||lightTracing||photonMapping) && debugGroup >= 0 ? /* wgsl */ `  liAn
     accumulateNormalOrVariance(idx, liAndAlpha.rgb, outAux.normal);
     accumulateDenoiseMoments(idx, dot(liAndAlpha.rgb, luminance));
   }
-${pathDiagnostic ? '  mtPathEnd(outAux.normal, outAux.albedo);\n' : ''}${inputHooks?.end ?? ''}}
+${radianceOutputs ? `  if (!outAux.isShadowCatcher) {
+    // Apply the same per-channel sample clamp as beauty.
+    let denominator = select(vec3f(1.0), unclampedColor, abs(unclampedColor) > vec3f(1e-20));
+    let reflected = outAux.specularRadiance * (liAndAlpha.rgb / denominator);
+    outRadiance[idx] += vec4f(select(vec3f(0.0), reflected, all(abs(reflected) < vec3f(INF))), 0.0);
+  }
+` : ''}${pathDiagnostic ? '  mtPathEnd(outAux.normal, outAux.albedo);\n' : ''}${inputHooks?.end ?? ''}}
 `;
   // The query entry point shares the exact BVH and material implementation.
   // It has no effect on the beauty entry point or its bindings.
   // Gate optional material layers on scene-level feature flags so drivers can
   // skip the unused BSDF lobes.
-  let specializedSource = source + createDepthQueryWgsl(materialHooks) + reflectanceWGSL + (options.displayAovStorage ? createAovTraceDisplayWgsl(materialHooks) : createAovTraceWgsl(materialHooks));
+  let specializedSource = source + createDepthQueryWgsl(materialHooks) + reflectanceWGSL + (options.displayAovStorage ? createAovTraceDisplayWgsl(materialHooks) : createAovTraceWgsl(materialHooks, radianceOutputs, hasCoatNormals));
   const backgroundBits: Record<string, number> = {
     USE_BACKGROUND: 1,
     USE_BACKGROUND_MAP: 2,

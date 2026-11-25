@@ -809,6 +809,7 @@ pub(super) struct TargetPacket {
     pub frames: Vec<[u8; 16]>,
     pub shader: Option<String>,
     pub caustics: Option<crate::caustics::Packet>,
+    pub capture_reflections: bool,
 }
 // Buffer records have zero dimensions; texture records carry their exact extent.
 #[derive(Clone)]
@@ -1513,6 +1514,30 @@ impl PreparedState {
         loss: &crate::device_loss::DeviceLossNotifier,
         frame_inputs: bool,
     ) -> Result<TargetPacket> {
+        self.target_with_reflections(
+            settings,
+            size,
+            quality,
+            alpha_blend_strategy,
+            hardware,
+            camera,
+            loss,
+            frame_inputs,
+            false,
+        )
+    }
+    pub(super) fn target_with_reflections(
+        &self,
+        settings: &settings::RenderSettings,
+        size: [u32; 2],
+        quality: u32,
+        alpha_blend_strategy: u32,
+        hardware: bool,
+        camera: &[u8],
+        loss: &crate::device_loss::DeviceLossNotifier,
+        frame_inputs: bool,
+        capture_reflections: bool,
+    ) -> Result<TargetPacket> {
         if camera.len() != cam::WORDS * WORD_BYTES {
             return Err("Camera descriptor must contain exactly 128 bytes".into());
         }
@@ -1537,7 +1562,7 @@ impl PreparedState {
             shader,
             1,
             alpha_blend_strategy,
-            0,
+            u32::from(capture_reflections),
             0,
         ]));
         input.extend_from_slice(camera);
@@ -1603,6 +1628,7 @@ impl PreparedState {
         let frames = runtime::frames_with_loss(loss, bounces, seed)?;
         Ok(TargetPacket {
             caustics,
+            capture_reflections,
             camera: camera_bytes,
             trace: trace_bytes,
             frames,

@@ -21,7 +21,7 @@ export function pendingSceneQueryRef(addressable = false) {
   return addressable ? 'pendingSceneQuery[(rtUniform.loopUnrollGuard - 4u) & 1u]' : 'pendingSceneQuery';
 }
 
-export function createQueryPointsWgsl(addressable = false) {
+export function createQueryPointsWgsl(addressable = false, radianceOutputs = false) {
   const pendingQuery = pendingSceneQueryRef(addressable);
   return /* wgsl */ `
 struct PendingSceneQuery {
@@ -33,7 +33,7 @@ struct PendingSceneQuery {
   pending: bool,
   occluded: bool,
   contribution: vec3f,
-  weight: f32,
+${radianceOutputs ? '  radianceSpecular: vec3f,\n' : ''}  weight: f32,
 };
 var<private> pendingSceneQuery: ${addressable ? 'array<PendingSceneQuery, 2>' : 'PendingSceneQuery'};
 
@@ -44,7 +44,7 @@ fn requestSceneVisibility(ray: Ray, maximum: f32, triangle: i32, instance: i32, 
   ${pendingQuery}.instance = instance;
   ${pendingQuery}.kind = kind;
   ${pendingQuery}.pending = true;
-}
+${radianceOutputs ? `  ${pendingQuery}.radianceSpecular = vec3f(0.0);\n` : ''}}
 `;
 }
 

@@ -92,6 +92,9 @@ pub struct RenderSettings {
     pub aov_samples: u32,
     /// AOV dimensions. Default [`AovResolution::Render`].
     pub aov_resolution: AovResolution,
+    /// Capture reflected radiance and center-ray reflection motion for offline temporal denoising.
+    /// Default false. Enable before rendering when using [super::TemporalOptions::reflection_motion].
+    pub capture_reflections: bool,
     /// Maximum complete samples, 1–16384. Default 2048. Raising it continues the
     /// accumulation; with [`SamplingPattern::ZSobol`] a change restarts it.
     pub max_samples: u32,
@@ -193,6 +196,7 @@ impl Default for RenderSettings {
             aovs: 0,
             aov_samples: 16,
             aov_resolution: AovResolution::Render,
+            capture_reflections: false,
             max_samples: 2048,
             bounces: 3,
             clamping: 0.,
@@ -222,6 +226,9 @@ impl RenderSettings {
         }
         if self.aovs & !3711 != 0 || self.aov_samples == 0 {
             return invalid("Invalid AOV mask or sample cap");
+        }
+        if self.capture_reflections && self.aov_resolution == AovResolution::Display {
+            return invalid("Reflection capture requires render-resolution AOVs");
         }
         if self.aov_resolution == AovResolution::Display
             && !matches!(self.size, RenderSize::Scale(_))
@@ -604,6 +611,7 @@ pub(super) struct TargetKey {
     settings: L0Settings,
     alpha_blend_strategy: AlphaBlendStrategy,
     camera_override: Option<[u8; 128]>,
+    capture_reflections: bool,
 }
 /// Full preparation of the shared scene on a library thread.
 struct Pending {
@@ -1076,6 +1084,7 @@ fn desired(state: &State, render: &RenderState) -> Option<TargetKey> {
         alpha_blend_strategy: render.settings.alpha_blend_strategy,
         settings: render.target_settings(render.settings.max_samples, 0),
         camera_override: None,
+        capture_reflections: render.settings.capture_reflections,
     })
 }
 
@@ -1468,6 +1477,7 @@ fn target_step(
         key.quality,
         key.alpha_blend_strategy as u32,
         &camera,
+        key.capture_reflections,
     ));
     if result.is_err() {
         state
@@ -1668,6 +1678,10 @@ fn aov_layout(render: &RenderState, mask: u32) -> crate::aov::Layout {
         display,
         compact: display && mask & !crate::aov::COMPACT_MASK == 0,
         primary: mask & (512 | 1024 | 2048) != 0,
+        reflections: render
+            .published
+            .as_ref()
+            .is_some_and(|key| key.capture_reflections),
     }
 }
 fn render_aovs(render: &mut RenderState, mask: u32, samples: u32) -> Result<()> {
@@ -3290,6 +3304,7 @@ impl Render {
         &self,
         engine: &Engine,
         auto: bool,
+        reflections: bool,
     ) -> crate::Result<super::offline::Capture> {
         if !Arc::ptr_eq(&engine.inner, &self.engine.inner) {
             return Err("Temporal push needs a converged render on the same engine".into());
@@ -3362,7 +3377,14 @@ impl Render {
             } else {
                 Default::default()
             };
+            let reflections = if reflections {
+                let radiance = context_result(context::reflected_radiance(r.context))?;
+                Some((radiance, aov.reflection_records().clone()))
+            } else {
+                None
+            };
             Ok(super::offline::Capture {
+                reflections,
                 raw: true,
                 check_camera: true,
                 size,
@@ -3805,6 +3827,7 @@ fn refine(state: &mut State, id: u64) -> Result<RenderStatus> {
                         && published.quality == key.quality
                         && published.alpha_blend_strategy == key.alpha_blend_strategy
                         && published.settings == key.settings
+                        && published.capture_reflections == key.capture_reflections
                 });
         if retained_graph {
             let limit = next_target(&state.renders[&id]);

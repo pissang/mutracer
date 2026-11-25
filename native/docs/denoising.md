@@ -194,6 +194,13 @@ albedo and normal guides when the history radius is positive. The option
 defaults to `false`. At 720p with a maximum history radius of 16, enabling
 it adds about 265 MB of temporal GPU memory.
 
+To try reflection-motion accumulation, set
+`TemporalOptions::reflection_motion` and
+`RenderSettings::capture_reflections` before rendering the first frame. Both
+default to `false`. At 720p with a radius of 16, the temporal plan reserves
+about 1.29 GB more GPU memory. Transmission through glass continues to use the
+visible surface motion.
+
 At 720p and below, offline OIDN may process the whole image on a supported GPU.
 This is faster and can use more temporary GPU memory. Set `memoryBudget` to
 keep OIDN tiled.

@@ -604,6 +604,11 @@
             "stabilizeSparkle": {
               "type": "boolean"
             },
+            "reflectionMotion": {
+              "type": "boolean",
+              "default": false,
+              "description": "Reproject reflected radiance using virtual-image motion."
+            },
             "accumulateGuides": {
               "type": "boolean",
               "default": false
