@@ -25,12 +25,9 @@ if (hit.t > 0.0) {
     continue;
   }
 
-  hitNormal = candidateNormal;
-  tMax = hit.t;
-  isHit = true;
-  isHitCurrent = true;
-  hitPosition = o + tMax * d;
-  hitBarycentric = hit.barycentric;
+  candidateT = hit.t;
+  candidateFaceNormal = candidateNormal;
+  candidateBarycentric = hit.barycentric;
 }
 `;
 };
@@ -86,17 +83,10 @@ if (abs(hScale) > 0.0 && minMaxH > 0) {
   ${getPDMDisplacmentCode(anyHit)}
 
   if (microTriangle.t < tMax) {
-    hitNormal = microTriangle.normal;
-    // TODO support double sided to improve non watertight triangles.
-
-    tMax = microTriangle.t;
-    // TODO barycentric is for micro triangle
-    hitBarycentric = microTriangle.barycentric;
-    hitPosition = o + tMax * d;
-
-    isHitMicroTriangle = true;
-    isHit = true;
-    isHitCurrent = true;
+    candidateT = microTriangle.t;
+    candidateFaceNormal = microTriangle.normal;
+    candidateBarycentric = microTriangle.barycentric;
+    candidateMicro = true;
   }
 }
 else {
@@ -217,16 +207,47 @@ function getBVHTraverseCode(
   blasLayoutMask: number,
   hasAnisotropyDirections: boolean,
   skipTriangleCode = '',
-  perInstanceBounds = false
+  perInstanceBounds = false,
+  compactVertices = false
 ) {
+  const closest = anyHit !== true;
+  const closestCandidate = /* wgsl */ `
+    if (traversalPass == 0) {
+      if (isHit && candidateT >= nearest) {
+        tied = true;
+        continue;
+      }
+      tied = isHit && nearest <= candidateT + rayRoundoff(ray.o, candidateT);
+      nearest = candidateT;
+      tMax = min(queryLimit, nearest + rayRoundoff(ray.o, nearest));
+    } else {
+      // Replay the first pass's limits to preserve stochastic PDM marching.
+      if (candidateT < nearest) {
+        nearest = candidateT;
+        tMax = min(queryLimit, nearest + rayRoundoff(ray.o, nearest));
+      }
+      if (candidateT > tieLimit) { continue; }
+      let runningHash = hashedCounter;
+      hashedCounter = finalHash;
+      let material = resolveSurfaceMaterialIndex(
+        i32(unpackMaterialIndex(bitcast<i32>(insData.z)).x), index, candidateBarycentric${compactVertices ? ', triangleIndex' : ''}
+      );
+      hashedCounter = runningHash;
+      let catcher = materialsBuffer[material].matType == f32(SHADOW_CATCHER);
+      let preferred = !isHit || closestHitPreferred(catcher, sourceInstance, triangleIndex, bestCatcher, bestInstance, bestTriangle);
+      if (!preferred) { continue; }
+      bestCatcher = catcher;
+      bestInstance = sourceInstance;
+      bestTriangle = triangleIndex;
+    }
+`;
   const intersectTriangles = /* wgsl */ `
       let insData = instancesBuffer[insIdx * ${INSTANCE_VEC4_STRIDE}];
       let vertexOffset = vec3i(bitcast<i32>(insData.y));
       for (var k = 0; k < primitiveCount; k++) {
         let triangleIndex = primitiveOffset + k;
         ${skipTriangleCode}
-        // The first continuation still has depth zero until its hit is completed.
-        if ((bounces > 0 || isRefractionRay) && triangleIndex == currentTriangleIndex && insIdx == currentInstanceIndex) {
+        if (triangleIndex == currentTriangleIndex && insIdx == currentInstanceIndex) {
           continue;
         }
         
@@ -237,12 +258,22 @@ function getBVHTraverseCode(
           vertexPosition(index.y),
           vertexPosition(index.z)
         );
-        var isHitCurrent = false;
+        var candidateT = 0.0;
+        var candidateFaceNormal: vec3f;
+        var candidateBarycentric: vec3f;
+        var candidateMicro = false;
 
         ${hasDisplacement
           ? displacementIntersectCode(anyHit, hasAnisotropyDirections)
           : flatIntersectCode()}
-        if (isHitCurrent) {
+        if (candidateT > 0.0 && candidateT <= tMax) {
+          ${closest ? (anyHit === false ? closestCandidate : `if (!(${anyHit})) { ${closestCandidate} }`) : ''}
+          hitT = candidateT;
+          hitBarycentric = candidateBarycentric;
+          hitNormal = candidateFaceNormal;
+          hitPosition = o + candidateT * d;
+          isHitMicroTriangle = candidateMicro;
+          isHit = true;
           ${handleHitCode}
         }
       }
@@ -250,14 +281,32 @@ function getBVHTraverseCode(
   return /* wgsl */ `
 var d = ray.d;
 var o = ray.o;
-var tlasTop = -1;
-${perInstanceBounds ? 'let worldInvD = traversalInverse(ray.d);\nvar invD = worldInvD;' : 'var invD = traversalInverse(d);'}
+${perInstanceBounds ? 'let worldInvD = traversalInverse(ray.d);' : ''}
 var isHitMicroTriangle = false;
 var isHit = false;
 var hitPosition: vec3f;
 var hitNormal: vec3f;
 var hitBarycentric: vec3f;
-
+var hitT = 0.0;
+${closest ? /* wgsl */ `
+let queryLimit = tMax;
+var nearest = queryLimit;
+var tieLimit = queryLimit;
+var tied = false;
+let initialHash = hashedCounter;
+var finalHash = initialHash;
+var bestInstance = -1;
+var bestTriangle = -1;
+var bestCatcher = false;
+for (var traversalPass = 0; traversalPass < 2; traversalPass++) {
+  nearest = queryLimit;
+  tMax = queryLimit;
+  isHit = false;
+` : ''}
+o = ray.o;
+d = ray.d;
+var tlasTop = -1;
+${perInstanceBounds ? 'var invD = worldInvD;' : 'var invD = traversalInverse(d);'}
 
 if (intersectBox(o, bvhBuffer[0].xyz, bvhBuffer[1].xyz, invD, tMax) > 0.0) {
   tlasTop = 0;
@@ -310,6 +359,8 @@ while (tlasTop >= 0) {
     ) {
       let instanceRecord = bvhBuffer[tlasNode + 2 + instanceOffset];
       let insIdx = bitcast<i32>(instanceRecord.x);
+      // Source order survives TLAS rebuilds and leaf reordering.
+      let sourceInstance = bitcast<i32>(instanceRecord.z);
 ${perInstanceBounds ? /* wgsl */ `      // Reject a leaf candidate before transforming the ray or entering its BLAS.
       // Keep the reverse instance order above, including for any-hit alpha RNG.
       let box = bitcast<i32>(instanceRecord.w);
@@ -626,12 +677,20 @@ ${perInstanceBounds ? /* wgsl */ `      // Reject a leaf candidate before transf
     }
   }
 }
+${closest ? /* wgsl */ `
+  if (traversalPass == 1) { hashedCounter = finalHash; break; }
+  if (!tied) { break; }
+  tieLimit = tMax;
+  finalHash = hashedCounter;
+  hashedCounter = initialHash;
+}
+` : ''}
 
 `;
 }
 /** One traversal body for camera/continuation and NEE/catcher rays. Opacity
  * stays inside the query: no BVH cursor or hit record crosses a shading yield. */
-function createUnifiedSceneQuery(hasDisplacement: boolean, hasAnisotropyDirections: boolean, perInstanceBounds: boolean) {
+function createUnifiedSceneQuery(hasDisplacement: boolean, hasAnisotropyDirections: boolean, perInstanceBounds: boolean, compactVertices: boolean) {
   return /* wgsl */ `
 fn intersectSceneQuery(ray: Ray, si: ptr<function, SurfaceInteraction>, bounces: i32, doubleSided: bool, isRefractionRay: bool, mode: i32, maximum: f32, currentTriangleIndex: i32, currentInstanceIndex: i32) -> bool {
   if (mode == 0) { (*si).hit = false; }
@@ -647,7 +706,7 @@ fn intersectSceneQuery(ray: Ray, si: ptr<function, SurfaceInteraction>, bounces:
     } else {
       (*si).triangleIndex = triangleIndex; hitTri = tri; hitIndex = index; hitInsIdx = insIdx;
     }
-  `, hasDisplacement, 'mode == 1', 1, hasAnisotropyDirections, '', perInstanceBounds)}
+  `, hasDisplacement, 'mode == 1', 1, hasAnisotropyDirections, '', perInstanceBounds, compactVertices)}
   if (isHit && mode == 0) {
     completeSurfaceInteraction(si, hitTri, hitBarycentric, hitIndex, isHitMicroTriangle, hitInsIdx, hitNormal, hitPosition, -1);
   }
@@ -658,7 +717,7 @@ fn intersectSceneQuery(ray: Ray, si: ptr<function, SurfaceInteraction>, bounces:
 
 // Raw first-hit contract for native diagnostics. Reuse the same traversal and
 // triangle tests without surface completion or any integrator/alpha sampling.
-export function createSceneHitQueryWgsl(hasAnisotropyDirections = false) {
+export function createSceneHitQueryWgsl(hasAnisotropyDirections = false, compactVertices = false) {
   return /* wgsl */ `
 struct SceneQueryHit {
   hit: bool, instance: i32, record: i32, t: f32, barycentric: vec3f,
@@ -677,8 +736,8 @@ fn querySceneSoftware(ray: Ray) -> SceneQueryHit {
   var shear: vec3f;
   ${getBVHTraverseCode(`
     result.hit = true; result.instance = insIdx; result.record = triangleIndex;
-    result.t = tMax; result.barycentric = hitBarycentric;
-  `, false, false, 1, hasAnisotropyDirections)}
+    result.t = hitT; result.barycentric = hitBarycentric;
+  `, false, false, 1, hasAnisotropyDirections, '', false, compactVertices)}
   return result;
 }
 `;
@@ -722,7 +781,7 @@ hitInsIdx = insIdx;
     hasDisplacement,
     false,
     blasLayoutMask,
-    hasAnisotropyDirections, '', perInstanceBounds
+    hasAnisotropyDirections, '', perInstanceBounds, compactVertices
   )}
 
 ${closestHitHook}  if (isHit) {
@@ -775,7 +834,7 @@ hitInsIdx = insIdx;
         if (insIdx != instanceIndex) {
           continue;
         }
-    `, perInstanceBounds
+    `, perInstanceBounds, compactVertices
   )}
 
   if (isHit) {
@@ -873,7 +932,7 @@ if (isOccluded) {
     hasDisplacement,
     true,
     blasLayoutMask,
-    hasAnisotropyDirections, '', perInstanceBounds
+    hasAnisotropyDirections, '', perInstanceBounds, compactVertices
   )}
 
   return false;
@@ -1185,6 +1244,13 @@ fn randomPickMaterial(m0: vec3i, m1: vec3i, m2: vec3i, bary: vec3f) -> i32 {
     mIdx = m22.x;
   }
   return i32(mIdx);
+}
+
+// The nearest hit fixes the tie window. Ranking against the last winner
+// would allow a chain of near-equal distances to move that window.
+fn closestHitPreferred(catcher: bool, instance: i32, triangle: i32, bestCatcher: bool, bestInstance: i32, bestTriangle: i32) -> bool {
+  if (catcher != bestCatcher) { return !catcher; }
+  return instance < bestInstance || (instance == bestInstance && triangle < bestTriangle);
 }
 
 fn resolveSurfaceMaterialIndex(
@@ -1606,5 +1672,5 @@ ${createIntersectionAlphaWgsl(hasAnisotropyDirections, compactVertices, material
 
 
 
-${queryPoints ? createUnifiedSceneQuery(hasDisplacement, hasAnisotropyDirections, perInstanceBounds) + '\n' : ''}${sceneIntersections || createSceneIntersectionsWgsl({materialHooks, perInstanceBounds, compactVertices, hasDisplacement, hasAnisotropyDirections, hasCoatNormals, blasLayoutMask})}`;
+${queryPoints ? createUnifiedSceneQuery(hasDisplacement, hasAnisotropyDirections, perInstanceBounds, compactVertices) + '\n' : ''}${sceneIntersections || createSceneIntersectionsWgsl({materialHooks, perInstanceBounds, compactVertices, hasDisplacement, hasAnisotropyDirections, hasCoatNormals, blasLayoutMask})}`;
 }

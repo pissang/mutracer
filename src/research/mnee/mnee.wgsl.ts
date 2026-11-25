@@ -67,10 +67,14 @@ ${debug ? '  mneeCounters[0]++; mneeTraceEnabled=seed==0u;if(mneeTraceEnabled){m
   if(pdfA<=0.0){return mneeFail(1u);}
   var direction=ls.direction;
   if(seed>0u&&CAUSTIC_SEED_COUNT>0){direction=normalize(mneeSeed(x,seed)-x);}
-  var ray:Ray;initRay(&ray,x+EPS*direction,direction);var si:SurfaceInteraction;
+  var ray: Ray;
+  var si: SurfaceInteraction;
+  initRay(&ray, offsetSurfaceRay(x, receiver.faceNormal, direction, x), direction);
 ${debug ? '  mneeCounters[12]++;' : ''}
-  intersectScene(ray,&si,0,true,true);
-  if(!si.hit||(seed==0u&&!directional&&distance(x,si.position)>=ls.dist-EPS)){return mneeFail(2u);}
+  si.triangleIndex = receiver.triangleIndex;
+  si.instanceIndex = receiver.instanceIndex;
+  intersectScene(ray, &si, 0, true, true);
+  if(!si.hit||(seed==0u&&!directional&&distance(x,si.position)>=ls.dist-rayRoundoff(x,ls.dist))){return mneeFail(2u);}
   var material: OpenPbrResolvedMaterial;
   var eta = 1.0;var reflection=false;var dielectricEta=1.0;
   for (var iteration=0; iteration<${damping?20:10}; iteration++) {
@@ -100,9 +104,12 @@ ${damping?/* wgsl */ `    let position=si.position;let interfaceInstance=si.inst
     for(var backtrack=0;backtrack<i32(min(8u,rtUniform.loopUnrollGuard*2u));backtrack++){
       let proposal=position-scale*(f.du*step.x+f.dv*step.y);
       if(!all(abs(proposal)<vec3f(INF))||dot(proposal-x,proposal-x)<1e-16){scale*=0.5;continue;}
-      let direction=normalize(proposal-x);initRay(&ray,x+EPS*direction,direction);
+      let direction = normalize(proposal - x);
+      initRay(&ray, offsetSurfaceRay(x, receiver.faceNormal, direction, x), direction);
 ${debug ? '      mneeCounters[12]++;' : ''}
-      intersectScene(ray,&si,0,true,true);
+      si.triangleIndex = receiver.triangleIndex;
+      si.instanceIndex = receiver.instanceIndex;
+      intersectScene(ray, &si, 0, true, true);
       if(si.hit&&si.instanceIndex==interfaceInstance&&si.materialIndex==interfaceMaterial){
         let nextReflection=dot(x-si.position,si.faceNormal)*dot(y-si.position,si.faceNormal)>0.0;
         let nextEta=select(ior,1.0/ior,dot(x-si.position,si.faceNormal)>0.0);
@@ -118,8 +125,13 @@ ${debug ? '      mneeCounters[12]++;' : ''}
     if(!improved){return mneeFail(5u);}`:/* wgsl */ `
     let proposal=si.position-f.du*step.x-f.dv*step.y;
     if(!all(abs(proposal)<vec3f(INF))||dot(proposal-x,proposal-x)<1e-16){return mneeFail(5u);}
-    let direction=normalize(proposal-x);initRay(&ray,x+EPS*direction,direction);
-${debug?'    mneeCounters[12]++;':''}intersectScene(ray,&si,0,true,true);if(!si.hit){return mneeFail(5u);}
+    let direction = normalize(proposal - x);
+    initRay(&ray, offsetSurfaceRay(x, receiver.faceNormal, direction, x), direction);
+${debug ? '    mneeCounters[12]++;' : ''}
+    si.triangleIndex = receiver.triangleIndex;
+    si.instanceIndex = receiver.instanceIndex;
+    intersectScene(ray, &si, 0, true, true);
+    if (!si.hit) { return mneeFail(5u); }
 `}
   }
   let f = mneeFrame(si);
@@ -129,10 +141,14 @@ ${debug?'    mneeCounters[12]++;':''}intersectScene(ray,&si,0,true,true);if(!si.
   let refracted = select(refract(-wi,normal,eta),reflect(-wi,normal),reflection);
   if (dot(refracted,refracted)<0.5 || dot(refracted,wo)<0.9999) { return mneeFail(7u); }
   // Every projection came from x: the first segment already has nearest-hit visibility.
-  initRay(&ray,si.position+EPS*wo,wo);
-  let end = y+EPS*ls.normal;
+  var origin = offsetSurfaceRay(si.position, si.faceNormal, wo, x);
+  if (!reflection) { origin = si.position - wo * surfaceRayRoundoff(si.position, x); }
+  var end = y;
+  if (ls.sourceType == 1u) { end = offsetSurfaceRay(y, ls.normal, -wo, si.position); }
+  let connection = end - origin;
+  initRay(&ray, origin, normalize(connection));
 ${debug ? '  mneeCounters[13]++;' : ''}
-  if (intersectSceneShadow(ray,max(distance(ray.o,end)-EPS,0.0),si.triangleIndex,si.instanceIndex)) { return mneeFail(8u); }
+  if (intersectSceneShadow(ray,length(connection),si.triangleIndex,si.instanceIndex)) { return mneeFail(8u); }
   if (!directional&&!point&&dot(ls.normal,-wo)<=0.0) { return mneeFail(9u); }
   if (ls.sourceType == 2u && i32(analyticLights[ls.sourceIndex].litType)==RECT_LIGHT) {
     let light = analyticLights[ls.sourceIndex];

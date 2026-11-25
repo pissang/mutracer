@@ -49,8 +49,10 @@ ${queryPoints ? '      if (!resumed) {\n' : ''}      var lightSample: LightSampl
       if (lightSample.pdf > 0.0 && orientation >= 0.0) {
         if (dot(lightSample.emission, luminance) * abs(cosThetaL) > 0.0) {
           var ray: Ray;
-          initRay(&ray, si.position + EPS * lightDir, lightDir);
-${queryPoints ? /* wgsl */ `          requestSceneVisibility(ray, lightSample.dist - EPS, si.triangleIndex, si.instanceIndex, 2);
+          let origin = offsetSurfaceRay(si.position, si.faceNormal, lightDir, (*path).ray.o);
+          let distance = lightSample.dist - dot(origin - si.position, lightDir);
+          initRay(&ray, origin, lightDir);
+${queryPoints ? /* wgsl */ `          requestSceneVisibility(ray, distance, si.triangleIndex, si.instanceIndex, 2);
           return ${counts};
         }
       }
@@ -58,7 +60,7 @@ ${queryPoints ? /* wgsl */ `          requestSceneVisibility(ray, lightSample.di
       }
       resumed = false;
       let occluded = ${pendingQuery}.occluded;
-` : /* wgsl */ `          let occluded = intersectSceneShadow(ray, lightSample.dist - EPS, si.triangleIndex,si.instanceIndex);
+` : /* wgsl */ `          let occluded = intersectSceneShadow(ray, distance, si.triangleIndex,si.instanceIndex);
 `}          ${counts} += vec2f(select(0.0, 1.0, occluded), 1.0);
 ${queryPoints ? '' : '        }\n      }'}
     }

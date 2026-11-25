@@ -38,7 +38,7 @@ fn depthQuery(@builtin(global_invocation_id) id: vec3u) {
       }
       return;
     }
-    ray.o = si.position + ray.d * (EPS * 0.02);
+    ray.o = transmissionRayOrigin(si.position, ray.d, ray.o);
   }
 }
 `;

@@ -279,8 +279,9 @@ ${
       return;
     }
     var shadow:Ray;
-    initRay(&shadow,si.position+EPS*direction,direction);
-    if(intersectSceneShadow(shadow,sqrt(distanceSquared)-2.0*EPS,si.triangleIndex,si.instanceIndex)) {
+    let origin = offsetSurfaceRay(si.position, si.faceNormal, direction, incoming.o);
+    initRay(&shadow, origin, direction);
+    if(intersectSceneShadow(shadow, sqrt(distanceSquared) - dot(origin - si.position, direction), si.triangleIndex, si.instanceIndex)) {
       return;
     }
     var m=material;
@@ -427,27 +428,29 @@ ${mode === 'photonMapping' ? 'photonStore(photonIndex,vec4u(0u));' : ''}
     flux*=spectrumRgb(wavelength)/(wavelengthPdf*${SPECTRUM_WAVELENGTH_RANGE}.0);
   }
   var ray:Ray;
-  initRay(&ray,origin+EPS*direction,direction);
+  initRay(&ray, origin + direction * rayRoundoff(origin, targetRadius), direction);
   var chain=0u;
   var singleT=false;
   var mediumOwner = -1;
   var extinction=vec3f(0.0);
   var scattering=vec3f(0.0);
   var si:SurfaceInteraction;
+  si.triangleIndex = -1;
+  si.instanceIndex = -1;
+  var refracted = false;
   for(var depth=0;
 ${mode === 'photonMapping' ? 'depth<=max(rtUniform.bounces,0)' : 'depth<20'}
   ;
   depth++) {
     samplingBounce=u32(depth);
-    if (!HAS_ADJACENT_MEDIA) { si.triangleIndex = -1; }
-    intersectScene(ray,&si,0,true,depth>0);
+    intersectScene(ray, &si, depth, true, refracted);
     if(!si.hit) {
       return;
     }
     var m:OpenPbrResolvedMaterial;
     ${materialCall('&m', 'si', materialHooks, true)}
     if(m.alpha<1.0&&causticEmission1D(causticDim(79u))>=m.alpha) {
-      initRay(&ray,si.position+EPS*ray.d,ray.d);
+      initRay(&ray, transmissionRayOrigin(si.position, ray.d, ray.o), ray.d);
       continue;
     }
     if(m.materialType==SHADOW_CATCHER) {
@@ -543,9 +546,10 @@ ${
   }
   chain++;
   singleT=chain==1u&&((isCausticT(m)&&transmission)||(isCausticR(m)&&!transmission));
-  var originNext = si.position + EPS * next;
-  if (HAS_ADJACENT_MEDIA && transmission) { originNext = transmissionRayOrigin(si.position, next, ray.o); }
-  initRay(&ray,originNext,next);
+    var originNext = offsetSurfaceRay(si.position, si.faceNormal, next, ray.o);
+    if (transmission) { originNext = transmissionRayOrigin(si.position, next, ray.o); }
+    refracted = transmission;
+    initRay(&ray, originNext, next);
 }
 }
 `

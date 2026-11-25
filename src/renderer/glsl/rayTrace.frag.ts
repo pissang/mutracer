@@ -247,7 +247,7 @@ ${sharePrefix ? '  sampleIgnored = false;' : '  bool sampleIgnored = false;'}
       SampleMaterial(si, mat, path);
     }
     else {
-      path.ray.o = si.position + path.ray.d * EPS;
+      path.ray.o = transmissionRayOrigin(si.position, path.ray.d, path.ray.o);
     }
   }
 
@@ -542,7 +542,7 @@ vec4 integrateOnePath(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial ma
   // while the complementary branch continues straight to the scene behind it.
   // Secondary alpha hits remain stochastic to avoid exponential path growth.
   Ray backRay = ray;
-  backRay.o = si.position + ray.d * (EPS * 0.02);
+  backRay.o = transmissionRayOrigin(si.position, ray.d, ray.o);
   SurfaceInteraction backSi = si;
   backSi.albedoSampled = false;
   intersectScene(backRay, backSi, false);
@@ -586,6 +586,8 @@ vec4 integrateOnePath(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial ma
 vec4 integrator(Ray ray, out RayTraceAuxiliary outAux) {
 
   SurfaceInteraction si;
+  si.triangleIndex = -1;
+  si.instanceIndex = -1;
   OpenPbrResolvedMaterial mat;
 
   si.albedoSampled = false;

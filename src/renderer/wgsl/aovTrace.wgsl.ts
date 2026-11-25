@@ -63,7 +63,7 @@ fn aovSurface(rayInput: Ray, si: ptr<function, SurfaceInteraction>, material: pt
     if (!(*si).hit) { return false; }
     ${materialCall('material', '(*si)', materialHooks)}
     if ((*material).materialType != SHADOW_CATCHER && (*material).alpha >= 0.5) { return true; }
-    ray.o = (*si).position + ray.d * (EPS * 0.02);
+    ray.o = transmissionRayOrigin((*si).position, ray.d, ray.o);
   }
   return false;
 }

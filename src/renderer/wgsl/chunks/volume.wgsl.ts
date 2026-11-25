@@ -235,7 +235,7 @@ ${sharePrefix ? '    }\n' : ''}    var winner = -1;
         split = true; coverage = clamp(ma.alpha, 0.0, 1.0);
         primarySi = si; primaryMa = ma;
         si.albedoSampled = false;
-        path.ray.o = si.position + ray.d * (EPS * 0.02);
+        path.ray.o = transmissionRayOrigin(si.position, ray.d, ray.o);
         first = false; resample = true;
         continue;
       }
@@ -285,6 +285,8 @@ ${sharePrefix ? '    spResume = false;\n' : ''}    if (path.abort) {
 }
 fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
   var si: SurfaceInteraction; var ma: OpenPbrResolvedMaterial;
+  si.triangleIndex = -1;
+  si.instanceIndex = -1;
   intersectScene(ray, &si, 0, false, false);
   ${materialCall('&ma', 'si', materialHooks)}
   if (si.hit && HAS_BEVEL && rtUniform.bevel != 0 && ma.bevel > 0.0) { si.normal = getBevelNormal(si, ma.bevel); }

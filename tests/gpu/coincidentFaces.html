@@ -1,0 +1,12 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Coincident faces</title>
+<pre id="result">Running…</pre>
+<script type="module">
+  import {captureCoincidentFaces} from './coincidentFaces.ts';
+  const params = new URLSearchParams(location.search);
+  window.coincidentFaces = captureCoincidentFaces(params.has('webgl') ? 'webgl' : 'webgpu', !params.has('capture'));
+  window.coincidentFaces.then(({results}) => {
+    document.querySelector('#result').textContent = JSON.stringify(results.map(({pixels, ...row}) => row), null, 2);
+  }, error => {document.querySelector('#result').textContent = error.stack;});
+</script>

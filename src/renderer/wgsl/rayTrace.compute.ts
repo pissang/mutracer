@@ -157,6 +157,8 @@ export default function rayTraceCompute(options: RayTraceShaderOptions, sceneInt
   ${storage}
   ${materialStorage}
   ${interaction}.albedoSampled = false;
+  ${interaction}.triangleIndex = -1;
+  ${interaction}.instanceIndex = -1;
   ${interaction}.mediumType = 0;
   ${interaction}.mediumExtinction = vec3f(0.0);
   ${interaction}.mediumScattering = vec3f(0.0);
@@ -457,7 +459,7 @@ ${queryPoints ? '      shadeMaterial = true;' : '      SampleMaterial(si, ma, pa
     else {
       // Alpha-null traversal does not consume the receiver event. The first
       // accepted surface behind it is still the receiver for NEE/AOVs.
-      (*path).ray.o = (*si).position + (*path).ray.d * EPS;
+      (*path).ray.o = transmissionRayOrigin((*si).position, (*path).ray.d, (*path).ray.o);
     }
   }
 
@@ -785,7 +787,7 @@ fn integrateOnePath(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray: Ray, 
   var branchMa = *ma;
   var branchAux = *outAux;
   if (split) {
-    branchRay.o = (*si).position + ray.d * (EPS * 0.02);
+    branchRay.o = transmissionRayOrigin((*si).position, ray.d, ray.o);
     branchSi.albedoSampled = false;
   }
   var back: vec4f;
@@ -849,7 +851,7 @@ ${primaryGuides}
       coverage = clamp(ma.alpha, 0.0, 1.0);
       split = si.hit & ((ma.materialType == STANDARD) | (ma.materialType == UNLIT)) & (coverage < 1.0);
       if (split) {
-        path.ray.o = si.position + ray.d * (EPS * 0.02);
+        path.ray.o = transmissionRayOrigin(si.position, ray.d, ray.o);
         si.albedoSampled = false;
         continue;
       }
