@@ -563,19 +563,21 @@ fn reflection_window_accumulates_a_translating_highlight_in_both_directions() {
     for (frame, at, intensity) in [(0, 8, 3.), (1, 6, 1.)] {
         let color: Vec<_> = (0..pixels)
             .map(|i| {
-                let v = if i % 16 == at { intensity } else { 0. };
+                let highlight = if i / 16 == 2 { 10 } else { at };
+                let v = if i % 16 == highlight { intensity } else { 0. };
                 [v, v, v, 1.]
             })
             .collect();
         let mut records = vec![[0.; 4]; pixels * 6];
-        for entry in &mut records[4 * pixels..].chunks_exact_mut(2) {
+        for (i, entry) in records[4 * pixels..].chunks_exact_mut(2).enumerate() {
             entry[0] = [
                 f32::from_bits(1),
                 f32::from_bits(2),
                 6.,
                 f32::from_bits(0x3c000000),
             ];
-            entry[1] = if frame == 0 {
+            // Center capture is bottom-first. Keep one output row's motion invalid.
+            entry[1] = if frame == 0 || i / 16 == 5 {
                 [1e20; 4]
             } else {
                 [2., 0., 2., 0.]
@@ -610,11 +612,14 @@ fn reflection_window_accumulates_a_translating_highlight_in_both_directions() {
         passes.window(frame, frame, 0, true);
         passes.window(frame, 1 - frame, 1, true);
         passes.window(frame, frame, 2, true);
-        let result = passes.read::<[f32; 4]>(&passes["window"]).unwrap()[4 * 16 + at];
-        assert!(
-            result[..3].iter().all(|v| (v - expected).abs() < 1e-6),
-            "{result:?}"
-        );
-        assert_eq!(result[3], 1.);
+        let result = passes.read::<[f32; 4]>(&passes["window"]).unwrap();
+        for index in [4 * 16 + at, 2 * 16 + 10] {
+            let pixel = result[index];
+            assert!(
+                pixel[..3].iter().all(|v| (v - expected).abs() < 1e-6),
+                "{pixel:?}"
+            );
+            assert_eq!(pixel[3], 1.);
+        }
     }
 }

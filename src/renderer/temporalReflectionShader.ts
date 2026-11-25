@@ -153,15 +153,17 @@ fn accumulateReflection(
   let amount = dominant*virtualWeight(x,land,q,record);
   let virtualTap = vec2i(floor(land.xy+0.5));
   let srcHdr = radiance(tap.at,p.source);
-  let reflectedSurface = min(surfaceRgb,reflection(tap.at,p.source) *
-    (surfaceRgb/max(srcHdr,vec3f(1e-12))));
+  let positiveSurface = max(surfaceRgb,vec3f(0));
+  let reflectedSurface = min(positiveSurface,reflection(tap.at,p.source) *
+    (positiveSurface/max(srcHdr,vec3f(1e-12))));
   let srcEndpoint = endpoint(tap.at,p.source);
   let oldShift = textureLoad(virtualMotions,x,i32(p.current),0);
   let delta = select(oldShift.xy,oldShift.zw,(p.mode&16u)!=0u);
   let localMotion = motionSample(x,p.current).xy;
   let slip = length(delta-localMotion)*f32(abs(p.delta));
   let matchSurface = select(0.,reflectionAgreement(record,srcEndpoint),all(srcEndpoint.xy==record.xy));
-  let mismatch = dominant*smoothstep(.25,2.,slip)*(1.-matchSurface);
+  let validDelta = record.z != 0u && all(abs(delta) < vec2f(p.size));
+  let mismatch = select(0.,dominant*smoothstep(.25,2.,slip)*(1.-matchSurface),validDelta);
   let surfaceWeight = weight*(1.-amount)*(1.-mismatch);
   let virtualW = tent*amount;
   total[index] += vec4f((surfaceRgb-reflectedSurface)*weight,weight);
