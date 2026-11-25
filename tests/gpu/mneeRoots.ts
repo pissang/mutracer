@@ -26,7 +26,7 @@ export async function enumerateRoots(viewer:any,batches=4) {
     var ray=initCameraRay((vec2f(${pixel[0]+.5},${128-pixel[1]-.5}))/128.0);
     var si:SurfaceInteraction;var material:OpenPbrResolvedMaterial;var prefix=0u;
     for(var depth=0u;depth<8u;depth++){
-     si.triangleIndex=-1;intersectScene(ray,&si,0,true,depth>0u);
+     si.triangleIndex=-1;intersectScene(ray,&si,0,true,depth>0u,false);
      if(!si.hit){outColor[index]=vec4f(0.0);return;}
      getMaterial(&material,si.materialIndex,si.uv,si.uv1,si.instanceIndex,si.vertexColor);
      let view=-ray.d;var n=si.normal;var ndv=dot(n,view);
@@ -45,7 +45,7 @@ export async function enumerateRoots(viewer:any,batches=4) {
     var root=vec3f(INF);let value=mneeSolve(si,prepared,ls,1u,&root);
     let valid=all(root!=vec3f(INF));var reason=0u;for(var k=1u;k<=10u;k++){if(mneeCounters[k]>0u){reason=k;}}
     var kind=0.0;
-    if(valid){var hit:SurfaceInteraction;hit.triangleIndex=-1;var connection:Ray;let direction=normalize(root-si.position);initRay(&connection,si.position+EPS*direction,direction);intersectScene(connection,&hit,0,true,true);kind=select(1.0,2.0,dot(si.position-root,hit.faceNormal)*dot(light-root,hit.faceNormal)>0.0);}
+    if(valid){var hit:SurfaceInteraction;hit.triangleIndex=-1;var connection:Ray;let direction=normalize(root-si.position);initRay(&connection,si.position+EPS*direction,direction);intersectScene(connection,&hit,0,true,true,false);kind=select(1.0,2.0,dot(si.position-root,hit.faceNormal)*dot(light-root,hit.faceNormal)>0.0);}
     outColor[index]=vec4f(select(vec3f(0.0),root,valid),kind);
     outNormal[index]=vec4f(value,f32(reason));outAlbedo[index]=vec4f(si.position,f32(prefix));
    }`;

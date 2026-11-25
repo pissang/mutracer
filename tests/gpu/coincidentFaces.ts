@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import {Engine, Render} from '../../src/main.js';
-import {THREESync} from '../../src/three.js';
+import {fromTHREECamera, THREESync} from '../../src/three.js';
 
 const width = 48;
 const height = 48;
@@ -59,8 +59,37 @@ export function firstSourceOverlapFixture(catcherFirst = false) {
   return {scene, camera};
 }
 
-export const cases = [
-  {name: 'glass-contact', gap: 0, scale: 1, subdivisions: 0, grazing: false},
+export function reflectedCatcherFixture() {
+  const {scene, camera} = fixture(0, 1, 1, false);
+  scene.clear();
+  const mirror = plane(0, new THREE.MeshStandardMaterial({color: 0xffffff, metalness: 1, roughness: 0}));
+  const ground = plane(0, new THREE.MeshBasicMaterial({color: 0x00ff00}));
+  const catcherMaterial = new THREE.MeshStandardMaterial();
+  catcherMaterial.userData.mutracerShadowCatcher = true;
+  const catcher = plane(0, catcherMaterial, 5);
+  // The camera starts between the mirror and the downward-facing receivers.
+  for (const receiver of [ground, catcher]) {
+    receiver.rotation.x = Math.PI;
+    receiver.position.y = 4;
+  }
+  scene.add(mirror, catcher, ground);
+  scene.updateMatrixWorld(true);
+  return {scene, camera};
+}
+
+interface CoincidentCase {
+  name: string;
+  gap: number;
+  scale: number;
+  subdivisions: number;
+  grazing: boolean;
+  reverse?: boolean;
+  reportOnly?: boolean;
+}
+
+export const cases: CoincidentCase[] = [
+  // The exit face and the ground are coplanar only in the contact case.
+  {name: 'glass-contact', gap: 0, scale: 1, subdivisions: 0, grazing: false, reportOnly: true},
   {name: 'glass-0.1mm', gap: .0001, scale: 1, subdivisions: 0, grazing: false},
   {name: 'glass-1mm', gap: .001, scale: 1, subdivisions: 0, grazing: false},
   {name: 'glass-small', gap: .0001, scale: .001, subdivisions: 0, grazing: false},
@@ -71,8 +100,60 @@ export const cases = [
   }))),
   {name: 'catcher-reversed', gap: 0, scale: 1, subdivisions: 5, grazing: true, reverse: true},
   {name: 'first-source-overlap', gap: 0, scale: 1, subdivisions: 1, grazing: false},
-  {name: 'first-source-overlap-catcher', gap: 0, scale: 1, subdivisions: 1, grazing: false}
+  {name: 'first-source-overlap-catcher', gap: 0, scale: 1, subdivisions: 1, grazing: false},
+  {name: 'reflected-catcher', gap: 0, scale: 1, subdivisions: 0, grazing: false, reportOnly: true}
 ];
+
+export function sceneForCase(entry: CoincidentCase) {
+  if (entry.name === 'reflected-catcher') return reflectedCatcherFixture();
+  if (entry.name.startsWith('first-source-overlap')) return firstSourceOverlapFixture(entry.name.endsWith('-catcher'));
+  return fixture(entry.gap, entry.scale, entry.subdivisions, entry.grazing, entry.reverse);
+}
+
+async function checkPrimaryOutputs(engine: Engine, render: Render) {
+  const scene = new THREE.Scene();
+  const catcher = new THREE.MeshStandardMaterial();
+  catcher.userData.mutracerShadowCatcher = true;
+  const ground = new THREE.MeshStandardMaterial({color: 0x00ff00, emissive: 0x00ff00});
+  scene.add(plane(0, catcher, 5), plane(0, ground));
+  const camera = new THREE.PerspectiveCamera(35, 1, .001, 40);
+  camera.position.set(0, 2, 0);
+  camera.up.set(0, 0, -1);
+  camera.lookAt(0, 0, 0);
+  const sync = new THREESync(engine, {scene, camera});
+  try {
+    sync.update();
+    const groundMesh = sync.scene!.meshes[1];
+    groundMesh.aovId = 23;
+    engine.camera = fromTHREECamera(camera, {fStop: .7, focusDistance: 2});
+    engine.update();
+    render.aovs = ['id', 'depth'];
+    await render.converge({samples, sampleSequenceOffset: 17, timeoutMs: 60000});
+    const [hdr, albedo, normal, id, depth] = await Promise.all([
+      render.readPixels('hdr'), render.readPixels('albedo'), render.readPixels('normal'),
+      render.readPixels('id'), render.readPixels('depth')
+    ]);
+    const depthQuery = await engine.readDepthSamples({x: .5, y: .5, size: .4});
+    if ([hdr, albedo, normal, id, depth].some(output => output.data.length !== width * height * 4)
+        || depthQuery?.length !== 49) throw Error('Incomplete primary outputs');
+    const misses = {hdr: 0, albedo: 0, normal: 0, id: 0, depth: 0,
+      depthQuery: depthQuery.filter(v => !(Math.abs(v - 2) < .001)).length};
+    for (let i = 0; i < hdr.data.length; i += 4) {
+      for (const [kind, output] of [['hdr', hdr], ['albedo', albedo]] as const) {
+        const [r, g, b] = output.data.subarray(i, i + 3);
+        if (!(Math.abs(r) < .02 && g >= .98 && Math.abs(b) < .02)) misses[kind]++;
+      }
+      const [nx, ny, nz, valid] = normal.data.subarray(i, i + 4);
+      if (!(Math.abs(nx - .5) < .02 && ny >= .98 && Math.abs(nz - .5) < .02 && valid >= .98)) misses.normal++;
+      if (id.data[i] !== groundMesh.aovId) misses.id++;
+      if (!(Math.abs(depth.data[i] - 2) < .001)) misses.depth++;
+    }
+    if (engine.lastError || render.samples !== samples || Object.values(misses).some(n => n !== 0)) {
+      throw Error(`Primary outputs disagree: ${JSON.stringify(misses)} ${engine.lastError ?? ''}`);
+    }
+    return misses;
+  } finally {sync.dispose();}
+}
 
 export async function captureCoincidentFaces(backend: 'webgpu' | 'webgl', verify = true) {
   const engine = new Engine({canvas: document.createElement('canvas'), backend});
@@ -82,9 +163,7 @@ export async function captureCoincidentFaces(backend: 'webgpu' | 'webgl', verify
     const info = await engine.init();
     if (engine.backend !== backend) throw Error(`Expected ${backend}, got ${engine.backend}`);
     for (const entry of cases) {
-      const sync = new THREESync(engine, entry.name.startsWith('first-source-overlap') ?
-        firstSourceOverlapFixture(entry.name.endsWith('-catcher')) :
-        fixture(entry.gap, entry.scale, entry.subdivisions, entry.grazing, entry.reverse));
+      const sync = new THREESync(engine, sceneForCase(entry));
       try {
         sync.update(); engine.update();
         await render.converge({samples, sampleSequenceOffset: 17, timeoutMs: 60000});
@@ -99,10 +178,11 @@ export async function captureCoincidentFaces(backend: 'webgpu' | 'webgl', verify
             checked++;
           }
         }
-        if (verify && incorrect) throw Error(`${backend} ${entry.name}: ${incorrect}/${checked} pixels missed the ground`);
-        results.push({name: entry.name, incorrect, checked, pixels});
+        if (verify && !entry.reportOnly && incorrect) throw Error(`${backend} ${entry.name}: ${incorrect}/${checked} pixels missed the ground`);
+        results.push({name: entry.name, reportOnly: !!entry.reportOnly, incorrect, checked, pixels});
       } finally {sync.dispose();}
     }
-    return {backend, adapter: info.adapterName, width, height, samples, results};
+    const primaryOutputs = verify ? await checkPrimaryOutputs(engine, render) : undefined;
+    return {backend, adapter: info.adapterName, width, height, samples, results, primaryOutputs};
   } finally {render.dispose(); engine.dispose();}
 }

@@ -228,10 +228,11 @@ selects `blend`. With none of these inputs, `auto` selects `opaque`.
 | `unlit` | Shows emission without scattering or lighting other surfaces |
 | `bevelSize` | Rounded-edge shading radius in scene units; `0` disables (see below) |
 
-When a shadow catcher and a regular surface are at the same distance within
-floating-point precision, the regular surface takes precedence. This keeps
-the rendered ground visible where it overlaps a catcher. For a transparent
-plate with shadows, leave those areas covered only by the catcher.
+Where a shadow catcher and a regular surface are coplanar in the camera's
+direct view, the regular surface takes precedence. To keep part of the ground
+transparent while retaining shadows, use only the catcher there. In
+reflections and refractions, either coplanar surface can appear. Separate the
+surfaces to get a consistent result.
 
 **Shader bevel.** `bevelSize > 0` rounds hard edges in shading only, without
 changing geometry or silhouettes. It samples nearby surface normals of the same

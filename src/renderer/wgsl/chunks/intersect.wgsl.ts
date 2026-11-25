@@ -4,7 +4,7 @@
 
 import type {MaterialShaderHooks} from '../materialShaderHooks.js';
 import { uvProjectionConstants } from '../../materialConstants.js';
-import { INSTANCE_VEC4_STRIDE, INSTANCE_TIE_ISOLATED_VEC4 } from '../../bvhAccel.js';
+import { INSTANCE_VEC4_STRIDE } from '../../bvhAccel.js';
 import pdm_displacementWgsl from './pdm_displacement.wgsl.js';
 import { createIntersectionAlphaWgsl } from './intersectionAlpha.wgsl.js';
 
@@ -208,18 +208,20 @@ function getBVHTraverseCode(
   hasAnisotropyDirections: boolean,
   skipTriangleCode = '',
   perInstanceBounds = false,
-  compactVertices = false
+  compactVertices = false,
+  resolveCoincident = 'resolveCoincident'
 ) {
   const closest = anyHit !== true;
   const closestCandidate = /* wgsl */ `
     if (traversalPass == 0) {
       if (isHit && candidateT >= nearest) {
-        tied = true;
+        tied = ${resolveCoincident};
         continue;
       }
-      tied = isHit && nearest <= candidateT + rayRoundoff(ray.o, candidateT);
+      tied = ${resolveCoincident} && isHit && nearest <= candidateT + rayRoundoff(ray.o, candidateT);
       nearest = candidateT;
-      tMax = min(queryLimit, nearest + rayRoundoff(ray.o, nearest));
+      tMax = nearest;
+      if (${resolveCoincident}) { tMax = min(queryLimit, nearest + rayRoundoff(ray.o, nearest)); }
     } else {
       // Replay the first pass's limits to preserve stochastic PDM marching.
       if (candidateT < nearest) {
@@ -682,8 +684,6 @@ ${perInstanceBounds ? /* wgsl */ `      // Reject a leaf candidate before transf
 ${closest ? /* wgsl */ `
   if (traversalPass == 1) { hashedCounter = finalHash; break; }
   if (!tied) { break; }
-  let tieIsolation = instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + ${INSTANCE_TIE_ISOLATED_VEC4}].w;
-  if (tieIsolation == 1.0 || (tieIsolation == 2.0 && !HAS_SHADOW_CATCHER)) { break; }
   tieLimit = tMax;
   finalHash = hashedCounter;
   hashedCounter = initialHash;
@@ -696,7 +696,7 @@ ${closest ? /* wgsl */ `
  * stays inside the query: no BVH cursor or hit record crosses a shading yield. */
 function createUnifiedSceneQuery(hasDisplacement: boolean, hasAnisotropyDirections: boolean, perInstanceBounds: boolean, compactVertices: boolean) {
   return /* wgsl */ `
-fn intersectSceneQuery(ray: Ray, si: ptr<function, SurfaceInteraction>, bounces: i32, doubleSided: bool, isRefractionRay: bool, mode: i32, maximum: f32, currentTriangleIndex: i32, currentInstanceIndex: i32) -> bool {
+fn intersectSceneQuery(ray: Ray, si: ptr<function, SurfaceInteraction>, bounces: i32, doubleSided: bool, isRefractionRay: bool, resolveCoincident: bool, mode: i32, maximum: f32, currentTriangleIndex: i32, currentInstanceIndex: i32) -> bool {
   if (mode == 0) { (*si).hit = false; }
   if (rtUniform.isEmpty > 0) { return false; }
   let shadowRayTMax = min(max(maximum, 0.0), RAY_MAX_DISTANCE);
@@ -741,7 +741,7 @@ fn querySceneSoftware(ray: Ray) -> SceneQueryHit {
   ${getBVHTraverseCode(`
     result.hit = true; result.record = triangleIndex;
     result.t = hitT; result.barycentric = hitBarycentric;
-  `, false, false, 1, hasAnisotropyDirections, '', false, compactVertices)}
+  `, false, false, 1, hasAnisotropyDirections, '', false, compactVertices, 'true')}
   result.instance = hitInsIdx;
   return result;
 }
@@ -758,7 +758,7 @@ export function createSceneIntersectionsWgsl({
   blasLayoutMask?: number; closestName?: string; shadowName?: string; bevelName?: string; closestHitHook?: string;
 }) {
   return /* wgsl */ `// Traverse BVH, find closest triangle intersection, and return surface information
-fn ${closestName}(ray: Ray, si: ptr<function, SurfaceInteraction>, bounces: i32, doubleSided: bool, isRefractionRay: bool) {
+fn ${closestName}(ray: Ray, si: ptr<function, SurfaceInteraction>, bounces: i32, doubleSided: bool, isRefractionRay: bool, resolveCoincident: bool) {
 
   (*si).hit = false;
 
@@ -835,7 +835,7 @@ hitIndex = index;
         if (insIdx != instanceIndex) {
           continue;
         }
-    `, perInstanceBounds, compactVertices
+    `, perInstanceBounds, compactVertices, 'false'
   )}
 
   if (isHit) {

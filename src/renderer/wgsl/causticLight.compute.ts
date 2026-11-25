@@ -443,7 +443,7 @@ ${mode === 'photonMapping' ? 'depth<=max(rtUniform.bounces,0)' : 'depth<20'}
   ;
   depth++) {
     samplingBounce=u32(depth);
-    intersectScene(ray, &si, depth, true, refracted);
+    intersectScene(ray, &si, depth, true, refracted, false);
     if(!si.hit) {
       return;
     }

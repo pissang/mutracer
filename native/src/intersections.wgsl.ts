@@ -1,4 +1,4 @@
-import {INSTANCE_VEC4_STRIDE, INSTANCE_TIE_ISOLATED_VEC4} from '../../src/renderer/bvhAccel.js';
+import {INSTANCE_VEC4_STRIDE} from '../../src/renderer/bvhAccel.js';
 import {materialAlphaModeConstants} from '../../src/renderer/materialConstants.js';
 import {GROUP, HWRT_BINDING} from './layout.js';
 import {cameraJitterWgsl} from '../../src/renderer/wgsl/chunks/sampling.wgsl.js';
@@ -10,7 +10,7 @@ import type {WGPUShaderFeatures} from '../../src/renderer/wgpuShaderSource.js';
 // Both supply identity only, never a software hit test.
 export function nativeIntersections(features: WGPUShaderFeatures, empty: boolean, diagnostic = false, pathDiagnostic = false, indexed = false, opaqueClosest = false): string {
   if (empty) return /* wgsl */ `
-fn intersectScene(ray: Ray, si: ptr<function, SurfaceInteraction>, bounces: i32, doubleSided: bool, isRefractionRay: bool) { (*si).hit = false; }
+fn intersectScene(ray: Ray, si: ptr<function, SurfaceInteraction>, bounces: i32, doubleSided: bool, isRefractionRay: bool, resolveCoincident: bool) { (*si).hit = false; }
 fn intersectSceneShadow(ray: Ray, lightDistance: f32, currTriangleIndex: i32,currInstanceIndex:i32) -> bool { return false; }
 fn intersectSceneBevel(ray: Ray, si: ptr<function, SurfaceInteraction>, instanceIndex: i32, maxDistance: f32) { (*si).hit = false; }
 `;
@@ -167,13 +167,11 @@ ${diagnostic ? `    if (instance == mtWantedInstance && record == mtWantedRecord
 }
 
 fn mtClosest(ray: Ray, limit: f32, onlyInstance: i32, skipRecord: i32, skipInstance: i32,
-    doubleSided: bool, isRefractionRay: bool) -> MtHit {
+    doubleSided: bool, isRefractionRay: bool, resolveCoincident: bool) -> MtHit {
   let queryHash = hashedCounter;
   var miss: MtHit;
   let nearest = mtTrace(ray, limit, false, onlyInstance, skipRecord, skipInstance, doubleSided, isRefractionRay, miss, queryHash);
-  if (nearest.kind == RAY_QUERY_INTERSECTION_NONE) { return nearest; }
-  let tieIsolation = instancesBuffer[nearest.instance * ${INSTANCE_VEC4_STRIDE} + ${INSTANCE_TIE_ISOLATED_VEC4}].w;
-  if (tieIsolation == 1.0 || (tieIsolation == 2.0 && !HAS_SHADOW_CATCHER)) { return nearest; }
+  if (!resolveCoincident || nearest.kind == RAY_QUERY_INTERSECTION_NONE) { return nearest; }
   return mtTrace(ray, limit, false, onlyInstance, skipRecord, skipInstance, doubleSided, isRefractionRay, nearest, queryHash);
 }
 fn mtSurfaceMaterial(fallback: i32, index: vec3i, barycentric: vec3f, record: i32) -> i32 {
@@ -193,8 +191,8 @@ fn mtComplete(ray: Ray, si: ptr<function, SurfaceInteraction>, hit: MtHit) {
   completeSurfaceInteraction(si, mtTriangle(index), hit.barycentric, index, hit.micro,
     hit.instance, hit.normal, o + hit.t * d, -1);
 }
-fn intersectScene(ray: Ray, si: ptr<function, SurfaceInteraction>, bounces: i32, doubleSided: bool, isRefractionRay: bool) {
-  let hit = mtClosest(ray, RAY_MAX_DISTANCE, -1, (*si).triangleIndex, (*si).instanceIndex, doubleSided, isRefractionRay);
+fn intersectScene(ray: Ray, si: ptr<function, SurfaceInteraction>, bounces: i32, doubleSided: bool, isRefractionRay: bool, resolveCoincident: bool) {
+  let hit = mtClosest(ray, RAY_MAX_DISTANCE, -1, (*si).triangleIndex, (*si).instanceIndex, doubleSided, isRefractionRay, resolveCoincident);
 ${pathDiagnostic ? `  mtPathRecord(ray, (*si).albedoSampled, hit.kind != 0u, hit.instance, hit.record, hit.t, hit.barycentric, bounces, doubleSided, isRefractionRay, (*si).triangleIndex);` : ''}
   mtComplete(ray, si, hit);
 }
@@ -205,7 +203,7 @@ fn intersectSceneShadow(ray: Ray, lightDistance: f32, currTriangleIndex: i32,cur
   return mtTrace(ray, limit, true, -1, currTriangleIndex, currInstanceIndex, true, false, miss, hashedCounter).kind != 0u;
 }
 fn intersectSceneBevel(ray: Ray, si: ptr<function, SurfaceInteraction>, instanceIndex: i32, maxDistance: f32) {
-  mtComplete(ray, si, mtClosest(ray, maxDistance, instanceIndex, -1, -1, true, false));
+  mtComplete(ray, si, mtClosest(ray, maxDistance, instanceIndex, -1, -1, true, false, false));
 }
 `;
 }
@@ -281,7 +279,7 @@ ${cameraJitterWgsl('size', !!features.sampleIndexedRandomJitter)}
   }
   let software = ${backend === 'hardware' ? 'SceneQueryHit(false, -1, -1, RAY_MAX_DISTANCE, vec3f(0.0))' : 'querySceneSoftware(ray)'};
   ${empty || backend === 'software' ? '' : 'mtWantedInstance = software.instance; mtWantedRecord = software.record;'}
-  ${empty || backend === 'software' ? 'let hardware = software;' : `let hw = mtClosest(ray, RAY_MAX_DISTANCE, -1, -1, -1, false, false);
+  ${empty || backend === 'software' ? 'let hardware = software;' : `let hw = mtClosest(ray, RAY_MAX_DISTANCE, -1, -1, -1, false, false, true);
   let hardware = SceneQueryHit(hw.kind != 0u, select(-1, hw.instance, hw.kind != 0u),
     select(-1, hw.record, hw.kind != 0u), select(RAY_MAX_DISTANCE, hw.t, hw.kind != 0u), hw.barycentric);`}
   outColor[idx] = bitcast<vec4f>(vec4u(u32(software.hit), bitcast<u32>(software.instance), bitcast<u32>(software.record), bitcast<u32>(software.t)));

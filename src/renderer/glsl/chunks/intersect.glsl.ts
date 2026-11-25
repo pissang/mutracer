@@ -3,14 +3,15 @@ import { mapAlphaUsageConstants } from '../../materialConstants.js';
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
 
-import { INSTANCE_VEC4_STRIDE, INSTANCE_TIE_ISOLATED_VEC4 } from '../../bvhAccel.js';
+import { INSTANCE_VEC4_STRIDE } from '../../bvhAccel.js';
 import { createShaderMixin, glsl, Shader } from '../../shader.js';
 
 function getBVHTraverseCode(
   handleHitCode: string,
   skipTriangleCode = '',
   initialTMax = 'RAY_MAX_DISTANCE',
-  closest = true
+  closest = true,
+  resolveCoincident = 'resolveCoincident'
 ) {
   const intersectTriangles = glsl`
         ivec3 vertexOffset = ivec3(floatBitsToInt(fetchIns(insIdx * ${INSTANCE_VEC4_STRIDE}).y));
@@ -45,12 +46,12 @@ function getBVHTraverseCode(
               if (hit.t > tMax) continue;
               if (traversalPass == 0) {
                 if (isHit && hit.t >= nearest) {
-                  tied = true;
+                  tied = ${resolveCoincident};
                   continue;
                 }
-                tied = isHit && nearest <= hit.t + rayRoundoff(ray.o, hit.t);
+                tied = ${resolveCoincident} && isHit && nearest <= hit.t + rayRoundoff(ray.o, hit.t);
                 nearest = hit.t;
-                tMax = min(queryLimit, nearest + rayRoundoff(ray.o, nearest));
+                tMax = ${resolveCoincident} ? min(queryLimit, nearest + rayRoundoff(ray.o, nearest)) : nearest;
               } else {
                 if (hit.t < nearest) {
                   nearest = hit.t;
@@ -352,15 +353,6 @@ function getBVHTraverseCode(
   }
 ${closest ? glsl`
   if (!tied || traversalPass == 1) break;
-  float tieIsolation = fetchIns(hitInsIdx * ${INSTANCE_VEC4_STRIDE} + ${INSTANCE_TIE_ISOLATED_VEC4}).w;
-  if (tieIsolation == 1.0) break;
-  if (tieIsolation == 2.0) {
-    uint savedHash = hashedCounter;
-    int fallback = int(unpackMaterialIndex(floatBitsToInt(fetchIns(hitInsIdx * ${INSTANCE_VEC4_STRIDE}).z)).x);
-    int material = surfaceMaterialIndex(fallback, hitIndex, hitBarycentric);
-    hashedCounter = savedHash;
-    if (int(getMatType(material)) != SHADOW_CATCHER) break;
-  }
   tieLimit = tMax;
   }
 ` : ''}
@@ -990,7 +982,7 @@ vec3 getShear(vec3 d, int maxDim) {
 }
 
 // Traverse BVH, find closest triangle intersection, and return surface information
-void intersectScene(in Ray ray, inout SurfaceInteraction si, bool doubleSided) {
+void intersectScene(in Ray ray, inout SurfaceInteraction si, bool doubleSided, bool resolveCoincident) {
   si.hit = false;
 
   if (isEmptyScene) {
@@ -1081,7 +1073,9 @@ ${getBVHTraverseCode(
             continue;
           }
 `,
-  'maxDistance'
+  'maxDistance',
+  true,
+  'false'
 )}
 
   if (isHit) {

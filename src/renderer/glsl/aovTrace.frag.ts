@@ -44,7 +44,7 @@ Ray aovRay(vec2 uv) {
 bool aovSurface(Ray inputRay, out SurfaceInteraction si, out OpenPbrResolvedMaterial material) {
   Ray ray=inputRay; si.triangleIndex=-1; si.instanceIndex=-1;
   for(int layer=0;layer<32;layer++) {
-    intersectScene(ray,si,false); if(!si.hit) return false;
+    intersectScene(ray, si, false, layer == 0); if(!si.hit) return false;
     getMaterial(material,si.materialIndex,si.uv,si.uv1,si.instanceIndex,si.vertexColor);
     if(material.materialType!=SHADOW_CATCHER && material.alpha>=0.5) return true;
     ray.o=transmissionRayOrigin(si.position,ray.d,ray.o);

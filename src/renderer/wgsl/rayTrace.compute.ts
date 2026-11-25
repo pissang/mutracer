@@ -747,8 +747,8 @@ ${sharePrefix ? /* wgsl */ `  let spSlot = spCall; spCall++;
   // paths. Include the final query, which the legacy bounce completed before
   // testing its event budget. Even a zero-bounce back branch resolves guides.
   for (var event = ${sharePrefix ? 'spEvent' : '0'}; event <= eventLimit; event++) {
-    ${sharedGraph ? materialQuery(sharePrefix ? '!spResume && ((event != 0) | initialQuery)' : '(event != 0) | initialQuery', 'intersectScene(path.ray, si, depth, event != 0, path.isNextRefraction);', 'ma', '(*si)', 'select(u32(depth), u32(depth + 1), (event != 0) & !sampleIgnored)', materialHooks, '(*si).hit & (event < eventLimit)') : `if (${sharePrefix ? '!spResume && ((event != 0) | initialQuery)' : '(event != 0) | initialQuery'}) {
-      intersectScene(path.ray, si, depth, event != 0, path.isNextRefraction);
+    ${sharedGraph ? materialQuery(sharePrefix ? '!spResume && ((event != 0) | initialQuery)' : '(event != 0) | initialQuery', 'intersectScene(path.ray, si, depth, event != 0, path.isNextRefraction, false);', 'ma', '(*si)', 'select(u32(depth), u32(depth + 1), (event != 0) & !sampleIgnored)', materialHooks, '(*si).hit & (event < eventLimit)') : `if (${sharePrefix ? '!spResume && ((event != 0) | initialQuery)' : '(event != 0) | initialQuery'}) {
+      intersectScene(path.ray, si, depth, event != 0, path.isNextRefraction, false);
       ${materialCall('ma', '(*si)', materialHooks)}
     }`}
     if (event == 0) {
@@ -839,8 +839,8 @@ ${primaryVariables}
   // Share one query/material graph across the primary, back and front paths.
   // Complete the back path before the front path to preserve random streams.
   for (var step = 0; step < (${maxPathEvents} + 1) * 2 + 2; step++) {
-    ${sharedGraph ? materialQuery('query', 'intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction);', '&ma', 'si', 'select(u32(depth), u32(depth + 1), (event != 0) & !sampleIgnored)', materialHooks, 'si.hit & (event < eventLimit)') : `if (query) {
-      intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction);
+    ${sharedGraph ? materialQuery('query', 'intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction, !primaryReady);', '&ma', 'si', 'select(u32(depth), u32(depth + 1), (event != 0) & !sampleIgnored)', materialHooks, 'si.hit & (event < eventLimit)') : `if (query) {
+      intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction, !primaryReady);
       ${materialCall('&ma', 'si', materialHooks)}
     }`}
     query = true;
@@ -921,7 +921,7 @@ ${queryPoints ? /* wgsl */ `
       let shadow = queryStage != 0u;
       ${pendingQuery}.occluded = intersectSceneQuery(${pendingQuery}.ray, &${mainSi},
         select(depth, 1, shadow), (event != 0) || shadow, !shadow && ${mainPath}.isNextRefraction,
-        select(0, 1, shadow), ${pendingQuery}.maximum,
+        !shadow && event == 0, select(0, 1, shadow), ${pendingQuery}.maximum,
         ${pendingQuery}.triangle, ${pendingQuery}.instance);
       if (!shadow) {
         mx_vertex(true, &${mainMaterial}, &${mainSi}, select(u32(depth), u32(depth + 1), (event != 0) & !sampleIgnored), ${mainSi}.hit & (event < eventLimit));
@@ -929,7 +929,7 @@ ${queryPoints ? /* wgsl */ `
       ${pendingQuery}.pending = false;
 ${materialHooks.materialXNormals ? `      if (!shadow) { materialx_normal(&${mainSi}); }` : ''}
       if (${pendingQuery}.kind != 1) {
-` : /* wgsl */ `    ${sharedGraph ? materialQuery('true', `intersectScene(${mainPath}.ray, &${mainSi}, depth, event != 0, ${mainPath}.isNextRefraction);`, `&${mainMaterial}`, 'si', 'select(u32(depth), u32(depth + 1), (event != 0) & !sampleIgnored)', materialHooks, `${mainSi}.hit & (event < eventLimit)`) : `intersectScene(${mainPath}.ray, &${mainSi}, depth, event != 0, ${mainPath}.isNextRefraction);
+` : /* wgsl */ `    ${sharedGraph ? materialQuery('true', `intersectScene(${mainPath}.ray, &${mainSi}, depth, event != 0, ${mainPath}.isNextRefraction, event == 0);`, `&${mainMaterial}`, 'si', 'select(u32(depth), u32(depth + 1), (event != 0) & !sampleIgnored)', materialHooks, `${mainSi}.hit & (event < eventLimit)`) : `intersectScene(${mainPath}.ray, &${mainSi}, depth, event != 0, ${mainPath}.isNextRefraction, event == 0);
     ${materialCall(`&${mainMaterial}`, 'si', materialHooks)}`}
 `}
     if (event == 0) {
@@ -977,8 +977,8 @@ ${primaryVariables}
   // including completion of its final query. The primary hit is reused.
   let stepLimit = min((${maxPathEvents} + 1) * 3, i32(rtUniform.loopUnrollGuard * ${Math.ceil((maxPathEvents + 1) * 3 / 4)}u));
   for (var step = 0; step < stepLimit; step++) {
-    ${sharedGraph ? materialQuery('!primaryReady | ((event != 0) & !path.abort)', 'intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction);', '&ma', 'si', 'select(0u, select(u32(depth), u32(depth + 1), !sampleIgnored), event != 0)', materialHooks, 'si.hit & (event < eventLimit)') : `if (!primaryReady | ((event != 0) & !path.abort)) {
-      intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction);
+    ${sharedGraph ? materialQuery('!primaryReady | ((event != 0) & !path.abort)', 'intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction, !primaryReady);', '&ma', 'si', 'select(0u, select(u32(depth), u32(depth + 1), !sampleIgnored), event != 0)', materialHooks, 'si.hit & (event < eventLimit)') : `if (!primaryReady | ((event != 0) & !path.abort)) {
+      intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction, !primaryReady);
       ${materialCall('&ma', 'si', materialHooks)}
     }`}
     if (event == 0) {
@@ -1062,7 +1062,7 @@ ${sharePrefix ? /* wgsl */ `      if (spActive) {
 }
 ` : /* wgsl */ `fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
 ${primaryVariables}
-  intersectScene(ray, &si, 0, false, false);
+  intersectScene(ray, &si, 0, false, false, true);
   ${materialCall('&ma', 'si', materialHooks)}
 ${primaryGuides}
     if (SPECTRAL) {

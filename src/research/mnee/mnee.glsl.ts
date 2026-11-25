@@ -88,7 +88,7 @@ ${debug ? '  mneeCounters[0]+=1.0;mneeTraceEnabled=seed==0;if(mneeTraceEnabled){
 ${debug ? '  mneeCounters[12]+=1.0;' : ''}
   si.triangleIndex = receiver.triangleIndex;
   si.instanceIndex = receiver.instanceIndex;
-  intersectScene(ray, si, true);
+  intersectScene(ray, si, true, false);
   if(!si.hit||(seed==0&&!directional&&distance(x,si.position)>=ls.dist-rayRoundoff(x,ls.dist)))return mneeFail(2);
   OpenPbrResolvedMaterial material;float eta=1.0,dielectricEta=1.0;bool reflection=false;
   for(int iteration=0;iteration<${damping?20:10};iteration++){
@@ -111,7 +111,7 @@ ${damping?/* glsl */ `    vec2 step=mneeSolve2(j,c);vec3 position=si.position;in
 ${debug ? '      mneeCounters[12]+=1.0;' : ''}
       si.triangleIndex = receiver.triangleIndex;
       si.instanceIndex = receiver.instanceIndex;
-      intersectScene(ray, si, true);
+      intersectScene(ray, si, true, false);
       if(si.hit&&si.instanceIndex==interfaceInstance&&si.materialIndex==interfaceMaterial){
         bool nextReflection=dot(x-si.position,si.faceNormal)*dot(y-si.position,si.faceNormal)>0.0;
         float nextEta=dot(x-si.position,si.faceNormal)>0.0?1.0/ior:ior;
@@ -129,7 +129,7 @@ ${debug ? '      mneeCounters[12]+=1.0;' : ''}
 ${debug ? '    mneeCounters[12]+=1.0;' : ''}
     si.triangleIndex = receiver.triangleIndex;
     si.instanceIndex = receiver.instanceIndex;
-    intersectScene(ray, si, true);
+    intersectScene(ray, si, true, false);
     if (!si.hit) return mneeFail(5);
 `}
   }

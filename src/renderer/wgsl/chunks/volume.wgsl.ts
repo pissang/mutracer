@@ -202,11 +202,11 @@ ${sharePrefix ? /* wgsl */ `  let spSlot = spCall; spCall++;
   }
 ` : ''}  for (var step = 0; step < ${(maxPathEvents + 1) * 2 + 2}; step++) {
     ${materialHooks.graph?.precomputed !== undefined ? `let mxQuery = ${sharePrefix ? '!spResume && query' : 'query'};
-    if (mxQuery) { intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction); }
+    if (mxQuery) { intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction, false); }
     // Surface and volume vertices sample NEE at the current depth.
     mx_vertex(mxQuery, &ma, &si, u32(depth), true);
     if (mxQuery) {${materialHooks.materialXNormals ? '\n      materialx_normal(&si);' : ''}` : `if (${sharePrefix ? '!spResume && query' : 'query'}) {
-      intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction);
+      intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction, false);
       ${materialCall('&ma', 'si', materialHooks)}`}
       if (event == 0 && si.hit && ma.materialType == STANDARD) {
         (*outAux).albedo = select(ma.baseColor, vec3f(1.0), ma.transmissionWeight > 0.5);
@@ -287,7 +287,7 @@ fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> 
   var si: SurfaceInteraction; var ma: OpenPbrResolvedMaterial;
   si.triangleIndex = -1;
   si.instanceIndex = -1;
-  intersectScene(ray, &si, 0, false, false);
+  intersectScene(ray, &si, 0, false, false, true);
   ${materialCall('&ma', 'si', materialHooks)}
   if (si.hit && HAS_BEVEL && rtUniform.bevel != 0 && ma.bevel > 0.0) { si.normal = getBevelNormal(si, ma.bevel); }
   if (si.hit && (ma.materialType == STANDARD || ma.materialType == UNLIT)) {

@@ -59,7 +59,7 @@ fn aovSurface(rayInput: Ray, si: ptr<function, SurfaceInteraction>, material: pt
   var ray = rayInput;
   (*si).triangleIndex = -1;
   for (var layer = 0; layer < 32; layer++) {
-    intersectScene(ray, si, 0, false, false);
+    intersectScene(ray, si, 0, false, false, layer == 0);
     if (!(*si).hit) { return false; }
     ${materialCall('material', '(*si)', materialHooks)}
     if ((*material).materialType != SHADOW_CATCHER && (*material).alpha >= 0.5) { return true; }

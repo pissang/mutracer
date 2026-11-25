@@ -43,7 +43,7 @@ void main() {
   si.triangleIndex = -1;
   si.instanceIndex = -1;
   for (int layer = 0; layer < 32; layer++) {
-    intersectScene(ray, si, false);
+    intersectScene(ray, si, false, true);
     if (!si.hit) return;
     OpenPbrResolvedMaterial material;
     getMaterial(material, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);

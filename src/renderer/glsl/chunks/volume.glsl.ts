@@ -174,7 +174,7 @@ ${sharePrefix ? /* glsl */ `  int spSlot = spCall++;
   }
 ` : ''}  for (int step = 0; step < ${(MAX_PATH_EVENTS_WEBGL + 1) * 2 + 2}; step++) {
     if (${sharePrefix ? '!spResume && query' : 'query'}) {
-      intersectScene(path.ray, si, event != 0);
+      intersectScene(path.ray, si, event != 0, false);
       getMaterial(mat, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
       if (event == 0 && si.hit && (mat.materialType == STANDARD || mat.materialType == UNLIT)) {
         outAux.albedo = mat.transmissionWeight > 0.5 ? vec3(1.0) : mat.baseColor;
