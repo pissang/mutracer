@@ -8,9 +8,9 @@ exports[`caustic contracts > preserves published light and photon transport sour
 
 exports[`caustic contracts > preserves published light and photon transport sources > camera true/true 1`] = `"4e5c961650eba43bf37da0c4fd361b003e6e3baf2cec8f80be9159017a42bd8a"`;
 
-exports[`caustic contracts > preserves published light and photon transport sources > lightTracing 1`] = `"05a81a2e2c3e19b2ec3eeaab338c244b0615d5442cbcbe124550a5f85bd366d9"`;
+exports[`caustic contracts > preserves published light and photon transport sources > lightTracing 1`] = `"5d5a83ccdb15828d5743a46daa36e355eead6392465c26c831ecbdc3081b8735"`;
 
-exports[`caustic contracts > preserves published light and photon transport sources > photonMapping 1`] = `"3d2e089cb056f056054067b236247795f099c208facb0c857678444230876de0"`;
+exports[`caustic contracts > preserves published light and photon transport sources > photonMapping 1`] = `"2bb51ec1896298c72abee4e9b5c626ef9ce69f71ed3ab7163c78d0d1158bebf0"`;
 
 exports[`caustic contracts > preserves the PM source through the internal opt-out > photon-direct-subset disabled 1`] = `"f82db21744ddb4ba4e3e13c637b7888071f153a5f5ae699c43bf8bf76bb87429"`;
 

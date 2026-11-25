@@ -28,7 +28,7 @@ import type { SceneLight } from '../scene/Scene.js';
 
 export { DEFAULT_MAX_TEXTURE_ARRAY_BYTES } from './textureAtlas.js';
 export type { MaterialTableOptions, TextureAtlasStats } from './textureAtlas.js';
-export { hasAdjacentMedia, materialUsesMedium } from './materialParams.js';
+export { materialUsesMedium } from './materialParams.js';
 export { uvProjectionConstants } from './materialConstants.js';
 
 function createAtlasCanvas(width: number, height: number) {

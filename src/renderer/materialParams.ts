@@ -21,19 +21,6 @@ export function materialUsesMedium(material: MaterialState): boolean {
 }
 
 
-// Only distinct dielectric materials can share a glass/liquid interface.
-export function hasAdjacentMedia(materials: MaterialState[]): boolean {
-  if (!materials.some(materialUsesMedium)) return false;
-  let first: MaterialState | undefined;
-  for (const material of materials) {
-    if (!(material.transmissionWeight > 0 || material.subsurfaceWeight > 0 ||
-        material.map && material.mapAlphaUsage === 'transmission')) continue;
-    if (first && first !== material) return true;
-    first = material;
-  }
-  return false;
-}
-
 function clampChannel(channel: number, fallback: number) {
   const value = Number(channel);
   return Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : fallback;

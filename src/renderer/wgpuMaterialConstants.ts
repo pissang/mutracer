@@ -3,7 +3,7 @@ import type MaterialState from '../scene/MaterialState.js';
 import { resolveMaterialAlphaMode } from '../scene/MaterialState.js';
 import type Geometry from '../scene/Geometry.js';
 import type MaterialData from './MaterialData.js';
-import { hasAdjacentMedia, materialUsesMedium } from './materialParams.js';
+import { materialUsesMedium } from './materialParams.js';
 import { materialTextureFeatures } from './materialTextureSlots.js';
 import {MATERIAL_SHADER_CAPABILITIES} from './shaderCapabilities.js';
 
@@ -45,7 +45,6 @@ export function wgpuMaterialConstants(materials: MaterialState[], materialData: 
       m.specularAnisotropy > 0 && (m.specularAnisotropyModel === 'gltf' || !!m.anisotropyMap || m.specularAnisotropyRotation !== 0) ||
       m.coatAnisotropy > 0 && m.coatAnisotropyRotation !== 0),
     HAS_MEDIUM,
-    HAS_ADJACENT_MEDIA: hasAdjacentMedia(materials),
     HAS_SHADOW_CATCHER: materials.some(m => m.shadowCatcher),
     HAS_THIN_FILM: materials.some((material) => material.thinFilmWeight > 0),
     HAS_COAT: materials.some((material) => material.coatWeight > 0),
