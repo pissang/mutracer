@@ -11,7 +11,7 @@ export function nativePathIntersections(features: WGPUShaderFeatures, empty: boo
     : createSceneIntersectionsWgsl({...features,
       hasAnisotropyDirections: features.hasAnisotropyDirections || features.hasCoatNormals,
       closestHitHook: `  mtPathRecord(ray, (*si).albedoSampled, isHit, hitInsIdx, (*si).triangleIndex,
-    tMax, hitBarycentric, bounces, doubleSided, isRefractionRay, currentTriangleIndex);
+    select(RAY_MAX_DISTANCE, hitT, isHit), hitBarycentric, bounces, doubleSided, isRefractionRay, currentTriangleIndex);
 `});
   return intersections + /* wgsl */ `
 struct MtPathEvent { identity: vec4u, barycentric: vec4f, origin: vec4f, direction: vec4f, }

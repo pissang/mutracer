@@ -166,6 +166,13 @@ mod tests {
                     .unwrap();
                 object.add_mesh(Mesh::new(geometry, material)).unwrap();
             }
+            let near = object
+                .add_geometry(Geometry::new(
+                    vec![3., -1., 5e-8, 5., -1., 5e-8, 4., 1., 5e-8],
+                    vec![0, 1, 2],
+                ))
+                .unwrap();
+            object.add_mesh(Mesh::new(near, material)).unwrap();
             let mut input = object.descriptor().unwrap().as_ref().clone();
             input[8..12].copy_from_slice(&8u32.to_le_bytes());
             input[12..16].copy_from_slice(&8u32.to_le_bytes());
@@ -188,6 +195,12 @@ fn shadowContract(@builtin(global_invocation_id) id: vec3u) {
     f32(intersectSceneShadow(ray, 1.25, -1, -1)),
     f32(intersectSceneShadow(ray, 1.25, record, 1)),
     f32(intersectSceneShadow(ray, 3.0, record, 0)));
+  initRay(&ray, vec3f(4.0, 0.0, 0.0), vec3f(0.0, 0.0, 1.0));
+  outColor[1] = vec4f(
+    f32(intersectSceneShadow(ray, 1e-7, -1, -1)),
+    f32(intersectSceneShadow(ray, 2.5e-8, -1, -1)),
+    f32(intersectSceneShadow(ray, 1e-7, mtRecord(2, 0u), 2)),
+    1.0);
 }
 "#,
                 );
@@ -205,13 +218,13 @@ fn shadowContract(@builtin(global_invocation_id) id: vec3u) {
                 .unwrap();
                 state.dispatch_target(&target, 0, 1, None).unwrap();
                 let bytes = read_raw(&gpu, &target.buffers[&10]).unwrap();
-                let values: Vec<_> = bytes[..16]
+                let values: Vec<_> = bytes[..32]
                     .chunks_exact(4)
                     .map(|v| f32::from_le_bytes(v.try_into().unwrap()))
                     .collect();
                 assert_eq!(
                     values,
-                    [0., 1., 1., 1.],
+                    [0., 1., 1., 1., 1., 0., 0., 1.],
                     "indexed={indexed}, double_sided={double_sided}"
                 );
             }

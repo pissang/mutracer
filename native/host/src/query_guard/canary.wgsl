@@ -8,7 +8,8 @@ override MT_CHECK_REPLAY_START: bool = false;
 
 fn mtCheckWorkgroup() {
   let ray = Ray(vec3f(0., 0., 3.), vec3f(0., 0., -1.));
-  let hit = mtTrace(mtCanaryAS, true, ray, 100., false, -1, -1, -1, true, false);
+  var miss: MtHit;
+  let hit = mtTrace(mtCanaryAS, true, ray, 100., false, -1, -1, -1, true, false, miss, 0u);
   if hit.kind == RAY_QUERY_INTERSECTION_NONE {
     atomicOr(&mtEpochFlag, 1u);
   }
