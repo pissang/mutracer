@@ -2,6 +2,8 @@
 
 [Usage and limits](../temporal-denoising.md)
 
+[Reflection motion in the offline window](./temporal-reflection-motion.md)
+
 ## Pipeline
 
 1. Accumulate a finite window of resolved linear HDR frames. Each tap uses the
