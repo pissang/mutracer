@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use wgpu::util::DeviceExt;
 
 pub(crate) const BACKEND: u32 = 5;
+const OFFLINE_TILE_SIZE: u32 = 432;
 pub(crate) fn required_features() -> wgpu::Features {
     Network::required_features()
 }
@@ -45,6 +46,44 @@ struct Auxiliary {
     decode: wgpu::ComputePipeline,
 }
 impl Denoiser {
+    pub(crate) fn new_offline(
+        gpu: &GpuDevice,
+        size: [u32; 2],
+        weights: Option<&Path>,
+        memory_budget: Option<u64>,
+    ) -> Result<Self> {
+        // Preserve the tiled footprint for explicitly budgeted plans. Bound the
+        // default whole-image workspace to the 720p class, including padding.
+        let [w, h] = size.map(|edge| u64::from(edge).div_ceil(16));
+        if memory_budget.is_none()
+            && w * h <= 80 * 45
+            && gpu
+                .device
+                .features()
+                .contains(wgpu::Features::EXPERIMENTAL_COOPERATIVE_MATRIX)
+        {
+            let oom = gpu.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+            let whole = Self::new(gpu, size, weights, 0);
+            if pollster::block_on(oom.pop()).is_none() {
+                match whole {
+                    Ok(filter) => return Ok(filter),
+                    // The upstream preparation scope reports allocation errors
+                    // as GPU errors. Retry with the smaller workspace.
+                    Err(err)
+                        if matches!(
+                            err.downcast_ref::<oidn_webgpu::Error>(),
+                            Some(
+                                oidn_webgpu::Error::LimitExceeded { .. }
+                                    | oidn_webgpu::Error::Gpu(_)
+                            )
+                        ) => {}
+                    Err(err) => return Err(err),
+                }
+            }
+        }
+        Self::new(gpu, size, weights, OFFLINE_TILE_SIZE)
+    }
+
     pub(crate) fn new(
         gpu: &GpuDevice,
         size: [u32; 2],
@@ -540,6 +579,29 @@ mod tests {
         .validate(&module)
         .unwrap();
     }
+
+    #[test]
+    #[ignore = "requires native OIDN on a real GPU"]
+    fn offline_oidn_preserves_checked_tiles_for_explicit_budgets() {
+        let _test = crate::abi_test_lock();
+        let gpu = GpuDevice::with_backend(1).unwrap();
+        let size = [448, 32];
+        let budgeted = Denoiser::new_offline(&gpu, size, None, Some(128 << 20)).unwrap();
+        assert_eq!(budgeted.prepared.info().tile_count, 2);
+        assert!(budgeted.prepared.info().runtime_checks);
+
+        let default = Denoiser::new_offline(&gpu, size, None, None).unwrap();
+        let matrix = wgpu::Features::EXPERIMENTAL_COOPERATIVE_MATRIX;
+        let tiles = if gpu.adapter.features().contains(matrix) {
+            assert!(gpu.device.features().contains(matrix));
+            1
+        } else {
+            2
+        };
+        assert_eq!(default.prepared.info().tile_count, tiles);
+        assert!(default.prepared.info().runtime_checks);
+    }
+
     #[test]
     #[ignore = "requires native OIDN on a real GPU"]
     fn accumulated_inputs_match_the_documented_rust_api_and_retained_outputs() {

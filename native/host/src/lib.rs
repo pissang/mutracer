@@ -526,8 +526,9 @@ impl GpuDevice {
         } else {
             wgpu::Features::empty()
         };
-        let denoise_features =
-            oidn_webgpu::required_features() | oidn_webgpu::recommended_features(adapter);
+        let denoise_features = oidn_webgpu::required_features()
+            | oidn_webgpu::recommended_features(adapter)
+            | (adapter.features() & wgpu::Features::EXPERIMENTAL_COOPERATIVE_MATRIX);
         let descriptor = wgpu::DeviceDescriptor {
             label: Some("MuTracer native feasibility"),
             required_limits: {

@@ -211,7 +211,12 @@ impl TemporalDenoiser {
                 )?;
                 let spatial = match &self.spatial {
                     TemporalSpatial::Oidn(weights) => Some((
-                        crate::oidn_webgpu::Denoiser::new(&gpu, size, weights.as_deref(), 432)?,
+                        crate::oidn_webgpu::Denoiser::new_offline(
+                            &gpu,
+                            size,
+                            weights.as_deref(),
+                            self.options.memory_budget,
+                        )?,
                         crate::display::Display::new(gpu.clone(), size),
                     )),
                     _ => None,
