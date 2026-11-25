@@ -140,6 +140,9 @@ jsDelivr copy, then falls back to the built-in builder. See
 - Height-map analysis, attribute generation, TLAS construction and per-frame
   refits run on the calling thread.
 
+The reasons behind the defaults, and the alternatives that were measured, are in
+[acceleration structures](./technical/acceleration.md).
+
 ## Rebuilding the WebAssembly module
 
 `src/tinybvh/tinybvh.wasm` is checked in. To rebuild it, install Emscripten and

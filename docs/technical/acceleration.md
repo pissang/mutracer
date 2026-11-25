@@ -29,6 +29,45 @@ the defaults and the alternatives that were measured. The code is
 - **Traversal tweaks.** Changes to box tests and stack handling showed no reliable
   gain and were not adopted.
 
+## Coincident hits
+
+Coplanar faces, such as a shadow catcher under the ground or two meshes sharing
+a face, intersect a ray at the same distance within floating-point precision.
+Without a rule, the BVH's traversal order chooses the surface, so the result
+changes with builder, layout or instance order. Closest-hit queries that set
+`resolveCoincident` choose deterministically (`intersect.wgsl.ts`,
+`intersect.glsl.ts`):
+
+- **Detection.** A candidate within `rayRoundoff` (about 4.8e-7 relative to the
+  larger of the ray origin and the distance) of the nearest hit marks the query
+  as tied, and the limit is widened by that interval.
+- **Replay.** Only a tied query traverses again, with the first pass's limits
+  and random stream so displacement marching repeats exactly. Among the
+  candidates up to that limit, `closestHitPreferred` keeps a regular surface
+  over a shadow catcher, then the lowest instance index, then the lowest
+  triangle index.
+- **Scope.** The camera's primary hit, the first AOV hit, and depth and picking
+  queries resolve ties, so beauty, guides, AOVs and picking agree. Continued
+  paths, shadow rays and caustic photons do not, because the replay would cost
+  every bounce. In reflections and refractions either surface can appear.
+- **Continuations.** A continued ray excludes its source instance and
+  primitive instead of relying on a forward offset alone. Refraction and
+  alpha pass-through continuations, including depth and AOV layers and caustic
+  photons, use `transmissionRayOrigin`: it starts the ray slightly behind the
+  surface so a second surface touching it is still found, then steps through
+  once that second face is reached so the pair does not cycle.
+
+Native shares the rule. Hardware ray queries report one closest hit, so a tied
+query inspects the candidates inside the rounding interval and rejects
+lower-priority indexed candidates before loading their triangles
+(`native/src/intersections.wgsl.ts`). Native shadow rays also accept positive
+hits closer than the former fixed minimum distance, since the source primitive
+is already excluded.
+
+An earlier version packed per-instance tie eligibility and refreshed it on
+geometry and transform changes. Limiting resolution to camera and depth queries
+removed that state and its update cost.
+
 ## Static merge prototype
 
 A prototype merged static instances into one world-space BLAS, with world-space

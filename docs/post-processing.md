@@ -66,6 +66,7 @@ and changes only that part, so specular highlights mostly keep their brightness.
 Clipped highlights cannot be recovered. Transmission, cutouts, background, low
 coverage and depth boundaries receive EASU alone. With detail, a present costs about
 2.6 ms at 6 MP on an Apple M4 Max, compared with about 0.5 ms for EASU alone.
+The algorithm is described in [display upscale](./technical/display-upscale.md).
 
 ## Options and image semantics
 

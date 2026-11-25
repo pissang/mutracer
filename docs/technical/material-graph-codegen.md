@@ -26,9 +26,10 @@ The required native AOT material-graph module executes these functions through
 the byte ABI, checking all supported category/type combinations and complete
 surface/shadow specialization. Graphs emit WGSL only: WebGL 2 does not compile
 graph programs, because linking the specialized megakernel through ANGLE took
-tens of seconds and stalled sampling, so graph materials there use their fallback. Browser adapters restore
-resource identities and the original parameter value shapes after generation. Native and
-Hydra uniform ingestion also call `foldGraphTerminal` through the serialized AOT
+tens of seconds and stalled sampling, so graph materials there use their
+fallback. Browser adapters restore resource identities and the original
+parameter value shapes after generation. Native and Hydra uniform ingestion also
+call `foldGraphTerminal` through the serialized AOT
 runtime. It validates each reachable terminal independently and delegates numeric
 operations to `evaluateNumericNode`; the C++ adapter does no new node arithmetic.
 Hydra ingestion schemas/default variants are generated from `nodeInputs`, and its
@@ -133,126 +134,83 @@ The register file holds 16 values, enough for every viewer sample; it did not
 change compile time measurably. Specialized code still inlines the noise
 lattice at every noise node, which the compile model counts per node.
 
-D3D12 browser interpreters decode each instruction's operands in one loop into
-a local vec4 array before the opcode switch. The loop bound is the family's
-maximum port count, derived from `graphInstructions`; absent ports still decode
-as zero. This preserves bytecode, casts, register liveness and evaluation order
-while avoiding repeated inlining of operand/context decoding at every expression.
-The array and loop cost GPU work while the interpreter serves. Metal, specialized
-code and native retain their existing decoder. Scalar hash call-site consolidation
-and changing the nested lattice bounds alone gave only a small compile improvement;
-those shapes were not adopted.
+### D3D12 compile shape
 
-D3D12's shared graph site also executes the surface program and its following
-opacity program in one `mx_run` loop. At their boundary the context switches to
-the opacity entry's fixed normal and tangent frame. Each program writes its
-registers before reading them, so the sequential entries can reuse the register
-file. `getMaterialPrecomputed` consumes the resulting opacity; shadow queries
-retain their own opacity runner. Program layout, random streams and clamps are
-unchanged.
+DXC inlines every call site, so the D3D12 universal kernels are shaped to expand
+less code:
 
-The universal D3D12 surface samples and applies its material texture slots in a
-runtime loop, with one atlas-filtering call site. Each slot retains its channel,
-color decoding, factor and emission/coat ordering; normal and displacement
-queries keep their existing sites. The existing loop guard (value 4) prevents
-static unrolling. Its repeat-filter footprint reaches only `[-1,size]`, so the
-two boundary texels can wrap with selects instead of general signed remainders.
-Both axes select wrapped or clamped integer coordinates in vector data flow;
-the UDIM rejection and repeat-footprint tests use eager boolean operators over
-pure, already available values. This avoids duplicating short-circuit blocks
-when DXC inlines each filtering site. Texture reads, floating-point filtering
-and color decoding keep their original order.
-The atlas sampler's hardware-filter path reuses the wrapped UV already
-computed for the repeat-footprint check; wrapping and atlas/UDIM clamping
-retain the same arithmetic. Binding-array samplers keep their prior coordinate
-generation.
-These changes target expanded compiler work, not source byte count. Profile both
-DXC and the later D3D12 pipeline work: offline DXC timing alone does not account
-for the complete browser wait. Generated native, non-graph and non-D3D12
-sampling sources retain their prior form.
+- The interpreter decodes each instruction's operands in one loop into a local
+  `vec4` array before the opcode switch. The loop bound is the family's maximum
+  port count from `graphInstructions`; absent ports decode as zero.
+- The shared graph site runs the surface program and the following opacity
+  program in one `mx_run` loop. At their boundary the context switches to the
+  opacity entry's fixed normal and tangent frame, and each program writes its
+  registers before reading them. `getMaterialPrecomputed` consumes the
+  opacity; shadow queries keep their own opacity runner.
+- Material texture slots are sampled in one runtime loop with a single
+  atlas-filtering call site; normal, displacement and light queries keep their
+  own sites. The repeat footprint reaches only `[-1, size]`, so wrapping uses
+  selects instead of signed remainders, and the UDIM and footprint tests use
+  eager boolean operators so inlining does not duplicate short-circuit blocks.
+
+Bytecode, casts, register liveness, evaluation order, random streams, clamps
+and texture-read order are unchanged. Metal, specialized code and native keep
+their existing decoder and sampling. Consolidating scalar hash call sites, or
+changing only the nested lattice bounds, gave a small compile improvement and
+was not adopted. These shapes target expanded compiler work, not source size:
+profile DXC and the later D3D12 pipeline creation together, because offline DXC
+timing does not account for the complete browser wait.
 
 ### Unified editing queries
 
-Eligible D3D12 universal RGB/BVH2 kernels generate query points directly in the
-ray-tracing, material-sampling and catcher templates. Each path event has a
-bounded query loop: first the surface query and material evaluation, then the
-selected NEE visibility query and the scattering continuation. Primary catchers
-use that same query site for their four light candidates. Paths finish the event
-together; a free-running switch over complete paths lets lanes drift into
-different bounces and serializes their shading work.
+With `graphCompilerBackend() === 'd3d12'`, eligible universal RGB/BVH2 kernels
+place query points directly in the ray-tracing, material-sampling and catcher
+templates. Each path event runs a bounded query loop: the surface query and
+material evaluation, then the selected NEE visibility query and the scattering
+continuation. Primary catchers use the same site for their four light
+candidates. Paths finish an event together; a free-running switch over complete
+paths lets lanes drift into different bounces and serializes their shading.
 
-Known structured queries keep the pending visibility and catcher records in
-two-element private arrays. The existing guard selects slot zero; addressable
-records reduce compiler work on the loop-carried control flow. Sequential random
-queries retain scalar pending/catcher records.
+`intersect.wgsl.ts` emits one BVH traversal with a runtime closest/any-hit mode,
+sharing triangle tests, PDM stepping and surface completion with the direct
+templates. Shadow opacity stays inside that traversal with its own interpreter,
+so no BVH cursor is suspended across shading and alpha rejection continues the
+original loops. Bevel uses its own traversal only when the scene needs it.
+`primaryGuides`, `completeVertex` and `shadeVertex` keep one arithmetic source;
+query points change only the surrounding control flow, and no generated function
+body is parsed or rewritten.
 
-With baked Sobol/ZSobol constants, scattering finishes before the selected
-visibility query. Its dimensions do not depend on traversal's separate hashed
-counter, so the query stores only the scattering result and discrete-event flag.
-On return, NEE is accumulated before applying that result, including a rejected
-BSDF proposal or a volume event. Sequential random queries retain the prepared
-BSDF and draw the continuation after visibility. Both shapes use the same
-sampling and BSDF evaluation expressions; no second optical graph is emitted.
+With baked Sobol/ZSobol constants, scattering is sampled before the visibility
+query, because its dimensions do not depend on traversal's hashed counter. The
+query then stores only the scattering result, and NEE is accumulated on return
+before that result is applied, including a rejected BSDF proposal or a volume
+event. Sequential random queries keep the prepared BSDF and draw the
+continuation after visibility. Visibility resumes before the continuation's
+random draws, and a catcher resumes its candidate before advancing the light
+loop, so no draw, BVH node or displacement step repeats. The state each shape
+keeps, and the indexed arrays that simplify the loop-carried control flow, are
+pinned in [megakernel value
+layouts](./megakernel-value-layouts.md#editing-continuation-storage).
 
-`intersect.wgsl.ts` emits the ordinary BVH traversal with a runtime closest/any-hit
-mode. The triangle tests, PDM stepping and surface completion are shared with the
-direct templates. Shadow opacity stays inside that traversal, with one independent
-opacity interpreter. No BVH cursor is suspended across shading, and alpha
-rejection continues the original nested loops. Bevel uses its independent
-traversal only when the scene requires it.
+Count compiled call chains in the main trace entry, not declarations in the
+module: picking and AOV functions also call the BSDF. The editing trace keeps
+one BSDF prepare, evaluate and sample site, one shared graph interpreter site
+and one surface texture-slot loop. NEE and catchers keep separate light choice,
+because a shared service would carry the RIS reservoir and sampled light across
+extra continuations.
 
-The common integrator keeps its live `SurfaceInteraction` in a two-element
-function array. The runtime index `(loopUnrollGuard - 4) & 1` is zero under the
-existing guard contract. References passed to traversal, material evaluation and
-shading name that same slot; the other slot does not carry another vertex.
-`primaryGuidesFor` supplies the selected reference to the existing guide template.
-Direct generation keeps its scalar local. This changes addressability and the
-loop-carried PHI graph, while retaining every value member and host layout. It
-spends 544 nominal WGSL bytes for this array instead of a 272-byte local; actual
-register and scratch allocation must be measured separately.
+Keeping the opacity interpreter separate, and retaining prepared BSDF values
+instead of recomputing them after visibility, spend compiler work and private
+storage to avoid saving a traversal cursor. Fewer source calls do not by
+themselves reduce compiler work: local arrays and extra continuations can turn
+inlined instructions into address calculations, loads and PHIs, or move cost
+from DXC to pipeline creation. Compare full cold pipeline time and GPU
+timestamps for each shape, including the lean variant.
 
-Known structured queries also index two-element resolved-material and path
-arrays, using the same slot. Primary-surface instrumentation retains its scalar
-material/path locals. The value types and evaluation order stay unchanged; the
-additional nominal storage needs its own GPU comparison.
-
-Count compiled call chains rather than declarations in the complete WGSL module:
-its picking and AOV functions also contain BSDF calls but are not part of the
-main trace entry. The editing trace retains these sites:
-
-| Work | Main trace sites and cost |
-| --- | --- |
-| BSDF prepare / eval / direction sample | One each; no second optical graph to merge. |
-| Surface/emission graph interpreter | One shared site; shadow opacity retains its independent runner. |
-| Light choice | NEE and catcher keep their own sampling scopes. A shared service would carry the RIS reservoir and sampled light across extra continuations. |
-| Material texture filtering | One surface-slot loop; opacity, normal, displacement and light queries retain their required sampling contexts. |
-
-Reducing source calls does not by itself reduce compiler work. Local arrays and
-extra continuations can replace inlined instructions with address calculations,
-loads and PHIs, or move cost from DXC to pipeline creation. Compare the full cold
-pipeline and GPU timestamps for each shape, including the lean variant.
-
-`primaryGuides`, `completeVertex` and `shadeVertex` keep one arithmetic source.
-Query points change the surrounding control flow and explicitly name the saved
-material/catcher values; no generated function body is parsed or rewritten.
-Visibility resumes before the continuation's random draws. A catcher resumes its
-candidate before advancing the light loop, so neither its light draws nor a BVH
-node or displacement step repeats.
-
-Keeping the opacity interpreter separate spends additional compiler work compared
-with routing every alpha candidate through the surface interpreter. It preserves
-traversal locals and avoids saving a cursor while executing the graph. Likewise,
-retaining prepared BSDF values spends private storage instead of recomputing the
-preparation after visibility. Indexed storage is limited to the material
-continuation, rather than every query and integrator value. These are compiler
-inputs, not hardware register/scratch measurements; compare both sampling time
-and complete cold pipeline time when changing them.
-
-The host enables this shape through `graphCompilerBackend() === 'd3d12'`.
-The templates themselves have no D3D12 dependency, so the same switch can enable
-them for a Metal measurement. Other layouts, deterministic primary alpha,
-spectral and research transports retain their direct shape. Lean, WebGL and
-native generation retain their direct paths and existing host/value layouts.
+The templates have no D3D12 dependency, so the same switch can enable them for
+a Metal measurement. Other layouts, deterministic primary alpha, spectral and
+research transports, and lean, WebGL and native generation keep their direct
+shape and existing layouts.
 
 ## Tier planner
 
@@ -341,8 +299,8 @@ A new structure set is first served by a variant that renders it correctly:
   change neither pipeline constants nor shared hooks) and every terminal seen in
   the session, with the union of the old and new pipeline features. Later edits
   then fit it. If its increment is predicted over the correct-frame budget, only
-  the set's families are used, unless a compiled prefetched editing interpreter (below)
-  covers the set.
+  the set's families are used, unless a compiled prefetched editing interpreter
+  (below) covers the set.
 - On the first load, a small set whose fully specialized variant fits the
   correct-frame budget compiles directly; otherwise the interpreter with only
   the set's families serves it.
@@ -351,8 +309,8 @@ Right after the first graph installation, the editing interpreter (with the
 installed pipeline features) also compiles once in the background, so later
 structural edits find it ready and compile nothing. It is skipped when its
 compile is predicted over the 10 s upgrade ceiling below. An edit uses it only
-once it has compiled; until then, or
-without it, an edit compiles as described above.
+once it has compiled; until then, or without it, an edit compiles as described
+above.
 This ordinary prefetch requires an installed graph: without one, its source is
 graph-free and must never be registered as a ready interpreter. Only the explicit
 universal editing variant emits interpreter code for an empty structure set.
@@ -433,7 +391,7 @@ The planned final variant compiles only when the gate allows it:
 4. `(remaining − compile) × gain > 1.5 × compile`. Remaining time is the samples
    left to the render target times the measured wall time per sample; without a
    target it is the time already rendered on this view, at most 60 s. Gain is the
-   expected per-sample saving: 0.2 for removing all interpreter work (P1:
+   expected per-sample saving: 0.2 for removing all interpreter work (measured
    0.07–0.35 by scene) and half of that times the planner coverage for a mixed
    variant, which keeps the interpreter's presence cost.
 
@@ -446,17 +404,19 @@ the same view in interleaved phases (final, serving, serving, final, final,
 serving), each at least 250 ms and 8 samples. GPU timestamps decide when each
 variant has at least three over its phases, read back through a small pool of
 buffers attributed to the variant that traced them (the readback can stall for a
-whole phase behind a deep queue); wall time per sample is the fallback, but Render's realtime pacing derives it from its
-own estimate and can invert small differences. The upgrade stays if it is at
+whole phase behind a deep queue). Wall time per sample is the fallback, but
+Render's realtime pacing derives it from its own estimate and can invert small
+differences. The upgrade stays if it is at
 least 3 % faster. Otherwise the serving variant returns, the structure set is not
 upgraded again, and the device cap drops to 70 % of the rejected variant's
 specialized source (at least 16 KB). The measured gain replaces the 0.2 prior for
 later decisions in the scene.
 
 An internal measurement switch (`setMaterialGraphPlanner`) can force one tier,
-replace the compile model, budgets or policy constants, fix `s` or plan with
-another backend's coefficients to simulate a slower compiler, salt the interpreter source and observe installations, upgrade
-decisions and compile samples.
+replace the compile model, budgets or policy constants, fix `s`, plan with
+another backend's coefficients to simulate a slower compiler, salt the
+interpreter source, and observe installations, upgrade decisions and compile
+samples.
 
 ## Compilation and installation
 
@@ -474,8 +434,8 @@ a first failure prepares the authored constants through the same scene path.
 An installed target can continue dispatching while a graph candidate is pending,
 provided its other inputs match. Publication may retire that target between the
 readiness check and dispatch; that single stale-target status retries on the next
-tick. Metal uses process-local source/pipeline caches. The pre-existing optional
-wgpu cache is Vulkan-only; this change adds no disk-cache format.
+tick. Metal uses process-local source/pipeline caches. The optional wgpu cache
+is Vulkan-only; graphs add no disk-cache format.
 
 `MaterialGraphState` snapshots requested and installed plans. Backend caches
 still own scheduling. Parameter/assignment changes covered by the installed
@@ -486,7 +446,7 @@ new records and binds the new variant together.
 
 WebGPU compiles the serving and upgrade variants through the same queue; the
 installed variant keeps tracing until the requested one is ready. Both tiers
-evaluate the same graph (HDR block MAD 0 in P1), so a tier switch of unchanged
+evaluate the same graph with identical HDR, so a tier switch of unchanged
 structures keeps accumulation; only structure or assignment changes restart it.
 
 Only a plan matching the current request can install. Validation/compile failures

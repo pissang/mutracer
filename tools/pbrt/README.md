@@ -112,3 +112,6 @@ expanded by one pixel and flag channels above six standard errors. Either test
 can report mismatch (exit code 2); approximate regions do not fail these checks.
 The estimates assume independent pixel errors, so mismatches still need diagnosis.
 Without `--noise`, noise agreement remains unassessed.
+
+The conversion rules are described in
+[PBRT import mapping](../../docs/technical/pbrt-import.md).

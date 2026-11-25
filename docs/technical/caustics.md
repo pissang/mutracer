@@ -70,8 +70,9 @@ reduces blotches after denoising, at the cost of grainier raw output.
 
 Photons are stored at the first non-smooth surface after at least one smooth
 vertex, whatever camera prefix will later find them; queries at directly visible
-receivers skip them when light tracing owns those paths. Camera paths query at every non-smooth vertex within `bounces`, with a
-normal-consistent surface kernel.
+receivers skip them when light tracing owns those paths. Camera paths query at
+every non-smooth vertex within `bounces`, with a normal-consistent surface
+kernel.
 
 Each photon takes 20 bytes: float32 position and RGBE8 flux, and two octahedral
 directions (incident direction and normal). Two hash-grid layers with different

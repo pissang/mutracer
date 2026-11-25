@@ -110,4 +110,6 @@ deformed vertex in that frame's scene data. The scene buffer must fit
   denoiser's travelling-wave fixture covers non-affine deformation (p99 error
   below 0.0001 px). A non-uniform case in `aov.ts` would make the contract
   self-contained.
-- **Native.** The Metal software and hardware tracers export previous camera-forward depth in `motion.z` and track deformations with stable topology.
+- **Native.** The Metal software and hardware tracers export previous
+  camera-forward depth in `motion.z` and track deformations with stable
+  topology.

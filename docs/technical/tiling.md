@@ -47,7 +47,8 @@ Two rules handle this:
   floor until prediction is invalidated.
 - **Unattainable budgets.** From two measurements at sufficiently different tile
   areas, the predictor fits tile time as `fixed + perPixel × area`. If the fixed
-  part alone exceeds the budget by more than 10%, no grid can meet it. The predictor then picks the
+  part alone exceeds the budget by more than 10%, no grid can meet it. The
+  predictor then picks the
   fewest tiles that keep a tile below 350 ms (over 5× below a 2 s GPU timeout) and,
   where possible, keep the repeated fixed cost below one fifth of the sample. This
   decision is retained until prediction is invalidated, because refitting on its

@@ -300,6 +300,7 @@ original isotropic alpha and turns off below roughness 0.04. Its transmission
 scale follows the reference; single refraction retains the renderer's existing
 radiance IOR scaling. The combined model can retain an energy error, including
 with coat, and the finite path-event budget can truncate deep glass paths.
+The implementation is described in [OpenPBR implementation](./technical/openpbr.md).
 
 ## Coat normals
 

@@ -73,7 +73,8 @@ slots, and the shared opacity boundary refreshes its three frame values.
 Shader installation repacks the private instruction copies for the installed
 shape; its shader key distinguishes the slot encoding from an equal family/terminal
 union in a natural shape. Cached logical programs retain their portable encoding.
-This representation needs both cold compilation and GPU timestamp comparisons: eager context loads
+This representation needs both cold compilation and GPU timestamp comparisons:
+eager context loads
 and indexed values can change rendering cost even when compilation improves.
 Compare full-frame timestamps at matching sample indices across interleaved
 variants, including arithmetic-only graphs as well as complex materials.

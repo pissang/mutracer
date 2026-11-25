@@ -184,3 +184,6 @@ With WebGPU [caustics](./caustics.md#limits), graphs work on receivers, but
 graph-driven specular surfaces do not cast caustics. Lit emission and its coat
 absorption use the constant emission when they need graph evaluation and report
 `unsupported-transport`.
+
+How graphs compile and which tier evaluates them is described in
+[material graph specialization](./technical/material-graph-codegen.md).

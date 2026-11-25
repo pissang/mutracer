@@ -66,7 +66,8 @@ drift on the sideboard from 0.854 to 0.127. Against 1024 spp, it reached
 
 ## Chained correspondence
 
-The renderer's [`motion` AOV](./motion-aov.md) returns the displacement to the preceding frame
+The renderer's [`motion` AOV](./motion-aov.md) returns the displacement to the
+preceding frame
 and the preceding camera-forward depth. It supports rigid transforms, camera
 projection changes and same-topology deformation. The window accumulates on
 the capture grid, including any padding used by the renderer.
@@ -137,8 +138,6 @@ or albedo guides. Future calibration can adjust for the number of tests
 (for example, a 3.5 z-score limit or Holm correction) and estimate noise
 from the renderer's per-pixel luminance moments. The first acceptance
 condition is preserving paired drift on the static archive.
-Evidence and reproduction are recorded in
-`~/mutracer-evidence/temporal-denoiser-20261120/dynamic-memory/round2/README.md`.
 
 ## Memory and latency
 
@@ -171,7 +170,8 @@ with the next eligible plan after an out-of-memory error.
   0.25 px, accepted taps and per-frame window weight. The GPU projection
   regression uses 0.1 px.
 - On the dining archive, symmetric full PSNR is at least 39.47 dB. Region
-  PSNR may fall by at most 0.1 dB from the pre-chain baseline. For drift, use the one-sided paired sign
+  PSNR may fall by at most 0.1 dB from the pre-chain baseline. For drift, use
+  the one-sided paired sign
   test on 35 sideboard pairs and 23 defocus pairs. A regression requires both
   a positive mean paired difference and p < 0.05. Deterministic repeats alone
   give no noise estimate. Compare f150 glints with a same-input post-only run.

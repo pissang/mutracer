@@ -49,10 +49,32 @@ furnace tests.
 
 The tables are stored as 8-bit samples normalized per row, with 16-bit row bounds,
 differences between consecutive rows and exact 16-bit averages. This keeps the
-module about 44 KB gzipped while adding the multiple-scattering tables. On the GPU
+module about 44 KB gzipped while adding the multiple-scattering tables. It is a
+separate chunk that `engine.init()` imports alongside device initialization
+(`openPbrEnergyLut.browser.ts`), so it stays out of the main bundle. On the GPU
 they occupy about 280 KB.
 
 Thin-walled rough transmission has no compensation, as in the reference.
+
+## Medium boundaries
+
+A path carries at most one interior medium. It records the material that owns
+it (`mediumType` stores the material index plus one) rather than only the
+medium's coefficients. A refraction into a dielectric makes that material the
+owner; a refraction out of a material clears the medium only if that material
+owns it. Touching entry and exit hits, such as wine against the inner glass
+wall, can arrive in either order, and an exit from the glass must not end the
+liquid's absorption. Caustic photons track the owner the same way
+(`causticLight.compute.ts`).
+
+A fixed forward step after refraction can jump past a liquid surface lying
+within that step of the glass, leaving the whole liquid segment in air.
+Refraction continuations therefore use the coincident-surface origin described
+in [acceleration structures](./acceleration.md#coincident-hits).
+
+One medium per path means overlapping volumes are not nested: leaving an inner
+volume ends absorption in the enclosing one. The
+[materials guide](../materials.md#inputs) tells users to model separate volumes.
 
 ## Import decisions
 

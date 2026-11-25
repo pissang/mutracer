@@ -68,7 +68,8 @@ the pinned renderer's `2π/N * sum(Y(pixel)*max(z,0))` normalization in light sp
 Named optical data and CIE/D65 tables come from the pinned Apache-2.0 source.
 Conductor normal and edge reflectances integrate Fresnel at cosines 1 and 1/7
 under D65, then convert XYZ to linear sRGB. OpenPBR takes an F82 **tint**,
-so the edge value is divided by `F0+(1-F0)*(6/7)^5` and limited to [0,1]. Glass uses interpolated eta at
+so the edge value is divided by `F0+(1-F0)*(6/7)^5` and limited to [0,1]. Glass
+uses interpolated eta at
 587.56 nm and Abbe `(etaD-1)/(etaF-etaC)`, at 486.13 and 656.27 nm.
 Blackbody emission is normalized to unit luminance before light scaling.
 An RGB renderer and PBRT's spectral renderer can retain material-dependent
@@ -142,7 +143,8 @@ to the existing displacement layout, with a warning.
 The comparison sets PBRT's pixel filter to box with radius 0.5 to match MuTracer's
 uniform pixel jitter. It overrides spp and output resolution, removes Film crop
 windows and pixel bounds, preserves maxdepth,
-sets an opaque black background when no environment exists, removes Film sensor exposure from the reference HDR and never tone maps numerical
+sets an opaque black background when no environment exists, removes Film sensor
+exposure from the reference HDR and never tone maps numerical
 inputs. AOV material IDs identify approximate surface regions. This primary-hit
 mask does not isolate indirect paths that touch approximate materials. PBRT uses
 seeds 0/1; MuTracer uses disjoint sample blocks starting at 0/N with the same Sobol
