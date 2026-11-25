@@ -8,127 +8,80 @@ metals to the current frame and leaves dielectric reflections on surface
 motion. This gives dissimilar history to materials with nearly the same
 reflection lobe and leaves the capped pixels noisy.
 
-## Earlier split window
+## Signal boundary
 
-Stage 1 compared recursive history with the finite A2 window. Repeated
-resampling and accumulation introduced blur and bias, so Stage 3 and 3b used
-the original captures in a finite window. Both recombined the two signals before
-a single OIDN pass and ran the same display stabilization afterward. Stage 3
-also tried history clamping and a small depth- and normal-weighted 3×3 spatial
-fill before OIDN. These were optional replay variants.
+The window uses first-surface reflected radiance from the same invocations as
+beauty. The reflection component includes dielectric, conductor, coat and fuzz
+lobes. For next-event estimation it shares beauty's light selection, shadow
+test and MIS. For continuation it uses the reflected fraction of the full BSDF
+response at the sampled direction. Keeping this fraction preserves the split
+when several lobes contribute at the same direction.
 
-Stage 3 demodulated diffuse and specular by separate guides and gave specular a
-shorter, roughness-dependent radius. It limited both radii at silhouettes,
-required a full 2×2 same-surface footprint, and sampled the nearest texel at a
-single position interpolated between the two projections. It placed the
-virtual sample at the first surface plus the jittered specular hit distance
-along the view ray. The tap checked material, normal, depth, circle of
-confusion and coarse hit-distance agreement. Different objects can reflect at
-similar distances or share a material. A geometric match on the reflector
-could therefore select a different reflection on a curved steel utensil.
+Subtracting reflected radiance from HDR yields the surface residual. It
+includes diffuse and subsurface scattering, primary emission, camera-visible
+photon gathers and light tracing. A path that first transmits through glass
+stays in the residual. A path first reflected by glass can follow the virtual
+image. The accumulation resolves both signals with separate weights before
+running OIDN and post stabilization once.
 
-The replay added transmission, emission and light-traced caustics from the
-current frame. In the prior A2 run, the metal cap already passed most of the
-dielectrics through the full combined-color window. Shortening their windows,
-keeping the residual at one sample set, and rejecting silhouette taps removed
-support that A2 had kept. The surviving summaries record edges darkening on
-both sides, losses of 0.6–1.4 dB on glass, and 0.6–1.8 dB losses on steel cutlery
-across split variants. Stage 3b restored A2 outside the cap and feathered the
-transition. This isolated the capped region but retained the virtual landing
-and reflected-content ambiguity there. Per-pass captures are unavailable, so
-the individual contributions to the measured edge error cannot be quantified.
+## Capture and motion
 
-The new window keeps the A2 geometry and coverage checks for the surface
-tap, including 2×2 coverage weighting, nearby 3×3 recovery, sky correction and
-the adaptive circle-of-confusion radius. It reads an additional reflection
-candidate and blends the weights of the two checked samples. The residual
-stays in the surface window. OIDN runs once on the sum, followed by the
-existing post stabilization and sparkle veto.
+A pinhole center ray identifies the primary surface. One more ray finds the
+first reflected endpoint along the resolved shading normal, including coat
+influence. The virtual image mirrors the endpoint about the reflector's
+tangent plane. The construction also handles a direction at infinity.
+The reflector and endpoint use their own previous rigid transforms before
+projection, so a moving reflected object can have motion with a static
+camera. A cut or deformation invalidates the corresponding rigid motion.
 
-## Radiance and center-ray capture
+Planar capture returns before the optional curvature estimate, including its
+neighbor ray. An internal shader specialization enables the directional
+normal derivative for a curvature comparison. Each capture provides one
+motion hypothesis to the window.
 
-The path-radiance AOV work in `aed9397f` and `f4c9dde3` established where to
-split along the primary path and how to keep both signals on the beauty
-sample sequence. The offline window needs only one extra radiance buffer.
-It records reflected radiance and obtains the surface-motion signal by
-subtracting that component from resolved HDR.
+## Visibility and weights
 
-The reflected component includes the first-surface dielectric, conductor,
-coat and fuzz lobes. Next-event estimation uses the same candidate selection,
-shadow test, and MIS terms for the reflection and beauty. A sampled continuation
-carries the reflected fraction of the full BSDF response evaluated at its
-direction. Keeping the fraction of the response preserves the split when a
-sampled direction is shared by several lobes. The remainder contains diffuse
-and subsurface scattering, primary emission, camera-visible photon gathers
-and the separate light-tracing accumulation. Paths that first transmit
-through glass stay in the surface window, while light reflected by glass
-can follow its virtual image. Thick, curved and layered glass do not fit a
-parallel slab, so this experiment uses the existing transmission behavior.
+The surface tap follows the A2 motion chain and uses the existing depth,
+normal, coverage, material revision and circle-of-confusion checks. The
+reflection tap walks its backward field for past frames and inverts that field
+for future frames. Inversion can try the surface-motion seed when the prior
+optical motion does not find a solution. Both seeds have to pass the same
+2×2 support and residual checks in the destination frame.
 
-Native scene target preparation calls the shared WGSL generator through the
-`sceneTargetParameters` export in `native/src/render-core-profile.json`.
-The same archive supplies the temporal compute shaders via
-`postprocessParameters`. The enabled target writes a separate RGB sum on the
-same beauty invocations and with their clamping and sample normalization.
-The legacy target has its original output bindings.
+Each step checks reflector and endpoint identity and endpoint distance.
+The landing also checks reflector depth and normal, circle of confusion,
+hit coverage and 2×2 footprint. Coincident surface and virtual landings can
+pass these checks, including stationary regions in a shot with a moving
+reflected object. Real endpoint disocclusions and mirror boundaries can
+still interrupt the optical chain.
 
-The primary AOV traces through the pixel center with a pinhole ray. It traces
-the first reflected segment from the resolved shading normal, with coat
-influence where present. It uses the reflected hit and reflector tangent plane
-to find a virtual image, following MuTracer's DLSS integration
-(`ec0f0c3c`, `0d8a6fdc`, `3c88cf39`). The surface and reflected endpoint
-each use their own previous rigid transform. The record keeps the reflected
-instance and mesh IDs, the segment distance, roughness and view cosine, and
-both planar and curvature-adjusted previous-frame displacements. A miss can
-represent illumination at infinity. Reflection motion across a deformation
-falls back when the rigid transforms cannot describe the two points.
+The default window limits smooth-metal history to the current frame. The
+opt-in split window gives its surface residual the full window. For
+reflections the virtual tap gets most weight at low roughness and high
+confidence. Surface tap history fades in between roughness 0.05 and 0.20,
+and loses weight when displacement and endpoint checks indicate a mismatch.
+This protects the mirror in the common case where the visible surface still
+matches but the reflected feature has moved. The continuous surface history
+weight follows the roughness-dependent approach described in
+[Fast Denoising with Self-Stabilizing Recurrent Blurs, slide 58](https://developer.download.nvidia.com/video/gputechconf/gtc/2020/presentations/s22699-fast-denoising-with-self-stabilizing-recurrent-blurs.pdf).
 
-For the curvature candidate, a nearby pinhole ray samples the normal along
-the first-order parallax direction. The directional normal derivative
-`dot(ΔN, ΔP) / dot(ΔP, ΔP)` estimates curvature. The thin-lens correction
-scales the apparent distance as a function of curvature, hit distance and
-view cosine. At a focal singularity the planar candidate remains available.
+## Allocation and diagnosis
 
-## Window weighting
+Each extra history slot uses 24 bytes per pixel. Reflected RGB is stored in
+`rgba16float`. The `rgba32uint` record holds two full endpoint identity words,
+two binary16 displacements, a 16-bit logarithmic distance code, and 8 bits
+each for roughness and cosine. The distance code reserves distinct values for
+invalid paths and environment endpoints.
 
-Each neighbor uses the original captured HDR values. The surface tap uses the
-A2 motion chain. The second tap follows the virtual displacement backward or
-inverts the backward field for future frames. Every step checks the reflector,
-reflected instance and hit-distance consistency. The landing also checks the
-reflector's normal, depth, circle of confusion and 2×2 footprint. A continuous
-roughness- and view-dependent weight scales the virtual candidate, with
-confidence reduced by normal angle, roughness change, hit-distance change
-and mixed coverage. This follows the two-history weighting in NVIDIA's
-[RELAX temporal accumulation](https://github.com/NVIDIA-RTX/NRD/blob/master/Shaders/RELAX_TemporalAccumulation.cs.hlsl).
-The curvature comparison follows the thin-lens behavior described in
-[NRD Common.hlsli](https://github.com/NVIDIA-RTX/NRD/blob/master/Shaders/Common.hlsli).
+At 720p and radius 16, the 33 slots add 729,907,200 bytes. The window sum,
+center capture tail and beauty output add 64 bytes per pixel on WebGPU,
+for 788,889,600 bytes total. Native accounts for a further 16 bytes per
+pixel for the sampling checkpoint, for 803,635,200 bytes total.
 
-The enabled window omits the metal cap. The surface residual and reflected
-radiance each have a sum and a weight, initialized with the current frame.
-The surface and virtual taps contribute separately to the reflection sum.
-Reflection history loses weight when the surface tap slips relative to the
-virtual field and its endpoint differs. The recombined color keeps the
-current frame's alpha and enters the same spatial and display passes.
-
-## Allocation and validation
-
-The extra history uses 40 bytes per pixel per slot. The formats are
-`rgba16float` reflected radiance, `rgba32uint` endpoint metadata and
-`rgba32float` optical motion. At 1280×720 and radius 16, the 33 slots add
-1,216,512,000 bytes. The reflection sum, capture tail and beauty output add
-64 bytes per pixel. WebGPU therefore reserves 1,275,494,400 extra bytes
-(1,216.41 MiB). Native budgets another 16 bytes per pixel for a sampling
-checkpoint, for 1,290,240,000 extra bytes (1,230.47 MiB). The existing
-memory-budget tiers reduce the radius as needed.
-
-Capture adds a reflected ray per eligible pixel and may trace a neighbor to
-estimate curvature. The virtual landing walks the intervening frames and can
-try four inverse steps per future frame. In the worst case the additional
-window work grows with the square of the radius. Coverage and reflection
-confidence restrict this work to pixels with viable reflected histories.
-
-The opt-in native path is evaluated against A2 and an uncapped combined-color
-control. Compare planar and curvature-corrected landings with the same seeds and
-lens settings. Validate highlights, thin reflective objects and mixed edges
-against higher-sample frames. Report memory and frame-time distributions
-alongside the image gate.
+The native window dump can record per-pixel virtual acceptance and the first
+failed check. A planar mirror with camera motion should have high support in
+the region visible across the window. Forward inversion and reflector
+identity reject at the mirror boundary. Low acceptance on convex reflectors
+can also arise from normal rotation and a changing endpoint. A reliable
+curvature correction needs to improve reflected edges without widening
+history across those disocclusions.
