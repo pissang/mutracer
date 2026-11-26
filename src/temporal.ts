@@ -187,7 +187,10 @@ export class TemporalDenoiser {
     return this.detachRender;
   }
 
-  /** Captures one converged frame. Resolves after its GPU capture has been submitted. */
+  /**
+   * Captures the current accumulation from a completed Render.converge() call.
+   * Resolves after its GPU capture has been submitted.
+   */
   async push(render: Render) {
     this.assertAlive();
     if (this.flushing) throw new Error('Cannot push while flush is active.');
@@ -213,18 +216,13 @@ export class TemporalDenoiser {
       if (captureWidth !== this.history!.width || captureHeight !== this.history!.height) {
         throw new Error('Temporal frame dimensions changed within a shot.');
       }
-      if (hasTemporalFrameGap(this.previousFrameSequence, metadata.frameSequence)) this.epoch++;
-      if (this.activeOptions.historyInvalidation === 'auto' && this.previousScene !== undefined && metadata.scene !== this.previousScene) this.epoch++;
-      if (this.activeOptions.historyInvalidation === 'auto' && this.previousSceneRevision !== undefined && metadata.sceneRevision !== this.previousSceneRevision) this.epoch++;
-      if (this.activeOptions.historyInvalidation === 'auto' && this.previousCameraSource !== undefined && metadata.cameraSource !== this.previousCameraSource) this.epoch++;
       if (!this.replay) {
-        this.replay = new Render(this.engine, {width: render.width, height: render.height, maxSamples: 1});
-        await this.replay.converge({samples: 1, camera: metadata.camera});
+        const replay = new Render(this.engine, {width: render.width, height: render.height, maxSamples: 1});
+        try {
+          await replay.converge({samples: 1, camera: metadata.camera});
+          this.replay = replay;
+        } catch (error) { replay.dispose(); throw error; }
       }
-      if (this.previousOffset === metadata.sampleSequenceOffset && !this.warnedOffset) {
-        this.warnedOffset = true; console.warn('Consecutive temporal frames use the same sampleSequenceOffset; correlated noise will not average out.');
-      }
-      this.previousOffset = metadata.sampleSequenceOffset;
       const direct = metadata as typeof metadata & {projection?: number[]; viewProjection?: number[]; apertureRadius?: number; focusDistance?: number};
       const targetCamera = metadata.targetCamera ?? metadata.camera;
       const frame = this.frames;
@@ -264,7 +262,15 @@ export class TemporalDenoiser {
           }
           this.engine.device!.queue.submit([encoder.finish()]); this.customAovs.set(frame, copies);
         }
-      });
+      }, metadata.frameSequence);
+      if (hasTemporalFrameGap(this.previousFrameSequence, metadata.frameSequence)) this.epoch++;
+      if (this.activeOptions.historyInvalidation === 'auto' && this.previousScene !== undefined && metadata.scene !== this.previousScene) this.epoch++;
+      if (this.activeOptions.historyInvalidation === 'auto' && this.previousSceneRevision !== undefined && metadata.sceneRevision !== this.previousSceneRevision) this.epoch++;
+      if (this.activeOptions.historyInvalidation === 'auto' && this.previousCameraSource !== undefined && metadata.cameraSource !== this.previousCameraSource) this.epoch++;
+      if (this.previousOffset === metadata.sampleSequenceOffset && !this.warnedOffset) {
+        this.warnedOffset = true; console.warn('Consecutive temporal frames use the same sampleSequenceOffset; correlated noise will not average out.');
+      }
+      this.previousOffset = metadata.sampleSequenceOffset;
       if(this.activeOptions.postRadius>0)this.materialRevisionFrames.set(frame,new Map(revisionEntries));
       this.frames++;
       this.globalIndices[frame] = this.pushIndex;
