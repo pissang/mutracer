@@ -9,6 +9,7 @@ import {makeWGPURenderTargets} from '../../src/renderer/WGPURenderingPipeline';
 import WGPUBloomPass from '../../src/renderer/WGPUBloomPass';
 import type { OIDNWeb } from '../../src/renderer/denoiser';
 import {WGPUAov} from '../../src/renderer/WGPUAov';
+import type {MaterialGraphCompilationState} from '../../src/renderer/materialGraph/state';
 
 // Keep the real pipeline and tile scheduler; replace GPU execution at the pass boundary.
 const mocks = vi.hoisted(() => {
@@ -47,6 +48,8 @@ const mocks = vi.hoisted(() => {
   class TracePass extends Pass {
     static latest: TracePass;
     constructor() { super(); TracePass.latest = this; }
+    graphs = {status: 'idle' as MaterialGraphCompilationState['status'], diagnostics: [] as MaterialGraphCompilationState['diagnostics'],
+      generation: 0, recordFrame: vi.fn(), recordGpuSample: vi.fn()};
     startEditingPrefetch = vi.fn();
     prepareAovs() { return true; }
     renderAovs() { return true; }
@@ -805,6 +808,35 @@ it.each(['normal', 'albedo', 'shadowCatcher', 'depth'] as const)('keeps %s diagn
   pipeline.dispose();
 });
 
+it('holds offline tracing until the graph settles while preview sampling can continue', () => {
+  const pipeline = createPipeline(false);
+  const pass = mocks.TracePass.latest;
+  const camera = new Camera({projection: 'perspective'});
+  const offline = {samplesPerBatch: 3, deferPostProcess: true, sampleSequenceOffset: 19};
+  pass.graphs.status = 'compiling';
+  pipeline.setOfflineRenderOptions(offline);
+  expect(pipeline.trace(camera, 3)).toBe(true);
+  expect(pass.createPass).not.toHaveBeenCalled();
+  expect(pipeline.getTotalSamplesRendered()).toBe(0);
+
+  pass.graphs.status = 'failed';
+  pass.graphs.diagnostics = [{code: 'shader-compilation', message: 'driver error'}];
+  expect(() => pipeline.trace(camera, 3)).toThrow(/driver error/);
+  expect(pass.createPass).not.toHaveBeenCalled();
+
+  pass.graphs.status = 'ready';
+  pass.graphs.diagnostics = [];
+  expect(pipeline.trace(camera, 3)).toBe(false);
+  expect(pipeline.getTotalSamplesRendered()).toBe(3);
+
+  pipeline.restartSamples();
+  pass.graphs.status = 'compiling';
+  pipeline.setOfflineRenderOptions({...offline, samplesPerBatch: 0});
+  expect(pipeline.trace(camera, 3)).toBe(false);
+  expect(pipeline.getTotalSamplesRendered()).toBe(1);
+  pipeline.dispose();
+});
+
 it.each([false,true])('records actual composition after bloom (%s)', async bloom => {
   const pipeline=createPipeline(false);
   pipeline.setOfflineRenderOptions({samplesPerBatch:32,deferPostProcess:false,sampleSequenceOffset:19});
@@ -913,14 +945,14 @@ it('polls material graph installation after a target reaches its sample cap', ()
   const pipeline=createPipeline(false),camera=new Camera({projection:'perspective'});
   pipeline.trace(camera,1);
   expect(pipeline.getTotalSamplesRendered()).toBe(1);
-  const pass=mocks.TracePass.latest as typeof mocks.TracePass.latest & {graphs:{status:string;generation:number;recordFrame():void}};
+  const pass=mocks.TracePass.latest;
   const recordFrame=()=>{};
-  pass.graphs={status:'compiling',generation:0,recordFrame};
+  Object.assign(pass.graphs,{status:'compiling',generation:0,recordFrame});
   const update=vi.spyOn(pass,'updatePipeline');
   expect(pipeline.refineAovs!(camera)).toBe(false);
   expect(update).toHaveBeenCalledOnce();
   expect(pipeline.getTotalSamplesRendered()).toBe(1);
-  pass.graphs={status:'ready',generation:1,recordFrame};
+  Object.assign(pass.graphs,{status:'ready',generation:1,recordFrame});
   expect(pipeline.refineAovs!(camera)).toBe(false);
   expect(pipeline.getTotalSamplesRendered()).toBe(0);
   expect(pipeline.isFirstFrame()).toBe(true);

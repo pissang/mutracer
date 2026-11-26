@@ -222,8 +222,14 @@ fallback is not traced again. Fallback chains and cycles are rejected.
 | `timeoutMs` | `600000` | Timeout per stage |
 
 Resolves `{samples, averageSamplesPerPixel, pilotSamples, adaptiveSampling,
-varianceHistory?}` after filtering. It rejects if engine input revisions change.
-The same render cannot refine concurrently; other renders remain usable.
+varianceHistory?}` after filtering. The same render cannot refine concurrently.
+Other renders remain usable.
+
+On WebGPU, sampling starts once the committed material graphs are ready.
+A cold first frame can therefore take longer. Graph runtime loading or shader
+compilation failures reject convergence, as do changes to committed engine
+inputs. For a temporal sequence, pass the completed accumulation to `push()`
+before restarting it or adding preview samples.
 
 ### Caustics
 

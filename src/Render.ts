@@ -320,8 +320,12 @@ export default class Render {
   /** @internal Fixed export crop, applied before display passes. */ get _exportCrop() { return this._fixed; }
   /** @internal */ get _output() { if (this._disposed) throw new Error('Render is disposed.'); return this._target; }
   /** @internal Capture converged GPU inputs for the optional temporal sub-path. */
-  async _captureTemporal(capture: (input: import('./renderer/accumulationTarget.js').TemporalCaptureInput) => Promise<void>) {
+  async _captureTemporal(capture: (input: import('./renderer/accumulationTarget.js').TemporalCaptureInput) => Promise<void>,
+    frameSequence = this._temporalFrameSequence) {
     if (this._disposed) throw new Error('Render is disposed.');
+    if (this._busy || !this._lastConvergeCamera || frameSequence !== this._temporalFrameSequence) {
+      throw new Error('Temporal push requires a completed converge call for the current accumulation.');
+    }
     if (!this.converged || !this._target?.captureTemporalInput) throw new Error('Temporal push requires a converged WebGPU render.');
     this._target.activate(); this._engine.display._configure(this); this._target.drawPostProcess();
     await this._target.captureTemporalInput(this._temporalAovs ?? [], capture);
@@ -352,7 +356,7 @@ export default class Render {
   }
   /** @internal */ get _temporalMetadata() {
     const memory = this._target?.getMemory();
-    const camera = this._lastConvergeCamera;
+    const camera = this._current && !this._busy ? this._lastConvergeCamera : undefined;
     return {camera, targetCamera: camera && this._targetCamera(camera),
       captureWidth: memory?.width, captureHeight: memory?.height,
       sampleSequenceOffset: this._lastSequenceOffset, samples: this.samples,
@@ -493,6 +497,7 @@ export default class Render {
     target.setRealtimeDeferPostProcess?.(!!this._refineOptions?.deferResolve);
     if ((!offline && this._offlineCamera) || inputs.scene !== this._input.scene || inputs.camera !== this._input.camera || key !== this._input.settings) {
       if (!offline) this._offlineCamera = false;
+      this._lastConvergeCamera = undefined;
       this._cancelDenoise(); target.restartSamples();
       this._sampleStart = this._frameStart = undefined; this._frameTime = 0;
       target.setSize(size.width, size.height);
@@ -509,6 +514,7 @@ export default class Render {
     return target;
   }
   private _trace(target: RenderTarget, limit: number) {
+    this._lastConvergeCamera = undefined;
     if (this._sampleStart === undefined) { this._sampleStart = performance.now(); this._sampleScale = this._adaptiveScale; }
     const compiling = target.trace(this._targetCamera(this._engine._inputs.value!), limit);
     if (compiling) this._sampleStart = undefined;
@@ -808,7 +814,7 @@ export default class Render {
     return this._target?.getOutputTexture?.(kind);
   }
   /** Discards only this render's accumulation and pending denoising. */
-  restart() { if (this._disposed) throw new Error('Render is disposed.'); this._refillController?.abort(); this._cancelDenoise(); this._cancelAdaptiveFrames(); this._sampleStart = this._frameStart = undefined; this._frameTime = 0; this._target?.restartSamples(); this._status = 'converging'; }
+  restart() { if (this._disposed) throw new Error('Render is disposed.'); this._lastConvergeCamera = undefined; this._refillController?.abort(); this._cancelDenoise(); this._cancelAdaptiveFrames(); this._sampleStart = this._frameStart = undefined; this._frameTime = 0; this._target?.restartSamples(); this._status = 'converging'; }
   /** Releases only this render's image resources and denoiser. */
   dispose() {
     if (this._disposed) return;
@@ -821,7 +827,12 @@ export default class Render {
     for (const dependent of this._dependents) dependent._fallback = null;
     this._dependents.clear();
   }
-  /** Deterministically renders this image. Rejects on abort/timeout/input revision changes and blocks refine on this render. */
+  /**
+   * Deterministically renders this image. WebGPU waits for the committed
+   * material graphs before sampling, including the adaptive pilot if requested.
+   * Rejects on graph runtime or shader compilation failure, abort, timeout or
+   * input revision changes. Blocks refine on this render.
+   */
   async converge(options: ConvergeOptions): Promise<ConvergeResult> {
     if (this._busy) throw new Error('Converge is already running on this render.');
     if (this._disposed) throw new Error('Render is disposed.');
@@ -843,6 +854,7 @@ export default class Render {
     };
     this._refillController?.abort();
     this._busy = true;
+    this._lastConvergeCamera = undefined;
     const abortConverge = () => this._cancelDenoise();
     options.signal?.addEventListener('abort', abortConverge, {once: true});
     let target: RenderTarget | undefined;

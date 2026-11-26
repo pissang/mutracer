@@ -223,9 +223,14 @@ same as texture edits above.
 Changing categories, types, connections or terminals, or an edit that no longer
 fits a texture slot, compiles after a short debounce. Compilation can take
 hundreds of milliseconds or longer; materials with the same reachable structure
-share code. Rendering keeps the previous graph meanwhile, then restarts
-accumulation once the new one installs. With [editing prefetch](#editing-prefetch)
-a new structure renders without that wait.
+share code. Interactive rendering, including `refineUntil()`, can show the
+[graph fallback](./material-graphs.md#waiting-for-graphs) while compilation
+runs, then restarts accumulation when the new graph installs. With [editing
+prefetch](#editing-prefetch), compatible structures can render without that
+wait.
+
+Use [`converge()`](./api.md#convergeoptions) for fixed-sample offline output
+and frames for temporal denoising.
 
 When a scene has more distinct structures than compile in about a second, the
 less used ones run on a shared WebGPU graph interpreter, which costs more per

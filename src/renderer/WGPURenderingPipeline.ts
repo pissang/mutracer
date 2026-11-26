@@ -813,6 +813,17 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     const pipelineError = rayTracePass.getPipelineError();
     if (pipelineError) throw pipelineError;
 
+    // Keep polling installation, but submit no offline samples with the
+    // preview's temporary constants or previous graph.
+    if (offlineSamplesPerBatch > 0) {
+      const graphs = rayTracePass.graphs;
+      if (graphs.status === 'compiling') return true;
+      if (graphs.status === 'failed') {
+        const failure = graphs.diagnostics.find(diagnostic => diagnostic.code === 'shader-compilation');
+        if (failure) throw new Error(`Material graph preparation failed: ${failure.message}`);
+      }
+    }
+
     // Waiting for a shader is not an input change: this render's samples and
     // complete image stay valid, and only Render's restart discards them.
     if (rayTracePass.isCompilingShader() || !rayTracePass.isPipelineReady()) return true;
