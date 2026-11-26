@@ -371,7 +371,7 @@ ${reflections ? `  let accepted = distance <= surfaceWindow && tap.support>0. &&
   var weight = 0.;
   if (accepted) { weight = ((surfaceWindow+1.-distance)/(surfaceWindow+1.))*tap.support; }
   let rgb = select(vec3f(0),skyCorrection(x,tap.at,pos,radiance(tap.at,p.source)),accepted);
-  accumulateReflection(x,index,tap,q,weight,rgb,tent);` : `  if(tap.support<=0. || overflowMissing(tap.at,p.source)){atomicAdd(&rejects[reason],1u);return;}
+  accumulateReflection(x,index,tap,q,weight,rgb,tent,material.y);` : `  if(tap.support<=0. || overflowMissing(tap.at,p.source)){atomicAdd(&rejects[reason],1u);return;}
   atomicAdd(&rejects[0],1u);
   let weight=(surfaceWindow+1.-distance)/(surfaceWindow+1.)*tap.support;
   let rgb=skyCorrection(x,tap.at,pos,radiance(tap.at,p.source));

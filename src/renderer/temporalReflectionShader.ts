@@ -171,7 +171,8 @@ fn virtualWeight(x: vec2i, landing: vec4f, surfaceDepth: f32, record: vec4u) -> 
 }
 
 fn accumulateReflection(
-  x: vec2i, index: u32, tap: HistoryTap, q: vec3f, weight: f32, surfaceRgb: vec3f, tent: f32
+  x: vec2i, index: u32, tap: HistoryTap, q: vec3f, weight: f32, surfaceRgb: vec3f, tent: f32,
+  metallic: f32
 ) {
   let record = endpoint(x,p.current);
   let lobes = roughnessCosine(record);
@@ -201,9 +202,9 @@ fn accumulateReflection(
   let matchSurface = select(0.,reflectionAgreement(record,srcEndpoint),all(srcEndpoint.xy==record.xy));
   let validDelta = distanceCode(record) != 0u && all(abs(delta) < vec2f(p.size));
   let mismatch = select(0.,dominant*smoothstep(.25,2.,slip)*(1.-matchSurface),validDelta);
-  // Surface identity alone cannot locate a feature within the reflected object.
-  // Prefer the current sample as the lobe approaches a perfect mirror.
-  let fallback = smoothstep(.05,.20,roughness);
+  // Surface identity cannot locate a feature within a mirror. Dielectrics
+  // retain surface history when optical reprojection cannot recover a tap.
+  let fallback = select(1., smoothstep(.05,.20,roughness), metallic > METALLIC_THRESHOLD);
   let surfaceWeight = weight*(1.-amount)*(1.-mismatch)*fallback;
   let virtualW = tent*amount;
   total[index] += vec4f((surfaceRgb-reflectedSurface)*weight,weight);

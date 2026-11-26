@@ -568,7 +568,11 @@ fn reflection_window_accumulates_a_translating_highlight_in_both_directions() {
     for (frame, at, intensity) in [(0, 8, 3.), (1, 6, 1.)] {
         let color: Vec<_> = (0..pixels)
             .map(|i| {
-                let highlight = if [2, 3].contains(&(i / 16)) { 10 } else { at };
+                let highlight = if [1, 2, 3].contains(&(i / 16)) {
+                    10
+                } else {
+                    at
+                };
                 let v = if i % 16 == highlight { intensity } else { 0. };
                 [v, v, v, 1.]
             })
@@ -581,9 +585,9 @@ fn reflection_window_accumulates_a_translating_highlight_in_both_directions() {
                 6.,
                 f32::from_bits(0x3c000000),
             ];
-            // Center capture is bottom-first. One output row is invalid and
-            // another holds a stationary reflection with valid motion.
-            entry[1] = if frame == 0 || i / 16 == 5 {
+            // Center capture is bottom-first. The dielectric and one metal
+            // row have invalid optical motion. Another has valid zero motion.
+            entry[1] = if frame == 0 || [5, 6].contains(&(i / 16)) {
                 [1e20; 4]
             } else if i / 16 == 4 {
                 [0.; 4]
@@ -594,7 +598,9 @@ fn reflection_window_accumulates_a_translating_highlight_in_both_directions() {
         let guides = [
             vec![[1., 0., 0., 1.]; pixels],
             vec![[0., 0., 1., 1.]; pixels],
-            vec![[0., 1., 0., 1.]; pixels],
+            (0..pixels)
+                .map(|i| [0., if i / 16 == 1 { 0. } else { 1. }, 0., 1.])
+                .collect(),
             vec![[1.; 4]; pixels],
             color.clone(),
             vec![[0., 0., 1., 3.]; pixels],
@@ -626,6 +632,7 @@ fn reflection_window_accumulates_a_translating_highlight_in_both_directions() {
             (4 * 16 + at, expected),
             (3 * 16 + 10, expected),
             (2 * 16 + 10, current),
+            (16 + 10, expected),
         ] {
             let pixel = result[index];
             assert!(
