@@ -60,9 +60,13 @@ independent noise. The example advances by its samples-per-frame count.
 | `historyInvalidation` | `'auto'` | Splits history on detected cuts and lighting or visibility changes. Material edits invalidate history on the affected surfaces. Use `'manual'` to control cuts in scenes with continuously changing light. |
 | `memoryBudget` | Full plan | GPU bytes for temporal history and scratch. A smaller budget can reduce the effective radii in `plan`. |
 
+Smooth metals now blend in more surface history as roughness increases. Near
+mirrors still use mostly the current frame. Enable `reflectionMotion` when
+a flat mirror needs to accumulate moving reflections.
+
 The default offline latency is 19 frames. Inspect `latency` and, after the
 first `push`, `plan` for the effective radii and GPU byte estimate.
-The default offline plan budgets about 2.74 GB at 720p and 6.16 GB at
+The default offline plan budgets about 2.86 GB at 720p and 6.43 GB at
 1080p. At 720p with a maximum history radius of 16, setting
 `accumulateGuides: true` adds about 265 MB. At the same size and radius,
 `reflectionMotion: true` adds about 789 MB, including its render inputs.
@@ -78,8 +82,8 @@ Other renderer and OIDN allocations are additional.
   create a new temporal denoiser.
 - Reflection motion requires 10 storage buffers per shader stage, or 11 with
   bindless textures. It works best on flat reflectors and uses less history
-  when correspondence fails on a near-mirror surface. Transmission through
-  glass uses visible surface motion.
+  when correspondence fails on a near-mirror metal. Glass reflections can
+  fall back to surface motion. Transmission uses surface motion.
 - `frame.readPixels('denoised')` returns final RGBA float32 pixels in the
   spatial denoiser's color representation. `frame.readPixels('accumulated')`
   returns the windowed linear HDR before the spatial filter.

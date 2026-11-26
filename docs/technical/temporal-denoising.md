@@ -20,10 +20,17 @@
 4. Remove isolated bright impulses using the temporal spread and a glint
    veto. Post and sparkle operate in display codes stored as floats.
 
-The window gives smooth metals with roughness below 0.25 and metalness above
-0.10 the current frame. At silhouettes, the mixed window weights bilinear
-coverage, searches for a checked same-surface tap within 3×3 on nearby frames,
-and corrects mixed sky contribution where the local background is consistent.
+At silhouettes, the mixed window weights bilinear coverage, searches for a
+checked same-surface tap within 3×3 on nearby frames, and corrects mixed sky
+contribution where the local background is consistent.
+
+For current-frame metalness above 0.10, the surface window scales the tent
+span `R + 1` by `smoothstep(0.05, 0.24, roughness)` using current-frame
+roughness, then subtracts one to recover the radius. At roughness 0.05 and
+below only the center sample contributes. At roughness 0.24 and above the full
+window applies. The material history stores roughness and metalness in a
+separate four-byte texel per pixel per slot. Virtual-image taps use the
+original radius when reflection motion is enabled.
 
 ## Why this design
 
@@ -55,9 +62,13 @@ drift on the sideboard from 0.854 to 0.127. Against 1024 spp, it reached
     virtual landings pass every geometric test but carry a different
     reflection.
   - The split AOVs therefore stayed unmerged.
-- **Smooth metals use the current frame.** Their reflections move
-  independently of the surface. A per-material cap map was also tried, and it
-  cost glaze and marble 1–3 dB for no visible benefit.
+- **Smooth metals use a shorter window.** Reflected features move independently
+  of the surface. Applying the full surface window to mirror-like hits left
+  displaced copies of the checkerboard and emissive rods in the constructed
+  scene and trails around the blinds and shelves in Bathroom. At 16 spp with
+  a pinhole camera, removing the limit raised mirror-panel RGB RMSE from
+  3.01 to 27.79 on the constructed scene. The shorter window limits the
+  lifetime of mismatched samples and lets rougher metals average more history.
 - **Post stabilisation.** The window removes most of the noise, but OIDN still
   adds small, frame-specific structure. Matching neighbouring denoised frames
   removes that structure, which halves the remaining drift. Image matching

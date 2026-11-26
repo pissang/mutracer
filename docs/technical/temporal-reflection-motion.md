@@ -3,10 +3,10 @@
 [Temporal denoising usage](../temporal-denoising.md)
 
 The combined-color window tracks the visible surface. A highlight or reflected
-object can move independently of that surface. The legacy cap restricts smooth
-metals to the current frame and leaves dielectric reflections on surface
-motion. This gives dissimilar history to materials with nearly the same
-reflection lobe and leaves the capped pixels noisy.
+object can move independently of that surface. The default surface window
+shrinks with roughness on smooth metals to limit trails. Virtual-image motion
+can accumulate reflections in flat reflectors even when their surface
+window is short.
 
 ## Signal boundary
 
@@ -55,14 +55,14 @@ pass these checks, including stationary regions in a shot with a moving
 reflected object. Real endpoint disocclusions and mirror boundaries can
 still interrupt the optical chain.
 
-The default window limits smooth-metal history to the current frame. The
-opt-in split window gives its surface residual the full window. For
-reflections the virtual tap gets most weight at low roughness and high
-confidence. Surface tap history fades in between roughness 0.05 and 0.20,
-and loses weight when displacement and endpoint checks indicate a mismatch.
-This protects the mirror in the common case where the visible surface still
-matches but the reflected feature has moved. The continuous surface history
-weight follows the roughness-dependent approach described in
+The surface residual and the reflected surface-motion tap use the same
+[roughness-dependent surface window](./temporal-denoising.md#pipeline) as
+the default filter. Virtual taps use the full temporal radius and get the
+most weight at low roughness and high confidence. Displacement and endpoint
+checks reduce the weight of a mismatched surface fallback. For metals, the
+reflected fallback also fades in between roughness 0.05 and 0.20. Dielectrics
+retain their surface fallback even for a smooth reflection lobe. The
+roughness-dependent weight follows the approach described in
 [Fast Denoising with Self-Stabilizing Recurrent Blurs, slide 58](https://developer.download.nvidia.com/video/gputechconf/gtc/2020/presentations/s22699-fast-denoising-with-self-stabilizing-recurrent-blurs.pdf).
 
 ## Allocation and diagnosis
