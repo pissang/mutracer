@@ -170,6 +170,63 @@ fn virtualWeight(x: vec2i, landing: vec4f, surfaceDepth: f32, record: vec4u) -> 
   return vec2f(landing.z * normalWeight * coverage * footprint,0);
 }
 
+// View-space position of a center hit. lens.x is the focal length in pixels;
+// an orthographic projection has no perspective row.
+fn viewPoint(at: vec2i, depth: f32) -> vec3f {
+  let vp = cameras[p.current].vp;
+  let perspective = dot(vec3f(vp[0].w,vp[1].w,vp[2].w),vec3f(vp[0].w,vp[1].w,vp[2].w)) > 1e-12;
+  let scale = select(1.,depth,perspective)/cameras[p.current].lens.x;
+  return vec3f((vec2f(at)-.5*vec2f(p.size))*vec2f(1,-1)*scale,depth);
+}
+
+// Signed normal curvature along one screen axis, from the center normals and
+// depths of neighbors on the same surface. Shading normals are used, so normal
+// maps count as curvature, as they do for the reflected image.
+fn axisCurvature(x: vec2i, axis: vec2i, id: vec3u, revision: u32) -> f32 {
+  let vp = cameras[p.current].vp;
+  let right = normalize(vec3f(vp[0].x,vp[1].x,vp[2].x));
+  let up = normalize(vec3f(vp[0].y,vp[1].y,vp[2].y));
+  let basis = mat3x3f(right,up,normalize(cross(up,right)));
+  var ends = array<vec2i,2>(x,x);
+  for (var side=0; side<2; side++) {
+    let at = x+select(-axis,axis,side==1);
+    if (all(at>=vec2i(0)) && all(at<vec2i(p.size)) && sameMaterial(at,p.current,id,revision) &&
+        surface(at,p.current,0u).w>0.0001) { ends[side] = at; }
+  }
+  if (all(ends[0]==ends[1])) { return 0.; }
+  let a = viewPoint(ends[0],surface(ends[0],p.current,0u).w);
+  let b = viewPoint(ends[1],surface(ends[1],p.current,0u).w);
+  let dp = basis*(b-a);
+  let dn = surface(ends[1],p.current,1u).xyz-surface(ends[0],p.current,1u).xyz;
+  return dot(dn,dp)/max(dot(dp,dp),1e-12);
+}
+
+// The virtual image is built on the tangent plane. On a mirror of normal
+// curvature k, a feature at distance d forms its image at a different depth,
+// and the planar landing misses by parallax*|u/(1+u)| with
+// u = 2*k*cos*d*D/(D+d) (D is the view depth of the surface). The lens
+// aperture adds the image's defocus parallax as a second baseline. Trust
+// fades from 0.1 px to 0.5 px of predicted error.
+fn planarTrust(x: vec2i, id: vec3u, revision: u32, record: vec4u, parallax: vec2f) -> f32 {
+  let code = distanceCode(record);
+  let slip = length(parallax);
+  let depth = surface(x,p.current,0u).w;
+  let reach = exp2((f32(code)-1.)/256.-120.);
+  let sky = code == 65535u;
+  let lens = cameras[p.current].lens;
+  let aperture = lens.x*lens.y*(1./max(depth,1e-4)-select(1./(depth+reach),0.,sky));
+  if (code == 0u || slip+aperture < 1e-4) { return 1.; }
+  let kx = axisCurvature(x,vec2i(1,0),id,revision);
+  let ky = axisCurvature(x,vec2i(0,1),id,revision);
+  let direction = parallax/max(slip,1e-6);
+  let scale = 2.*roughnessCosine(record).y*select(reach*depth/(depth+reach),depth,sky);
+  let u = scale*vec2f(kx*direction.x*direction.x+ky*direction.y*direction.y,
+    select(ky,kx,abs(kx)>abs(ky)));
+  if (any(1.+u < vec2f(.25))) { return 0.; }
+  let error = dot(vec2f(slip,aperture),abs(u/(1.+u)));
+  return 1.-smoothstep(.1,.5,error);
+}
+
 fn accumulateReflection(
   x: vec2i, index: u32, tap: HistoryTap, q: vec3f, weight: f32, surfaceRgb: vec3f, tent: f32,
   metallic: f32
@@ -184,10 +241,17 @@ fn accumulateReflection(
     smoothstep(0.,.25,roughness));
   let id = ident(x,p.current);
   let revision = revisionAt(x,p.current);
+  let delta = unpack2x16float(record.z);
+  let localMotion = motionSample(x,p.current).xy;
+  let validDelta = distanceCode(record) != 0u && all(abs(delta) < vec2f(p.size));
   var land = vec4f(0,0,0,2);
   if (distanceCode(record) != 0u && dominant > 0.01 && hitCoverage(x,p.current)>.94) {
     land = virtualLanding(x,id,revision,record,q.xy);
   }
+  // The image parallax is the gap between the planar and the surface landing.
+  // Without a landing, extrapolate the current frame's virtual motion.
+  let slipped = select(vec2f(0),(delta-localMotion)*f32(abs(p.delta)),validDelta);
+  let trust = planarTrust(x,id,revision,record,select(slipped,land.xy-q.xy,land.z>0.));
   let validation = virtualWeight(x,land,q.z,record);
   let amount = dominant*validation.x;
   let virtualTap = vec2i(floor(land.xy+0.5));
@@ -196,17 +260,15 @@ fn accumulateReflection(
   let reflectedSurface = min(positiveSurface,reflection(tap.at,p.source) *
     (positiveSurface/max(srcHdr,vec3f(1e-12))));
   let srcEndpoint = endpoint(tap.at,p.source);
-  let delta = unpack2x16float(record.z);
-  let localMotion = motionSample(x,p.current).xy;
-  let slip = length(delta-localMotion)*f32(abs(p.delta));
+  let slip = length(slipped);
   let matchSurface = select(0.,reflectionAgreement(record,srcEndpoint),all(srcEndpoint.xy==record.xy));
-  let validDelta = distanceCode(record) != 0u && all(abs(delta) < vec2f(p.size));
   let mismatch = select(0.,dominant*smoothstep(.25,2.,slip)*(1.-matchSurface),validDelta);
   // Surface identity cannot locate a feature within a mirror. Dielectrics
   // retain surface history when optical reprojection cannot recover a tap.
   let fallback = select(1., smoothstep(.05,.20,roughness), metallic > METALLIC_THRESHOLD);
-  let surfaceWeight = weight*(1.-amount)*(1.-mismatch)*fallback;
-  let virtualW = tent*amount;
+  // Where the tangent plane does not hold, use the ordinary surface window.
+  let surfaceWeight = weight*mix(1.,(1.-amount)*(1.-mismatch)*fallback,trust);
+  let virtualW = tent*amount*trust;
   total[index] += vec4f((surfaceRgb-reflectedSurface)*weight,weight);
   reflectedTotal[index] += vec4f(reflectedSurface*surfaceWeight +
     reflection(virtualTap,p.source)*virtualW,surfaceWeight+virtualW);

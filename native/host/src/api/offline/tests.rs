@@ -643,3 +643,119 @@ fn reflection_window_accumulates_a_translating_highlight_in_both_directions() {
         }
     }
 }
+
+#[test]
+#[ignore = "requires real GPU"]
+fn reflection_window_falls_back_to_the_surface_window_on_curved_mirrors() {
+    let engine =
+        super::super::aov_tests::aov_engine(if std::env::var_os("MUTRACER_AOV_HWRT").is_some() {
+            crate::api::Backend::Hardware
+        } else {
+            crate::api::Backend::Software
+        });
+    let gpu = engine.inner.gpu.clone();
+    let size = [16, 8];
+    let pixels = 128;
+    let buffer = |values: &[[f32; 4]]| {
+        gpu.device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Synthetic curved reflection input"),
+                contents: bytemuck::cast_slice(values),
+                usage: wgpu::BufferUsages::STORAGE,
+            })
+    };
+    // A rough metal surface window and a mirror reflection lobe. Its virtual
+    // image moves two pixels per frame while the surface is static.
+    let run = |reflection_motion: bool, curvature: f32| {
+        let options = TemporalOptions {
+            history_radius: HistoryRadius::Fixed(1),
+            post_radius: 0,
+            stabilize_sparkle: false,
+            reflection_motion,
+            ..Default::default()
+        };
+        let plan = options.plan(size, 0, &gpu.device.limits()).unwrap();
+        let passes =
+            Passes::new(gpu.clone(), size, plan, 0, false, false, reflection_motion).unwrap();
+        let mut camera = [0.; 20];
+        for i in [0, 5, 10, 15, 18] {
+            camera[i] = 1.;
+        }
+        // Four pixels per world unit, so the curvature is in inverse world units.
+        camera[16] = 4.;
+        let normals: Vec<_> = (0..pixels)
+            .map(|i| {
+                let angle = (curvature * ((i % 16) as f32 - 8.) / 4.).clamp(-1.5, 1.5);
+                [angle.sin(), 0., angle.cos(), 1.]
+            })
+            .collect();
+        for (frame, at) in [(0, 8), (1, 6)] {
+            let color: Vec<_> = (0..pixels)
+                .map(|i| {
+                    let v = if i % 16 == at { 3. } else { 0.5 };
+                    [v, v, v, 1.]
+                })
+                .collect();
+            let mut records = vec![[0.; 4]; pixels * 6];
+            for entry in records[4 * pixels..].chunks_exact_mut(2) {
+                entry[0] = [
+                    f32::from_bits(1),
+                    f32::from_bits(2),
+                    6.,
+                    f32::from_bits(0x3c000000),
+                ];
+                entry[1] = if frame == 0 { [1e20; 4] } else { [2., 0., 2., 0.] };
+            }
+            let guides = [
+                vec![[1., 0., 0., 1.]; pixels],
+                normals.clone(),
+                vec![[0.3, 1., 0., 1.]; pixels],
+                vec![[1.; 4]; pixels],
+                color.clone(),
+                vec![[0., 0., 1., 3.]; pixels],
+                vec![[f32::from_bits(1), 0., 0., 0.]; pixels],
+                vec![[0.5, 0.5, 1., 1.]; pixels],
+                vec![[0., 0., 0., 1.]; pixels],
+            ]
+            .map(|values| Resource::Buffer(buffer(&values)));
+            passes.capture(frame, &guides, &camera, &[]);
+            if reflection_motion {
+                let reflected: Vec<_> = color.chunks_exact(16).rev().flatten().copied().collect();
+                passes.capture_reflections(
+                    frame,
+                    1,
+                    buffer(&reflected),
+                    buffer(&records),
+                    &guides[3],
+                    &guides[4],
+                );
+            }
+        }
+        [0, 1].map(|frame| {
+            passes.window(frame, frame, 0, true);
+            passes.window(frame, 1 - frame, 1, true);
+            passes.window(frame, frame, 2, true);
+            passes.read::<[f32; 4]>(&passes["window"]).unwrap()
+        })
+    };
+    let differs = |a: &[[f32; 4]], b: &[[f32; 4]]| {
+        (7..=9).any(|x| (0..3).any(|c| (a[3 * 16 + x][c] - b[3 * 16 + x][c]).abs() > 1e-3))
+    };
+    // On a flat mirror the virtual image replaces the surface fallback.
+    let flat = run(true, 0.);
+    let surface = run(false, 0.);
+    assert!(differs(&flat[1], &surface[1]));
+    // With a three-per-unit curvature the planar landing would miss by more
+    // than a pixel, so both frames use the default surface window.
+    let curved = run(true, 3.);
+    let surface = run(false, 3.);
+    for frame in 0..2 {
+        for x in 7..=9 {
+            let (a, b) = (curved[frame][3 * 16 + x], surface[frame][3 * 16 + x]);
+            assert!(
+                (0..4).all(|c| (a[c] - b[c]).abs() < 1e-5),
+                "frame {frame}, x {x}: reflection motion {a:?}, surface window {b:?}"
+            );
+        }
+    }
+}
