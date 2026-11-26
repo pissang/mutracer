@@ -136,10 +136,10 @@ ${temporalOverflowWGSL}
 @group(0) @binding(10) var materials: texture_2d_array<u32>;
 
 ${temporalMaterialWGSL}
-fn surfaceMaterial(at: vec2i) -> vec2f {
+fn surfaceMaterial(at: vec2i) -> vec3f {
   return unpackSurfaceMaterial(textureLoad(materials, at, i32(p.current), 0).x);
 }
-fn surfaceRadius(radius: f32, material: vec2f) -> f32 {
+fn surfaceRadius(radius: f32, material: vec3f) -> f32 {
   if (material.y <= METALLIC_THRESHOLD || material.x >= .24) { return radius; }
   return (radius + 1.) * smoothstep(.05, .24, material.x) - 1.;
 }
@@ -156,6 +156,37 @@ fn landingNormal(q: vec2f, id: vec3u, revision:u32) -> vec3f {
   if (p.symmetric == 1u) { return guideAt(q, p.source, 1u, id, revision).xyz; }
   let nearest = clamp(vec2i(floor(q + 0.5)), vec2i(0), vec2i(p.size) - 1);
   return surface(nearest, p.source, 1u).xyz;
+}
+fn viewRay(q: vec2f, frame: u32) -> vec3f {
+  let vp = cameras[frame].vp;
+  let right = vec3f(vp[0].x,vp[1].x,vp[2].x);
+  let up = vec3f(vp[0].y,vp[1].y,vp[2].y);
+  let perspective = vec3f(vp[0].w,vp[1].w,vp[2].w);
+  if (dot(perspective,perspective) < 1e-12) { return normalize(cross(up,right)); }
+  let forward = normalize(perspective);
+  let offset = vec2f(dot(right,forward),dot(up,forward));
+  let xAxis = right-offset.x*forward;
+  let yAxis = up-offset.y*forward;
+  let ndc = (2.*(q+.5)/vec2f(p.size)-1.)*vec2f(1.,-1.)-offset;
+  return normalize(forward+ndc.x*xAxis/dot(xAxis,xAxis)+ndc.y*yAxis/dot(yAxis,yAxis));
+}
+// A matched surface point can see different incident light through a narrow
+// reflection lobe. Compare its reflected rays in world space, so a pure camera
+// pan around the same origin can keep samples from stationary reflectors.
+fn hasGlossyDielectric(material: vec3f) -> bool {
+  return material.z > .005 && material.x < .15;
+}
+fn dielectricSurfaceConfidence(x: vec2i, q: vec2f, material: vec3f) -> f32 {
+  if (!hasGlossyDielectric(material)) { return 1.; }
+  let n = normalize(surface(x,p.current,1u).xyz);
+  let oldNormal = landingNormal(q,ident(x,p.current),revisionAt(x,p.current));
+  let current = reflect(viewRay(vec2f(x),p.current),n);
+  let neighbor = reflect(viewRay(q,p.source),oldNormal);
+  let focal = cameras[p.current].lens.x;
+  let slip = focal*length(current-neighbor);
+  let tolerance = max(.15,.12*focal*material.x*material.x);
+  let glossy = smoothstep(.005,.035,material.z)*(1.-smoothstep(.075,.15,material.x));
+  return 1.-glossy*smoothstep(.035,tolerance,slip);
 }
 fn tapRejection(at:vec2i, targetDepth:f32, targetNormal:vec3f, id:vec3u, revision:u32)->u32 {
   let oldPos=surface(at,p.source,0u);
@@ -292,7 +323,7 @@ fn recoverTap(x: vec2i, pos: vec4f, q: vec3f, original: HistoryTap) -> HistoryTa
 }
 `;
 
-const startWindowWGSL = (guides = false, reflections = false) => /* wgsl */ `
+const startWindowWGSL = (guides = false, reflections = false, sampleTileSize?: number) => /* wgsl */ `
 @compute @workgroup_size(8,8) fn main(@builtin(global_invocation_id) g:vec3u) {
   if(any(g.xy>=p.size)){return;}
   let x=vec2i(g.xy); let index=g.y*p.size.x+g.x;
@@ -300,8 +331,8 @@ const startWindowWGSL = (guides = false, reflections = false) => /* wgsl */ `
     total[index]=vec4f(radiance(x,p.current),1.0);${reflections ? `
     let reflected = reflection(x,p.current);
     total[index] = vec4f(total[index].rgb-reflected,1.0);
-    reflectedTotal[index] = vec4f(reflected,1.0);
-    if ((p.mode&32u)!=0u) { reflectedTotal[index+p.size.x*p.size.y]=vec4f(0); reflectedTotal[index+2u*p.size.x*p.size.y]=vec4f(0); }` : ''}${guides ? `
+    reflectedTotal[index] = vec4f(reflected,1.0);${sampleTileSize ? '\n    reflectedTotal[index] *= centerSampleWeight(x);' : ''}
+    if ((p.mode&32u)!=0u) { reflectedTotal[index+p.size.x*p.size.y]=vec4f(0); reflectedTotal[index+2u*p.size.x*p.size.y]=vec4f(0); }` : ''}${sampleTileSize ? '\n    total[index] *= centerSampleWeight(x);' : ''}${guides ? `
     albedoSum[index]=vec4f(loadAlbedo(x,p.current),0.);
     normalSum[index]=vec4f(loadNormal(x,p.current),0.);` : ''}
     return;
@@ -355,9 +386,25 @@ fn loadNormal(at: vec2i, slot: u32) -> vec3f {
 }
 `;
 
-export const createMixedWindowWGSL = (guides: boolean, reflections = false) => /* wgsl */ `${windowBindingsAndGeometry}
+export const createMixedWindowWGSL = (guides: boolean, reflections = false, sampleTileSize?: number) => /* wgsl */ `${windowBindingsAndGeometry}
 ${guides ? windowGuidesWGSL : ''}${recoverHistoryWGSL}
-${reflections ? reflectionWindowWGSL(guides ? 14 : 11) : ''}${startWindowWGSL(guides, reflections)}  var tap=HistoryTap(nearest,0.);
+${sampleTileSize ? /* wgsl */ `
+@group(0) @binding(${11 + (guides ? 3 : 0) + (reflections ? 3 : 0)}) var<storage, read> sampleTiles: array<u32>;
+fn sampleWeight(at: vec2i, slot: u32) -> f32 {
+  let step = ${sampleTileSize}u;
+  let grid = (p.size+step-1u)/step;
+  let tile = vec2u(at)/step;
+  return f32(sampleTiles[(slot*grid.y+tile.y)*grid.x+tile.x])/3.;
+}
+// Do not give coverage-dependent or recovered taps an extra vote.
+fn centerSampleWeight(at: vec2i) -> f32 {
+  return select(1., sampleWeight(at,p.current), hitCoverage(at,p.current)>=1.);
+}
+fn neighborSampleWeight(x: vec2i, tap: HistoryTap) -> f32 {
+  return select(1., sampleWeight(tap.at,p.source),
+    hitCoverage(x,p.current)>=1. && hitCoverage(tap.at,p.source)>=1. && tap.support>=1.);
+}
+` : ''}${reflections ? reflectionWindowWGSL(guides ? 14 : 11) : ''}${startWindowWGSL(guides, reflections, sampleTileSize)}  var tap=HistoryTap(nearest,0.);
   if(reason==0u){
     tap.support=1.;
     if(partial){tap.support=footprintWeight(x,q.xy,nearest,q.z);}
@@ -369,11 +416,13 @@ ${reflections ? `  let accepted = distance <= surfaceWindow && tap.support>0. &&
   if (distance <= surfaceWindow) { atomicAdd(&rejects[select(reason,0u,accepted)],1u); }
   let tent = (radius+1.-distance)/(radius+1.);
   var weight = 0.;
-  if (accepted) { weight = ((surfaceWindow+1.-distance)/(surfaceWindow+1.))*tap.support; }
+  if (accepted) { weight = ((surfaceWindow+1.-distance)/(surfaceWindow+1.))*tap.support${sampleTileSize ? "*neighborSampleWeight(x,tap)" : ""}; }
   let rgb = select(vec3f(0),skyCorrection(x,tap.at,pos,radiance(tap.at,p.source)),accepted);
-  accumulateReflection(x,index,tap,q,weight,rgb,tent,material.y);` : `  if(tap.support<=0. || overflowMissing(tap.at,p.source)){atomicAdd(&rejects[reason],1u);return;}
+  var surfaceConfidence = 1.;
+  if (accepted) { surfaceConfidence = dielectricSurfaceConfidence(x,q.xy,material); }
+  accumulateReflection(x,index,tap,q,weight,rgb,tent,material.y,surfaceConfidence,hasGlossyDielectric(material));` : `  if(tap.support<=0. || overflowMissing(tap.at,p.source)){atomicAdd(&rejects[reason],1u);return;}
   atomicAdd(&rejects[0],1u);
-  let weight=(surfaceWindow+1.-distance)/(surfaceWindow+1.)*tap.support;
+  let weight=(surfaceWindow+1.-distance)/(surfaceWindow+1.)*tap.support${sampleTileSize ? '*neighborSampleWeight(x,tap)' : ''};
   let rgb=skyCorrection(x,tap.at,pos,radiance(tap.at,p.source));
   total[index]+=vec4f(rgb*weight,weight);` }${guides ? `
   if ((p.mode & 8u)!=0u) {

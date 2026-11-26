@@ -193,11 +193,14 @@ async function run() {
     const overflowResult = await exerciseFullOverflow(device);
     const floatingPostResult = await exerciseFloatingPostCodes(device);
     const materialAcceptanceResult = await exerciseMaterialAcceptance(device);
+    const glossyAcceptance = await exerciseGlossyAcceptance(device);
+    const offlineCounts = await exerciseOfflineSampleWeights(device);
+    const retainedBaseSamples = await exerciseRetainedBaseSamples(engine);
     const forwardSeed = await exerciseForwardMotionSeed(device);
     const reflectionMotion = await exerciseReflectionMotion(engine, device);
     await device.queue.onSubmittedWorkDone();
     check(uncaptured.length === 0, `Uncaptured WebGPU errors: ${uncaptured.join(' | ')}`);
-    return {identity: true, max, sequence: true, oidnMax, presentationIdentity, vignetteChange, customAov: receivedRoughness, fullIdResult, overflowResult, floatingPostResult, materialAcceptanceResult, forwardSeed, reflectionMotion, uncapturedErrors: uncaptured.length, plan: temporal.plan};
+    return {identity: true, max, sequence: true, oidnMax, presentationIdentity, vignetteChange, customAov: receivedRoughness, fullIdResult, overflowResult, floatingPostResult, materialAcceptanceResult, glossyAcceptance, offlineCounts, retainedBaseSamples, forwardSeed, reflectionMotion, uncapturedErrors: uncaptured.length, plan: temporal.plan};
   } finally { temporal.dispose(); render.dispose(); sync.dispose(); engine.dispose(); device.destroy(); }
 }
 
@@ -327,15 +330,16 @@ async function exercisePaddedPresentation(engine: Engine) {
   } finally { temporal.dispose(); render.dispose(); }
 }
 
-async function createTestWindow(device: GPUDevice, width: number, height: number, capacity: number, accumulateGuides = false) {
-  const history = await TemporalHistoryGPU.create(device, width, height, capacity, accumulateGuides ? capacity : 1, false);
-  const window = await DirectWindowGPU.create(history, false, accumulateGuides);
+async function createTestWindow(device: GPUDevice, width: number, height: number, capacity: number, accumulateGuides = false, experiment?: number, reflectedRadiance = false) {
+  const history = await TemporalHistoryGPU.create(device, width, height, capacity, accumulateGuides ? capacity : 1, false, reflectedRadiance);
+  const window = await DirectWindowGPU.create(history, false, accumulateGuides, experiment);
   return {
     history,
     guides: window.guides,
     rejects: window.rejects,
     filter: window.filter.bind(window),
     read: window.read.bind(window),
+    setSampleTiles: window.setSampleTiles.bind(window),
     async upload(frame: number, metadata: Parameters<typeof history.capture>[1],
       arrays: Record<string, Float32Array<ArrayBuffer> | Uint32Array<ArrayBuffer>>) {
       const buffers: Record<string, GPUBuffer> = {};
@@ -345,7 +349,9 @@ async function createTestWindow(device: GPUDevice, width: number, height: number
           device.queue.writeBuffer(buffer, 0, data);
           buffers[key === 'hdr' ? 'color' : key] = buffer;
         }
-        await history.capture(frame, metadata, buffers);
+        const reflection = buffers.reflected && {radiance: buffers.reflected, albedo: buffers.albedo,
+          records: buffers.centerRecords, samples: 1};
+        await history.capture(frame, metadata, buffers, [], reflection, buffers.centerRecords);
       } finally { for (const buffer of Object.values(buffers)) buffer.destroy(); }
     },
     dispose() { window.dispose(); history.dispose(); },
@@ -461,6 +467,105 @@ async function exerciseMaterialAcceptance(device: GPUDevice) {
   } finally { window.dispose(); }
 }
 
+async function exerciseGlossyAcceptance(device: GPUDevice) {
+  const size = 8, pixels = size * size;
+  const projection = new Camera({projection: 'perspective', fov: 45}).getProjectionMatrix(1);
+  const centerNormal = new Float32Array(pixels * 4), roughness = new Float32Array(pixels * 4);
+  const albedo = new Float32Array(pixels * 4), id = new Uint32Array(pixels * 4);
+  for (let i = 0; i < pixels; i++) {
+    centerNormal.set([0, 0, 1, 1], i * 4);
+    roughness.set([.45, 0, 0, 1], i * 4);
+    albedo.set([.5, .5, .5, 1], i * 4);
+    id.set([1, 2, 3, 0], i * 4);
+  }
+  const window = await createTestWindow(device, size, size, 2, false, undefined, true);
+  async function upload(frame: number, slide: number, gloss: number) {
+    const centerRecords = new Float32Array(pixels * 24);
+    const hdr = new Float32Array(pixels * 4), motion = new Float32Array(pixels * 4);
+    const reflected = new Float32Array(pixels * 4);
+    for (let i = 0; i < pixels; i++) {
+      centerRecords.set([0, 0, 1, 1, 0, 0, 0, 1 + gloss], (pixels + i) * 8);
+      hdr.set(frame === 0 ? [9, 7, 0, 1] : [1, 1, 0, 1], i * 4);
+      reflected.set(frame === 0 ? [8, 0, 0, 0] : [0, 0, 0, 0], i * 4);
+      motion.set([slide, 0, 1, 3], i * 4);
+    }
+    await window.upload(frame, {viewProjection: projection, projection, apertureRadius: 0, focusDistance: 1},
+      {centerRecords, centerNormal, roughness, albedo, hdr, motion, id, reflected});
+  }
+  async function resolve(slide: number, gloss: number) {
+    await upload(1, slide, gloss);
+    const color = new Float32Array(await window.read(await window.filter(1, [0], true)));
+    return color.slice(4 * (size * 4 + 4), 4 * (size * 4 + 4) + 2);
+  }
+  try {
+    const narrowCoat = (16 << 8) | 10;
+    await upload(0, 0, narrowCoat);
+    const stationary = await resolve(0, narrowCoat);
+    const glossy = await resolve(1, narrowCoat);
+    const broad = await resolve(1, (16 << 8) | 115);
+    check(Math.abs(stationary[0] - 81 / 17) < 1e-5, 'A stationary narrow coat lost its surface history');
+    check(glossy[0] === 1, 'A sliding narrow coat accepted a stale highlight');
+    check(Math.abs(glossy[1] - 65 / 17) < 1e-5, 'Reflected motion reduced diffuse history');
+    check(broad[0] === stationary[0], 'A broad lobe lost its surface history');
+    return {stationary: [...stationary], glossy: [...glossy], broad: [...broad]};
+  } finally { window.dispose(); }
+}
+
+async function exerciseOfflineSampleWeights(device: GPUDevice) {
+  const size = 8, pixels = size * size;
+  const identity = new Float32Array(16);
+  identity[0] = identity[5] = identity[10] = identity[15] = 1;
+  const meta = {viewProjection: identity, projection: identity, apertureRadius: 0, focusDistance: 1};
+  const window = await createTestWindow(device, size, size, 2, false, size);
+  const buffer = (value: readonly number[]) => {
+    const data = new Float32Array(pixels * 4);
+    for (let i = 0; i < pixels; i++) data.set(value, i * 4);
+    return data;
+  };
+  async function upload(frame: number, radiance: number, samples: number) {
+    const id = new Uint32Array(pixels * 4).fill(1);
+    await window.upload(frame, meta, {centerDepth: buffer([1, 0, 0, 1]), centerNormal: buffer([0, 0, 1, 1]),
+      roughness: buffer([.5, 0, 0, 1]), motion: buffer([0, 0, 1, 3]), albedo: buffer([.5, .5, .5, 1]),
+      hdr: buffer([radiance, radiance, radiance, 1]), id});
+    window.setSampleTiles(frame, {width: size, height: size, tileSize: size, targets: new Uint32Array([samples])});
+  }
+  try {
+    await upload(0, 1, 3);
+    await upload(1, 5, 6);
+    const future = new Float32Array(await window.read(await window.filter(0, [1], true, 1)))[4 * (size*4+4)];
+    const past = new Float32Array(await window.read(await window.filter(1, [0], true, 1)))[4 * (size*4+4)];
+    check(future === 3, 'The future tap did not carry its own sample count');
+    check(Math.abs(past - 4.2) < 1e-6, 'The center and past tap did not preserve their sample counts');
+    return {future, past};
+  } finally { window.dispose(); }
+}
+
+async function exerciseRetainedBaseSamples(engine: Engine) {
+  const size = 32, tileSize = 8, base = 3;
+  const render = new Render(engine, {width: size, height: size, maxSamples: base});
+  const offset = 991;
+  try {
+    await render.converge({samples: base, sampleSequenceOffset: offset});
+    const uniform = (await render.readPixels('hdr')).data;
+    const columns = size / tileSize;
+    const targets = Uint32Array.from({length: columns ** 2}, (_, i) => i % columns < columns / 2 ? base : 5);
+    render.maxSamples = 5;
+    const plan = await render._convergeWithSampleTiles({samples: 5, sampleSequenceOffset: offset},
+      {width: size, height: size, tileSize, targets});
+    check(plan.averageSamplesPerPixel === 4, 'The adaptive pass did not spend its additional sample budget');
+    const adaptive = (await render.readPixels('hdr')).data;
+    let maxDelta = 0;
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size / 2; x++) {
+        const offset = (y * size + x) * 4;
+        for (let c = 0; c < 4; c++) maxDelta = Math.max(maxDelta, Math.abs(uniform[offset + c] - adaptive[offset + c]));
+      }
+    }
+    check(maxDelta === 0, 'Adaptive sampling changed the base samples in unselected tiles');
+    return {average: plan.averageSamplesPerPixel, maxDelta};
+  } finally { render.dispose(); }
+}
+
 async function exerciseForwardMotionSeed(device: GPUDevice) {
   const width = 16;
   const height = 8;
@@ -470,7 +575,7 @@ async function exerciseForwardMotionSeed(device: GPUDevice) {
   const metadata = {viewProjection: identity, projection: identity, apertureRadius: 0, focusDistance: 1};
   const window = await createTestWindow(device, width, height, 3, true);
 
-  async function upload(frame: number, start: number, brightness: number, visible: boolean) {
+  async function upload(frame: number, start: number, brightness: number, visible: boolean, motionX = -3) {
     const depth = new Float32Array(pixels * 4);
     const position = new Float32Array(pixels * 4);
     const normal = new Float32Array(pixels * 4);
@@ -493,7 +598,7 @@ async function exerciseForwardMotionSeed(device: GPUDevice) {
       albedo.set(i < width ? [1, 1, 1, 1] : [grey, grey, grey, brightness === 1 ? .5 : 1], at);
       guideNormal.set(inside ? [0.5, 0.5, 0.5 + grey / 2, 1] : [0, 0, 0, 0], at);
       roughness.set([.5, 0, 0, 1], at);
-      if (inside && visible) motion.set([-3, 0, 1, 3], at);
+      if (inside && visible) motion.set([motionX, 0, 1, 3], at);
       hdr.set([brightness, brightness, brightness, 1], at);
       id.set([inside ? 1 : 9, 0, 1, 0], at);
     }
@@ -524,6 +629,10 @@ async function exerciseForwardMotionSeed(device: GPUDevice) {
       'Packing lost the averaged albedo or changed current coverage');
     check(Math.abs(packed.normal[2] - expected / 2) < 1e-6 && packed.normal[3] === 2,
       'Packing changed the weighted normal or sample count');
+    await upload(1, 7, 3, true, -2.6);
+    const contour = new Float32Array(await window.read(await window.filter(0, [1], true)));
+    check(contour[pixel] >= 1 && contour[pixel] < expected,
+      'A partial forward footprint carried as much history as a fully covered landing');
     await upload(1, 7, 3, false);
     await upload(2, 10, 9, true);
     const occluded = new Float32Array(await window.read(await window.filter(0, [2], true)));

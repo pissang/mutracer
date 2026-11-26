@@ -13,6 +13,7 @@ Then open <http://localhost:3001/examples/>.
 | [`three`](./three.ts) | Building the scene in Three.js (`GLTFLoader`, `OrbitControls`, `MeshPhysicalMaterial`) and rendering it with `THREESync` / `RenderLoop`; rotation and a roughness slider for incremental material edits. |
 | [`animation`](./animation.ts) | A procedural skinned cylinder, bone animation and a morph slider; pause animation to accumulate a clean image. Both backends support `?webgl`. |
 | [`instancing`](./instancing.ts) | Native InstancedMesh with per-instance colors, shared geometry/materials and array notifications. |
+| [`temporal-stress`](./temporal-stress.ts) | A deterministic noisy room for `TemporalDenoiser` at 1–3 spp: mirror, curved metals, glass, animated emitters and materials, moving props, a camera cut and a focus pull. WebGL renders without temporal denoising. `node scripts/temporal-stress-capture.mjs OUT_DIR` renders frames in headless Chrome; [`temporal-stress.shot.mjs`](./temporal-stress.shot.mjs) renders the same shot with the [Node CLI](../cli/README.md). |
 | [`advanced`](./advanced.ts) | Coat, transmission with dispersion, subsurface, fuzz and thin-film materials; a shadow catcher with a transparent background; `render.setDenoiser()`; a `samplingPattern` selector (Sobol, ZSobol, random); `render.converge()` and PNG export. |
 
 For an interactive app with drag-and-drop glTF/HDR loading, a scene tree,

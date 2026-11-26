@@ -68,7 +68,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     let primary = center[index + size.x * size.y];
     let normalDepth = bitcast<vec4f>(primary.identity);
     linearize = false;
-    alpha = primary.motion.w;
+    alpha = f32(primary.motion.w > 0.0);
     if (kind == 9u) { color = clamp(normalDepth.xyz * 0.5 + 0.5, vec3f(0.0), vec3f(1.0)); }
     else if (kind == 10u) { color = vec3f(clamp((normalDepth.w - params.mapping.x) / (params.mapping.y - params.mapping.x), 0.0, 1.0)); }
     else { color = clamp(primary.motion.xyz / params.mapping.z * 0.5 + 0.5, vec3f(0.0), vec3f(1.0)); }

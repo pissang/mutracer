@@ -32,6 +32,18 @@ window applies. The material history stores roughness and metalness in a
 separate four-byte texel per pixel per slot. Virtual-image taps use the
 original radius when reflection motion is enabled.
 
+## Experimental geometry-guided sampling
+
+The WebGPU stress capture can opt into a geometry prepass and supplemental
+beauty samples. A lower-resolution center-ray pass predicts weak temporal
+support from geometry and motion. The plan allocates extra samples to tiles
+while retaining the base beauty samples everywhere. For fully covered matches,
+the window weights each frame by its actual sample count. Recovered and
+partially covered taps keep the regular weight.
+
+The experiment defaults to uniform sampling. Its controls are internal and
+currently support a 3 spp base with the offline surface window.
+
 ## Why this design
 
 The target is offline animation at a low fixed sample count (32 spp in the

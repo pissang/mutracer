@@ -162,11 +162,23 @@ export class TemporalDenoiser {
   private motionCoverageCounts?: GPUBuffer;
   private composeParams?: GPUBuffer;
   private presentationInputs = new Map<number, {color: GPUBuffer; albedo: GPUBuffer; normal: GPUBuffer}>();
+  private sampleTileSize?: number;
 
   constructor(engine: Engine, options: import('./temporal/options.js').TemporalDenoiserOptions = {}) {
     this.engine = engine;
     this.options = normalizeTemporalOptions(options);
     this.activeOptions = this.options;
+  }
+
+  /** @internal Enables sample-count weighting for WebGPU offline capture. */
+  _configureOfflineSampling({tileSize}: {tileSize: number}) {
+    this.assertAlive();
+    if (this.attached || this.history || this.options.mode !== 'offline' ||
+      this.options.reflectionMotion || this.options.accumulateGuides || this.options.memoryBudget !== undefined ||
+      (!Number.isSafeInteger(tileSize) || tileSize < 1)) {
+      throw new Error('Offline sampling experiments require an unattached offline surface window and the default memory budget.');
+    }
+    this.sampleTileSize = tileSize;
   }
 
   /** Attaches hidden capture AOVs to one render and returns a detach function. */
@@ -208,6 +220,8 @@ export class TemporalDenoiser {
       }
       const metadata = render._temporalMetadata;
       if (!metadata.camera) throw new Error('Temporal push requires a completed converge call.');
+      const needsTiles = this.sampleTileSize !== undefined;
+      if (needsTiles !== !!metadata.sampleTiles) throw new Error('The render and temporal window must use the same offline sampling mode.');
       // The renderer may pad the capture grid while presenting a center crop.
       const captureWidth = metadata.captureWidth ?? render.width;
       const captureHeight = metadata.captureHeight ?? render.height;
@@ -226,6 +240,7 @@ export class TemporalDenoiser {
       const direct = metadata as typeof metadata & {projection?: number[]; viewProjection?: number[]; apertureRadius?: number; focusDistance?: number};
       const targetCamera = metadata.targetCamera ?? metadata.camera;
       const frame = this.frames;
+      if (metadata.sampleTiles) this.window!.setSampleTiles(frame, metadata.sampleTiles);
       const sampleCount = metadata.samples;
       const settings = this.engine.display._snapshotSettings();
       await render._captureTemporal(async input => {
@@ -244,7 +259,8 @@ export class TemporalDenoiser {
           viewProjection, projection, apertureRadius: direct.apertureRadius ?? cameraApertureRadius(targetCamera),
           focusDistance: direct.focusDistance ?? targetCamera.focusDistance
         }, {color: input.color, albedo: input.albedo, normal: input.normal, centerDepth: aovs.centerDepth!,
-          centerNormal: aovs.centerNormal!, roughness: aovs.roughness!, motion: aovs.motion!, id: aovs.id!}, revisionEntries, input.reflection);
+          centerNormal: aovs.centerNormal!, roughness: aovs.roughness!, motion: aovs.motion!, id: aovs.id!},
+          revisionEntries, input.reflection, input.centerRecords);
         if (this.activeOptions.historyInvalidation === 'auto' && aovs.centerPosition && frame > 0 && this.activeOptions.historyRadius.max > 0 &&
             this.previousFrameSequence === metadata.frameSequence - 1 && this.previousSceneRevision === metadata.sceneRevision &&
             this.previousScene === metadata.scene && this.previousCameraSource === metadata.cameraSource &&
@@ -367,7 +383,7 @@ export class TemporalDenoiser {
       catch (error) { this.releaseResources(); this.activeOptions = this.options; throw error; }
       const error = scopedError ?? allocationError;
       if (!error) {
-        this._plan = Object.freeze({...candidate});
+        this._plan = Object.freeze({...candidate, bytes: candidate.bytes + this.window!.experimentBytes});
         this.revisionMaterialCapacity=Math.max(1,materialCount);
         if (!this.warnedBudget && (candidate.historyRadius.min !== this.options.historyRadius.min ||
           candidate.historyRadius.max !== this.options.historyRadius.max || candidate.postRadius !== this.options.postRadius)) {
@@ -392,7 +408,7 @@ export class TemporalDenoiser {
     this.history = await TemporalHistoryGPU.create(device, width, height, temporalHistorySlots(this.activeOptions),
       temporalGuideSlots(this.activeOptions), denoiser?.type === 'custom', reflections);
     // The selected mixed window stays enabled when the post sparkle pass is disabled.
-    this.window = await DirectWindowGPU.create(this.history, historyRadius.min !== historyRadius.max, accumulateGuides);
+    this.window = await DirectWindowGPU.create(this.history, historyRadius.min !== historyRadius.max, accumulateGuides, this.sampleTileSize);
     if (this.activeOptions.postRadius > 0) {
       const postSlots = this.activeOptions.mode === 'offline' ? this.activeOptions.postRadius * 2 + 1 : this.activeOptions.postRadius + 1;
       this.post = await TemporalPostGPU.create(this.history, postSlots, materialCount);

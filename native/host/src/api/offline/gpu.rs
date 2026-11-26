@@ -313,6 +313,7 @@ impl Passes {
         guides: &[Resource; 9],
         meta: &[f32; 20],
         revisions: &[[u32; 2]],
+        center_records: bool,
     ) {
         let [w, h] = self.size;
         let s = i % self.plan.slots();
@@ -331,7 +332,7 @@ impl Passes {
         self.clear("overflow", u64::from(s) * 131072, 131072);
         self.image_pass(
             "capture",
-            &[w, h, s, 0],
+            &[w, h, s, u32::from(center_records)],
             &[
                 depth,
                 normal,

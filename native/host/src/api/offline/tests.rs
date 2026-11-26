@@ -512,7 +512,7 @@ fn window_guides_match_web_packed_guides() {
                 usage: wgpu::BufferUsages::STORAGE,
             }))
         });
-        passes.capture(frame, &resources, &camera, &[]);
+        passes.capture(frame, &resources, &camera, &[], false);
     }
     passes.clear("rejects", 0, 64);
     passes.window(0, 0, 0, true);
@@ -609,7 +609,7 @@ fn reflection_window_accumulates_a_translating_highlight_in_both_directions() {
             vec![[0., 0., 0., 1.]; pixels],
         ]
         .map(|values| Resource::Buffer(buffer(&values)));
-        passes.capture(frame, &guides, &camera, &[]);
+        passes.capture(frame, &guides, &camera, &[], false);
         let reflected: Vec<_> = color.chunks_exact(16).rev().flatten().copied().collect();
         passes.capture_reflections(
             frame,
@@ -722,7 +722,7 @@ fn curved_mirror_window(
             vec![[0., 0., 0., 1.]; pixels],
         ]
         .map(|values| Resource::Buffer(buffer(&values)));
-        passes.capture(frame, &guides, &camera, &[]);
+        passes.capture(frame, &guides, &camera, &[], false);
         if reflection_motion {
             let reflected: Vec<_> = color.chunks_exact(16).rev().flatten().copied().collect();
             passes.capture_reflections(

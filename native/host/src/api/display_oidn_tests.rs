@@ -115,10 +115,8 @@ fn finish_filter(render: &Render) {
 fn viewer_display_oidn_contains_firefly_spread_and_preserves_sdk_hdr() {
     let _test = crate::abi_test_lock();
     let (size, images, center) = fixture();
-    let engine = Engine::new(EngineOptions {
-        backend: Backend::Software,
-    })
-    .unwrap();
+    let backend = crate::api::aov_tests::aov_test_backend();
+    let engine = Engine::new(EngineOptions { backend }).unwrap();
     engine.display().set_size(size[0], size[1]).unwrap();
     engine.set_scene(&crate::api::tests::lit_scene()).unwrap();
     engine.update().unwrap();
@@ -135,6 +133,7 @@ fn viewer_display_oidn_contains_firefly_spread_and_preserves_sdk_hdr() {
     )
     .unwrap();
     render.converge(ConvergeOptions::new(1)).unwrap();
+    assert_eq!(render.backend().unwrap().0, backend);
     // Both paths consume these exact same immutable means. No resampling or clamp
     // can make this regression pass by removing the outlier from the accumulator.
     install_input(&render, size, &images);
