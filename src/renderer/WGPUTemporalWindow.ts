@@ -1,5 +1,6 @@
 import type {TemporalHistoryGPU} from './WGPUTemporalHistory.js';
 import {createMixedWindowWGSL} from './temporalWindowShader.js';
+import type {OfflineSampleTiles} from './OfflineAdaptiveSampling.js';
 export {directGeometryWGSL, directWindowWGSL} from './temporalWindowShader.js';
 export class DirectWindowGPU {
   readonly rejects: GPUBuffer;
@@ -10,8 +11,11 @@ export class DirectWindowGPU {
   private pipeline!: GPUComputePipeline;
   private cameraCutPipeline?: GPUComputePipeline;
   private readonly reflectionSum?: GPUBuffer;
+  private readonly experimentBuffer?: GPUBuffer;
+  private readonly tilesPerFrame: number;
 
-  private constructor(private readonly history: TemporalHistoryGPU, private readonly adaptiveRadius: boolean, accumulateGuides: boolean) {
+  private constructor(private readonly history: TemporalHistoryGPU, private readonly adaptiveRadius: boolean,
+    accumulateGuides: boolean, private readonly experiment?: 'pilot' | number) {
     const d = history.device;
     const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
     this.total = d.createBuffer({label: 'Direct window weighted sum', size: history.bytes, usage});
@@ -23,25 +27,44 @@ export class DirectWindowGPU {
       };
     }
     if (history.reflections) this.reflectionSum = d.createBuffer({label: 'Reflected radiance weighted sum', size: history.bytes, usage});
+    this.tilesPerFrame = typeof experiment === 'number'
+      ? Math.ceil(history.width / experiment) * Math.ceil(history.height / experiment) : 0;
+    if (experiment) this.experimentBuffer = d.createBuffer({label: 'Offline temporal sampling',
+      size: experiment === 'pilot' ? history.bytes / 2 : history.capacity * this.tilesPerFrame * 4, usage});
     this.rejects = d.createBuffer({label: 'Direct window validation counts', size: 64, usage});
     this.params = d.createBuffer({label: 'Direct window parameters', size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST});
   }
 
-  static async create(history: TemporalHistoryGPU, adaptiveRadius = false, accumulateGuides = false) {
-    const window = new DirectWindowGPU(history, adaptiveRadius, accumulateGuides);
+  static async create(history: TemporalHistoryGPU, adaptiveRadius = false, accumulateGuides = false, experiment?: 'pilot' | number) {
+    const window = new DirectWindowGPU(history, adaptiveRadius, accumulateGuides, experiment);
     const device = history.device;
     try {
       const createPipeline = (code: string) => {
         const module = device.createShaderModule({label: 'Direct temporal window', code});
         return device.createComputePipelineAsync({layout: 'auto', compute: {module, entryPoint: 'main'}});
       };
-      window.pipeline = await createPipeline(createMixedWindowWGSL(accumulateGuides, !!history.reflections));
-      if (history.reflections) window.cameraCutPipeline = await createPipeline(createMixedWindowWGSL(accumulateGuides));
+      window.pipeline = await createPipeline(createMixedWindowWGSL(accumulateGuides, !!history.reflections, experiment));
+      if (history.reflections || experiment) window.cameraCutPipeline = await createPipeline(createMixedWindowWGSL(accumulateGuides));
       return window;
     } catch (error) { window.dispose(); throw error; }
   }
 
   get capacity() { return this.history.capacity; }
+  get experimentBytes() { return this.experimentBuffer?.size ?? 0; }
+
+  setSampleTiles(frame: number, plan: OfflineSampleTiles) {
+    const h = this.history;
+    if (!this.experimentBuffer || plan.tileSize !== this.experiment || plan.width !== h.width || plan.height !== h.height ||
+      plan.targets.length !== this.tilesPerFrame) throw new Error('Temporal sample tiles do not match the window.');
+    h.device.queue.writeBuffer(this.experimentBuffer, h.slot(frame) * this.tilesPerFrame * 4, plan.targets);
+  }
+
+  async readPilot() {
+    if (this.experiment !== 'pilot') throw new Error('The window has no pilot moments.');
+    const [sum, moments] = await Promise.all([this.read(this.total), this.read(this.experimentBuffer!)]);
+    return {width: this.history.width, height: this.history.height,
+      sum: new Float32Array(sum), moments: new Float32Array(moments)};
+  }
 
   async dispatch(current: number, source: number, symmetric: boolean, stage: number,
     radiusMin: number, radiusMax: number, includeMaterialRevisions = true) {
@@ -56,6 +79,7 @@ export class DirectWindowGPU {
     if (h.reflections && includeMaterialRevisions) {
       resources.push(h.reflections.radiance, h.reflections.endpoint, this.reflectionSum!);
     }
+    if (this.experimentBuffer && includeMaterialRevisions) resources.push(this.experimentBuffer);
     const pipeline = includeMaterialRevisions ? this.pipeline : this.cameraCutPipeline ?? this.pipeline;
     const group = d.createBindGroup({layout: pipeline.getBindGroupLayout(0), entries: resources.map((resource, binding) => ({
       binding, resource: resource instanceof GPUBuffer ? {buffer: resource} : resource.createView({dimension: '2d-array'}),
@@ -96,10 +120,11 @@ export class DirectWindowGPU {
   }
 
   memory() {
-    return {total: this.total.size + this.output.size + this.rejects.size + this.params.size + (this.reflectionSum?.size ?? 0) + (this.guides ? this.guides.albedo.size + this.guides.normal.size : 0)};
+    return {total: this.total.size + this.output.size + this.rejects.size + this.params.size + this.experimentBytes + (this.reflectionSum?.size ?? 0) + (this.guides ? this.guides.albedo.size + this.guides.normal.size : 0)};
   }
 
   dispose() {
+    this.experimentBuffer?.destroy();
     this.reflectionSum?.destroy();
     this.guides?.albedo.destroy();
     this.guides?.normal.destroy();

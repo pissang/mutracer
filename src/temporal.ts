@@ -21,6 +21,7 @@ import {createComposePackWGSL,motionCoverageWGSL} from './renderer/temporalCompo
 
 export type TemporalPixelKind = 'denoised' | 'accumulated';
 export interface TemporalPlan extends TemporalMemoryPlan {}
+type OfflineSamplingExperiment = {tileSize: number} | {onPilot: (index: number, data: Awaited<ReturnType<DirectWindowGPU['readPilot']>>) => void};
 
 function copyBuffer(device: GPUDevice, source: GPUBuffer, bytes: number, label: string) {
   const target = device.createBuffer({label, size: bytes,
@@ -162,11 +163,23 @@ export class TemporalDenoiser {
   private motionCoverageCounts?: GPUBuffer;
   private composeParams?: GPUBuffer;
   private presentationInputs = new Map<number, {color: GPUBuffer; albedo: GPUBuffer; normal: GPUBuffer}>();
+  private samplingExperiment?: OfflineSamplingExperiment;
 
   constructor(engine: Engine, options: import('./temporal/options.js').TemporalDenoiserOptions = {}) {
     this.engine = engine;
     this.options = normalizeTemporalOptions(options);
     this.activeOptions = this.options;
+  }
+
+  /** @internal Enables the WebGPU two-pass sampling experiment before capture. */
+  _configureOfflineSampling(experiment: OfflineSamplingExperiment) {
+    this.assertAlive();
+    if (this.attached || this.history || this.options.mode !== 'offline' ||
+      this.options.reflectionMotion || this.options.accumulateGuides || this.options.memoryBudget !== undefined ||
+      ('tileSize' in experiment && (!Number.isSafeInteger(experiment.tileSize) || experiment.tileSize < 1))) {
+      throw new Error('Offline sampling experiments require an unattached offline surface window and the default memory budget.');
+    }
+    this.samplingExperiment = experiment;
   }
 
   /** Attaches hidden capture AOVs to one render and returns a detach function. */
@@ -205,6 +218,8 @@ export class TemporalDenoiser {
       }
       const metadata = render._temporalMetadata;
       if (!metadata.camera) throw new Error('Temporal push requires a completed converge call.');
+      const needsTiles = !!this.samplingExperiment && 'tileSize' in this.samplingExperiment;
+      if (needsTiles !== !!metadata.sampleTiles) throw new Error('The render and temporal window must use the same offline sampling mode.');
       // The renderer may pad the capture grid while presenting a center crop.
       const captureWidth = metadata.captureWidth ?? render.width;
       const captureHeight = metadata.captureHeight ?? render.height;
@@ -228,6 +243,7 @@ export class TemporalDenoiser {
       const direct = metadata as typeof metadata & {projection?: number[]; viewProjection?: number[]; apertureRadius?: number; focusDistance?: number};
       const targetCamera = metadata.targetCamera ?? metadata.camera;
       const frame = this.frames;
+      if (metadata.sampleTiles) this.window!.setSampleTiles(frame, metadata.sampleTiles);
       const sampleCount = metadata.samples;
       const settings = this.engine.display._snapshotSettings();
       await render._captureTemporal(async input => {
@@ -362,7 +378,7 @@ export class TemporalDenoiser {
       catch (error) { this.releaseResources(); this.activeOptions = this.options; throw error; }
       const error = scopedError ?? allocationError;
       if (!error) {
-        this._plan = Object.freeze({...candidate});
+        this._plan = Object.freeze({...candidate, bytes: candidate.bytes + this.window!.experimentBytes});
         this.revisionMaterialCapacity=Math.max(1,materialCount);
         if (!this.warnedBudget && (candidate.historyRadius.min !== this.options.historyRadius.min ||
           candidate.historyRadius.max !== this.options.historyRadius.max || candidate.postRadius !== this.options.postRadius)) {
@@ -387,7 +403,8 @@ export class TemporalDenoiser {
     this.history = await TemporalHistoryGPU.create(device, width, height, temporalHistorySlots(this.activeOptions),
       temporalGuideSlots(this.activeOptions), denoiser?.type === 'custom', reflections);
     // The selected mixed window stays enabled when the post sparkle pass is disabled.
-    this.window = await DirectWindowGPU.create(this.history, historyRadius.min !== historyRadius.max, accumulateGuides);
+    const experiment = this.samplingExperiment && ('tileSize' in this.samplingExperiment ? this.samplingExperiment.tileSize : 'pilot');
+    this.window = await DirectWindowGPU.create(this.history, historyRadius.min !== historyRadius.max, accumulateGuides, experiment);
     if (this.activeOptions.postRadius > 0) {
       const postSlots = this.activeOptions.mode === 'offline' ? this.activeOptions.postRadius * 2 + 1 : this.activeOptions.postRadius + 1;
       this.post = await TemporalPostGPU.create(this.history, postSlots, materialCount);
@@ -497,6 +514,9 @@ export class TemporalDenoiser {
       const neighbors = historyNeighbors(i, this.frames, this.activeOptions, radius).filter(j => this.epochs[j] === this.epochs[i]);
       const output = await this.window!.filter(i, neighbors, this.activeOptions.mode === 'offline',
         this.activeOptions.historyRadius.min, this.activeOptions.historyRadius.max);
+      if (this.samplingExperiment && 'onPilot' in this.samplingExperiment) {
+        this.samplingExperiment.onPilot(this.globalIndices[i], await this.window!.readPilot());
+      }
       const device = this.engine.device!;
       this.accumulated.set(i, copyBuffer(device, output, this.history.bytes, 'Temporal accumulated history'));
       this.packExternal(i, output);

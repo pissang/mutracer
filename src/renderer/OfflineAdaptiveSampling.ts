@@ -9,6 +9,41 @@ export interface OfflineVarianceHistory {
   sampleTargets: Uint32Array;
 }
 
+/** Tile targets from an independent offline pilot, in top-row-first order. */
+export interface OfflineSampleTiles {
+  width: number;
+  height: number;
+  tileSize: number;
+  targets: Uint32Array;
+}
+
+export function expandOfflineSampleTiles(plan: OfflineSampleTiles, width: number, height: number, cap: number) {
+  const {tileSize, targets} = plan;
+  const columns = Math.ceil(width / tileSize);
+  const rows = Math.ceil(height / tileSize);
+  if (plan.width !== width || plan.height !== height || !Number.isSafeInteger(tileSize) ||
+      tileSize < 1 || targets.length !== columns * rows) {
+    throw new Error('Offline sample tiles must match the render extent.');
+  }
+  const data = new Float32Array(width * height);
+  let maximum = 1, total = 0;
+  for (let tileY = 0; tileY < rows; tileY++) {
+    const y0 = tileY * tileSize, y1 = Math.min(y0 + tileSize, height);
+    for (let tileX = 0; tileX < columns; tileX++) {
+      const x0 = tileX * tileSize, x1 = Math.min(x0 + tileSize, width);
+      const samples = targets[tileY * columns + tileX];
+      if (samples < 1 || samples > cap) throw new Error('Offline sample tile is outside the sample budget.');
+      maximum = Math.max(maximum, samples);
+      total += samples * (x1-x0) * (y1-y0);
+      for (let y = y0; y < y1; y++) {
+        const start = (height - 1 - y) * width;
+        data.fill(samples, start + x0, start + x1);
+      }
+    }
+  }
+  return {width, height, data, maximum, average: total / (width * height)};
+}
+
 export interface OfflineAdaptiveSamplingOptions {
   /** Independent pilot samples used only to estimate the final budget. */
   pilotSamples?: number;

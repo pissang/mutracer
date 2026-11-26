@@ -14,7 +14,7 @@ import type {DenoiserHandle} from './renderer/denoiser.js';
 import type {OwnedDenoiser} from './renderer/ownedDenoiser.js';
 import {OIDN_OPTION_KEYS, oidnDenoiserKey, snapshotOIDNOptions, validateOIDNOptions, type OIDNFilterOptions} from './oidnOptions.js';
 import { DEFAULT_JNLM_OPTIONS, createJNLMDenoiser, type JNLMOptions } from './renderer/jnlm.js';
-import type { OfflineAdaptiveSamplingOptions, OfflineVarianceHistory } from './renderer/OfflineAdaptiveSampling.js';
+import {expandOfflineSampleTiles, type OfflineAdaptiveSamplingOptions, type OfflineSampleTiles, type OfflineVarianceHistory} from './renderer/OfflineAdaptiveSampling.js';
 import { nextPreviewScale } from './renderer/util.js';
 import {scheduleFrame} from './util/frame.js';
 
@@ -281,6 +281,7 @@ export default class Render {
   private _temporalReflections = false;
   private _lastConvergeCamera?: Camera;
   private _lastSequenceOffset?: number;
+  private _lastSampleTiles?: OfflineSampleTiles;
   private _temporalFrameSequence = 0;
   private _denoiseRevision = 0;
   private _denoisePending?: Promise<void>;
@@ -355,7 +356,7 @@ export default class Render {
     const camera = this._lastConvergeCamera;
     return {camera, targetCamera: camera && this._targetCamera(camera),
       captureWidth: memory?.width, captureHeight: memory?.height,
-      sampleSequenceOffset: this._lastSequenceOffset, samples: this.samples,
+      sampleSequenceOffset: this._lastSequenceOffset, samples: this.samples, sampleTiles: this._lastSampleTiles,
       frameSequence: this._temporalFrameSequence, scene: this._engine.scene, cameraSource: this._engine.camera,
       sceneRevision: this._engine._temporalRevision};
   }
@@ -808,7 +809,7 @@ export default class Render {
     return this._target?.getOutputTexture?.(kind);
   }
   /** Discards only this render's accumulation and pending denoising. */
-  restart() { if (this._disposed) throw new Error('Render is disposed.'); this._refillController?.abort(); this._cancelDenoise(); this._cancelAdaptiveFrames(); this._sampleStart = this._frameStart = undefined; this._frameTime = 0; this._target?.restartSamples(); this._status = 'converging'; }
+  restart() { if (this._disposed) throw new Error('Render is disposed.'); this._lastSampleTiles = undefined; this._refillController?.abort(); this._cancelDenoise(); this._cancelAdaptiveFrames(); this._sampleStart = this._frameStart = undefined; this._frameTime = 0; this._target?.restartSamples(); this._status = 'converging'; }
   /** Releases only this render's image resources and denoiser. */
   dispose() {
     if (this._disposed) return;
@@ -823,6 +824,13 @@ export default class Render {
   }
   /** Deterministically renders this image. Rejects on abort/timeout/input revision changes and blocks refine on this render. */
   async converge(options: ConvergeOptions): Promise<ConvergeResult> {
+    return this._converge(options);
+  }
+  /** @internal Runs a WebGPU beauty pass with a budget estimated by an independent pilot. */
+  async _convergeWithSampleTiles(options: ConvergeOptions, tiles: OfflineSampleTiles) {
+    return this._converge(options, {...tiles, targets: tiles.targets.slice()});
+  }
+  private async _converge(options: ConvergeOptions, sampleTiles?: OfflineSampleTiles): Promise<ConvergeResult> {
     if (this._busy) throw new Error('Converge is already running on this render.');
     if (this._disposed) throw new Error('Render is disposed.');
     const inputs = this._engine._inputs;
@@ -843,6 +851,7 @@ export default class Render {
     };
     this._refillController?.abort();
     this._busy = true;
+    this._lastSampleTiles = undefined;
     const abortConverge = () => this._cancelDenoise();
     options.signal?.addEventListener('abort', abortConverge, {once: true});
     let target: RenderTarget | undefined;
@@ -882,7 +891,14 @@ export default class Render {
         await this._engine._awaitDevice(Promise.resolve(this._engine.device?.queue.onSubmittedWorkDone())); check();
       };
       let result: ConvergeResult = {samples, averageSamplesPerPixel: samples, pilotSamples: 0, adaptiveSampling: false};
-      if (options.adaptiveSampling && this._engine.device) {
+      if (sampleTiles) {
+        if (!this._engine.device || options.adaptiveSampling) throw new Error('Offline sample tiles require a WebGPU final pass.');
+        const {width, height} = target.getMemory();
+        const targets = expandOfflineSampleTiles(sampleTiles, width, height, samples);
+        target.activate(); target.setVarianceMoments(false); target.setAdaptiveSamplingTargets(targets);
+        await stage(targets.maximum, 'final', sequenceOffset);
+        result = {samples: targets.maximum, averageSamplesPerPixel: targets.average, pilotSamples: 0, adaptiveSampling: true};
+      } else if (options.adaptiveSampling && this._engine.device) {
         const pilotSamples = Math.min(samples, Math.max(2, Math.round(options.adaptiveSampling.pilotSamples ?? 8)));
         target.activate(); target.setVarianceMoments(true); target.setAdaptiveSamplingTargets(undefined);
         await stage(pilotSamples, 'pilot', sequenceOffset);
@@ -899,6 +915,7 @@ export default class Render {
       }
       this._lastConvergeCamera = camera;
       this._lastSequenceOffset = sequenceOffset;
+      this._lastSampleTiles = sampleTiles;
       this._temporalFrameSequence++;
       this._status = 'finished'; return result;
     } catch (error) { if (this._engine._deviceGeneration === deviceGeneration) this._status = 'error'; throw error; }

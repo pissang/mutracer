@@ -3,6 +3,7 @@
 // Usage: node scripts/temporal-stress-capture.mjs OUT_DIR [--frames A-B] [--spp N]
 //   [--mode offline|interactive|off] [--reflection-motion] [--accumulate-guides]
 //   [--save-frames A-B,C-D] [--history-radius N] [--post-radius N] [--no-sparkle]
+//   [--temporal-sample-budget N] [--sample-stride N]
 //   [--no-dof] [--size WxH] [--webgl] [--no-video]
 import {createServer} from 'vite';
 import {mkdirSync, writeFileSync} from 'node:fs';
@@ -23,7 +24,9 @@ const settings = {
   depthOfField: !flag('--no-dof'),
   historyRadius: flag('--history-radius') ? Number(value('--history-radius')) : undefined,
   postRadius: flag('--post-radius') ? Number(value('--post-radius')) : undefined,
-  stabilizeSparkle: flag('--no-sparkle') ? false : undefined
+  stabilizeSparkle: flag('--no-sparkle') ? false : undefined,
+  temporalSampleBudget: flag('--temporal-sample-budget') ? Number(value('--temporal-sample-budget')) : undefined,
+  sampleStride: flag('--sample-stride') ? Number(value('--sample-stride')) : undefined
 };
 const size = value('--size', '1280x720');
 const saveFrames = value('--save-frames', '').split(',').filter(Boolean).map(range => {
@@ -58,7 +61,8 @@ try {
       process.stdout.write(`\r${frame.index} ${frame.hash}`);
     }
     const seconds = (performance.now() - started) / 1000;
-    writeFileSync(resolve(out, 'capture.json'), JSON.stringify({backend, size, settings, frames: [first, last ?? first], saveFrames, seconds, hashes}, null, 2));
+    const timing = await page.tab.evaluate('temporalStress.timing()');
+    writeFileSync(resolve(out, 'capture.json'), JSON.stringify({backend, size, settings, frames: [first, last ?? first], saveFrames, seconds, hashes, timing}, null, 2));
     console.log(`\n${seconds.toFixed(1)} s`);
   } finally { await page.close(); }
 } finally { await chrome.close(); await server.close(); }

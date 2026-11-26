@@ -194,11 +194,12 @@ async function run() {
     const floatingPostResult = await exerciseFloatingPostCodes(device);
     const materialAcceptanceResult = await exerciseMaterialAcceptance(device);
     const glossyAcceptance = await exerciseGlossyAcceptance(device);
+    const offlineCounts = await exerciseOfflineSampleWeights(device);
     const forwardSeed = await exerciseForwardMotionSeed(device);
     const reflectionMotion = await exerciseReflectionMotion(engine, device);
     await device.queue.onSubmittedWorkDone();
     check(uncaptured.length === 0, `Uncaptured WebGPU errors: ${uncaptured.join(' | ')}`);
-    return {identity: true, max, sequence: true, oidnMax, presentationIdentity, vignetteChange, customAov: receivedRoughness, fullIdResult, overflowResult, floatingPostResult, materialAcceptanceResult, glossyAcceptance, forwardSeed, reflectionMotion, uncapturedErrors: uncaptured.length, plan: temporal.plan};
+    return {identity: true, max, sequence: true, oidnMax, presentationIdentity, vignetteChange, customAov: receivedRoughness, fullIdResult, overflowResult, floatingPostResult, materialAcceptanceResult, glossyAcceptance, offlineCounts, forwardSeed, reflectionMotion, uncapturedErrors: uncaptured.length, plan: temporal.plan};
   } finally { temporal.dispose(); render.dispose(); sync.dispose(); engine.dispose(); device.destroy(); }
 }
 
@@ -328,15 +329,16 @@ async function exercisePaddedPresentation(engine: Engine) {
   } finally { temporal.dispose(); render.dispose(); }
 }
 
-async function createTestWindow(device: GPUDevice, width: number, height: number, capacity: number, accumulateGuides = false) {
+async function createTestWindow(device: GPUDevice, width: number, height: number, capacity: number, accumulateGuides = false, experiment?: number) {
   const history = await TemporalHistoryGPU.create(device, width, height, capacity, accumulateGuides ? capacity : 1, false);
-  const window = await DirectWindowGPU.create(history, false, accumulateGuides);
+  const window = await DirectWindowGPU.create(history, false, accumulateGuides, experiment);
   return {
     history,
     guides: window.guides,
     rejects: window.rejects,
     filter: window.filter.bind(window),
     read: window.read.bind(window),
+    setSampleTiles: window.setSampleTiles.bind(window),
     async upload(frame: number, metadata: Parameters<typeof history.capture>[1],
       arrays: Record<string, Float32Array<ArrayBuffer> | Uint32Array<ArrayBuffer>>) {
       const buffers: Record<string, GPUBuffer> = {};
@@ -500,6 +502,35 @@ async function exerciseGlossyAcceptance(device: GPUDevice) {
     check(glossy === 1, 'A sliding narrow coat accepted a stale highlight');
     check(broad === stationary, 'A broad lobe lost its surface history');
     return {stationary, glossy, broad};
+  } finally { window.dispose(); }
+}
+
+async function exerciseOfflineSampleWeights(device: GPUDevice) {
+  const size = 8, pixels = size * size;
+  const identity = new Float32Array(16);
+  identity[0] = identity[5] = identity[10] = identity[15] = 1;
+  const meta = {viewProjection: identity, projection: identity, apertureRadius: 0, focusDistance: 1};
+  const window = await createTestWindow(device, size, size, 2, false, size);
+  const buffer = (value: readonly number[]) => {
+    const data = new Float32Array(pixels * 4);
+    for (let i = 0; i < pixels; i++) data.set(value, i * 4);
+    return data;
+  };
+  async function upload(frame: number, radiance: number, samples: number) {
+    const id = new Uint32Array(pixels * 4).fill(1);
+    await window.upload(frame, meta, {centerDepth: buffer([1, 0, 0, 1]), centerNormal: buffer([0, 0, 1, 1]),
+      roughness: buffer([.5, 0, 0, 1]), motion: buffer([0, 0, 1, 3]), albedo: buffer([.5, .5, .5, 1]),
+      hdr: buffer([radiance, radiance, radiance, 1]), id});
+    window.setSampleTiles(frame, {width: size, height: size, tileSize: size, targets: new Uint32Array([samples])});
+  }
+  try {
+    await upload(0, 1, 3);
+    await upload(1, 5, 6);
+    const future = new Float32Array(await window.read(await window.filter(0, [1], true, 1)))[4 * (size*4+4)];
+    const past = new Float32Array(await window.read(await window.filter(1, [0], true, 1)))[4 * (size*4+4)];
+    check(future === 3, 'The future tap did not carry its own sample count');
+    check(Math.abs(past - 4.2) < 1e-6, 'The center and past tap did not preserve their sample counts');
+    return {future, past};
   } finally { window.dispose(); }
 }
 

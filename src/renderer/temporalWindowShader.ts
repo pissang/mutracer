@@ -235,7 +235,7 @@ fn footprintWeight(x:vec2i,q:vec2f,nearest:vec2i,targetDepth:f32)->f32 {
 }
 `;
 
-const recoverHistoryWGSL = /* wgsl */ `
+const recoverHistoryWGSL = (experiment = false) => /* wgsl */ `
 // Jittered hit coverage and square-root albedo share the motion flag lane.
 // The center-ray identity remains the only authority for accepting a surface.
 fn packedGuide(x: vec2i, frame: u32) -> u32 {
@@ -291,7 +291,7 @@ fn recoverTap(x: vec2i, pos: vec4f, q: vec3f, original: HistoryTap) -> HistoryTa
   for(var dy=-1;dy<=1;dy++){
     for(var dx=-1;dx<=1;dx++){
       let tap=original.at+vec2i(dx,dy);
-      if(any(tap<vec2i(0)) || any(tap>=vec2i(p.size))){continue;}
+      if(any(tap<vec2i(0)) || any(tap>=vec2i(p.size))){continue;}${experiment ? '\n      if(hitCoverage(tap,p.source)<1.){continue;}' : ''}
       let endpointNormal=landingNormal(q.xy,id,revision);
       let why=tapRejection(tap,q.z,endpointNormal,id,revision);
       if(why!=0u && (strict || why!=9u)){continue;}
@@ -313,23 +313,24 @@ fn recoverTap(x: vec2i, pos: vec4f, q: vec3f, original: HistoryTap) -> HistoryTa
     }
   }
   let confidence=best*1.2*(4.-f32(abs(p.delta)))/3.;
-  let mixed=1.-smoothstep(.85,1.,min(coverage,hitCoverage(at,p.source)));
+  ${experiment ? 'let support=confidence;' : `let mixed=1.-smoothstep(.85,1.,min(coverage,hitCoverage(at,p.source)));
   let luma=vec3f(.2126,.7152,.0722);
   let currentY=max(.005,dot(radiance(x,p.current),luma));
   let historyY=max(.005,dot(radiance(at,p.source),luma));
   let change=log(historyY/currentY);
-  let support=confidence*exp(-mixed*(1.6*pow(max(change,0.),2.)+.2*pow(min(change,0.),2.)));
+  let support=confidence*exp(-mixed*(1.6*pow(max(change,0.),2.)+.2*pow(min(change,0.),2.)));`}
   if(support>original.support){return HistoryTap(at,support);}
   return original;
 }
 `;
 
-const startWindowWGSL = (guides = false, reflections = false) => /* wgsl */ `
+const startWindowWGSL = (guides = false, reflections = false, experiment?: 'pilot' | number) => /* wgsl */ `
 @compute @workgroup_size(8,8) fn main(@builtin(global_invocation_id) g:vec3u) {
   if(any(g.xy>=p.size)){return;}
   let x=vec2i(g.xy); let index=g.y*p.size.x+g.x;
   if(p.stage==0u){
-    total[index]=vec4f(radiance(x,p.current),1.0);${reflections ? `
+    total[index]=vec4f(radiance(x,p.current),1.0);${experiment === 'pilot' ? '\n    pilotMoments[index]=pilotMoment(total[index].rgb,1.);' :
+    typeof experiment === 'number' ? '\n    total[index]*=sampleWeight(x,p.current);' : ''}${reflections ? `
     let reflected = reflection(x,p.current);
     total[index] = vec4f(total[index].rgb-reflected,1.0);
     reflectedTotal[index] = vec4f(reflected,1.0);
@@ -387,9 +388,23 @@ fn loadNormal(at: vec2i, slot: u32) -> vec3f {
 }
 `;
 
-export const createMixedWindowWGSL = (guides: boolean, reflections = false) => /* wgsl */ `${windowBindingsAndGeometry}
-${guides ? windowGuidesWGSL : ''}${recoverHistoryWGSL}
-${reflections ? reflectionWindowWGSL(guides ? 14 : 11) : ''}${startWindowWGSL(guides, reflections)}  var tap=HistoryTap(nearest,0.);
+export const createMixedWindowWGSL = (guides: boolean, reflections = false, experiment?: 'pilot' | number) => /* wgsl */ `${windowBindingsAndGeometry}
+${guides ? windowGuidesWGSL : ''}${recoverHistoryWGSL(!!experiment)}
+${experiment === 'pilot' ? /* wgsl */ `
+@group(0) @binding(11) var<storage, read_write> pilotMoments: array<vec2f>;
+fn pilotMoment(rgb: vec3f, weight: f32) -> vec2f {
+  let y = dot(rgb,vec3f(.2126,.7152,.0722));
+  return vec2f(weight*y*y,weight*weight);
+}
+` : typeof experiment === 'number' ? /* wgsl */ `
+@group(0) @binding(11) var<storage, read> sampleTiles: array<u32>;
+fn sampleWeight(at: vec2i, slot: u32) -> f32 {
+  let step = ${experiment}u;
+  let grid = (p.size+step-1u)/step;
+  let tile = vec2u(at)/step;
+  return f32(sampleTiles[(slot*grid.y+tile.y)*grid.x+tile.x])/3.;
+}
+` : ''}${reflections ? reflectionWindowWGSL(guides ? 14 : 11) : ''}${startWindowWGSL(guides, reflections, experiment)}${experiment ? '  if(hitCoverage(x,p.current)<1.){return;}\n' : ''}  var tap=HistoryTap(nearest,0.);
   if(reason==0u){
     tap.support=1.;
     if(partial){tap.support=footprintWeight(x,q.xy,nearest,q.z);}
@@ -405,11 +420,11 @@ ${reflections ? `  let accepted = distance <= surfaceWindow && tap.support>0. &&
   let rgb = select(vec3f(0),skyCorrection(x,tap.at,pos,radiance(tap.at,p.source)),accepted);
   var surfaceConfidence = 1.;
   if (accepted) { surfaceConfidence = dielectricSurfaceConfidence(x,q.xy,material); }
-  accumulateReflection(x,index,tap,q,weight,rgb,tent,material.y,surfaceConfidence);` : `  if(tap.support<=0. || overflowMissing(tap.at,p.source)){atomicAdd(&rejects[reason],1u);return;}
+  accumulateReflection(x,index,tap,q,weight,rgb,tent,material.y,surfaceConfidence);` : `  if(tap.support<=0. || overflowMissing(tap.at,p.source)${experiment ? ' || hitCoverage(tap.at,p.source)<1.' : ''}){atomicAdd(&rejects[reason],1u);return;}
   atomicAdd(&rejects[0],1u);
-  let weight=(surfaceWindow+1.-distance)/(surfaceWindow+1.)*tap.support*dielectricSurfaceConfidence(x,q.xy,material);
-  let rgb=skyCorrection(x,tap.at,pos,radiance(tap.at,p.source));
-  total[index]+=vec4f(rgb*weight,weight);` }${guides ? `
+  let weight=${experiment ? 'min(1.,' : ''}(surfaceWindow+1.-distance)/(surfaceWindow+1.)*tap.support*dielectricSurfaceConfidence(x,q.xy,material)${experiment ? ')' : ''}${typeof experiment === 'number' ? '*sampleWeight(tap.at,p.source)' : ''};
+  let rgb=${experiment ? 'radiance(tap.at,p.source)' : 'skyCorrection(x,tap.at,pos,radiance(tap.at,p.source))'};
+  total[index]+=vec4f(rgb*weight,weight);${experiment === 'pilot' ? '\n  pilotMoments[index]+=pilotMoment(rgb,weight);' : ''}` }${guides ? `
   if ((p.mode & 8u)!=0u) {
     albedoSum[index]+=vec4f(loadAlbedo(tap.at,p.source)*weight,0.);
     normalSum[index]+=vec4f(loadNormal(tap.at,p.source)*weight,0.);
