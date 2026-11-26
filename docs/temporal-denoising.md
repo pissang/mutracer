@@ -60,11 +60,12 @@ independent noise. The example advances by its samples-per-frame count.
 | `historyInvalidation` | `'auto'` | Splits history on detected cuts and lighting or visibility changes. Material edits invalidate history on the affected surfaces. Use `'manual'` to control cuts in scenes with continuously changing light. |
 | `memoryBudget` | Full plan | GPU bytes for temporal history and scratch. A smaller budget can reduce the effective radii in `plan`. |
 
-Smooth metals now blend in more surface history as roughness increases. Near
-mirrors still use mostly the current frame. Enable `reflectionMotion` when
-a flat mirror needs to accumulate moving reflections. On curved reflectors,
-such as spheres or turned metal, a flat-mirror image would land in the wrong
-place, so those pixels keep the default surface history.
+Smooth metals blend in more surface history as roughness increases. Near
+mirrors use mostly the current frame. The offline window also uses less surface
+history on glossy dielectrics when the reflected view changes. Those areas
+can retain more noise. Enable `reflectionMotion` when a flat reflector needs
+to accumulate moving reflections. Curved reflectors such as spheres or turned
+metal use surface history where the flat-image prediction is unreliable.
 
 The default offline latency is 19 frames. Inspect `latency` and, after the
 first `push`, `plan` for the effective radii and GPU byte estimate.
@@ -84,8 +85,8 @@ Other renderer and OIDN allocations are additional.
   create a new temporal denoiser.
 - Reflection motion requires 10 storage buffers per shader stage, or 11 with
   bindless textures. It helps flat reflectors only. A near-mirror metal uses
-  less history where correspondence fails. Glass reflections can
-  fall back to surface motion. Transmission uses surface motion.
+  less history where correspondence fails. Glass reflections can fall back to
+  surface motion where the reflected view agrees. Transmission uses surface motion.
 - `frame.readPixels('denoised')` returns final RGBA float32 pixels in the
   spatial denoiser's color representation. `frame.readPixels('accumulated')`
   returns the windowed linear HDR before the spatial filter.

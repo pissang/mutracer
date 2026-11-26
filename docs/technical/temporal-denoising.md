@@ -22,7 +22,10 @@
 
 At silhouettes, the mixed window weights bilinear coverage, searches for a
 checked same-surface tap within 3×3 on nearby frames, and corrects mixed sky
-contribution where the local background is consistent.
+contribution where the local background is consistent. The offline window
+requires 90% same-surface support throughout the motion chain and at the
+landing. Recovery on that window also requires depth within 0.8%, normal
+agreement of at least 0.975 and a round-trip distance of at most 0.8 px.
 
 For current-frame metalness above 0.10, the surface window scales the tent
 span `R + 1` by `smoothstep(0.05, 0.24, roughness)` using current-frame
@@ -31,6 +34,14 @@ below only the center sample contributes. At roughness 0.24 and above the full
 window applies. The material history stores roughness and metalness in a
 separate four-byte texel per pixel per slot. Virtual-image taps use the
 original radius when reflection motion is enabled.
+
+For glossy dielectrics, the center-ray material supplies the roughness and
+estimated Fresnel reflectance of the narrower contributing base or coat lobe.
+The offline window compares the reflected world-space rays at corresponding
+surface points. With a narrow strong lobe, the surface weight falls as the
+reflected directions diverge. Pure camera rotation around a fixed eye can
+preserve surface history when the reflected rays still agree. This check
+uses the existing four-byte material texel and requires no reflection rays.
 
 ## Why this design
 
