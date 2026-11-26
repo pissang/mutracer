@@ -263,9 +263,11 @@ fn accumulateReflection(
   let slip = length(slipped);
   let matchSurface = select(0.,reflectionAgreement(record,srcEndpoint),all(srcEndpoint.xy==record.xy));
   let mismatch = select(0.,dominant*smoothstep(.25,2.,slip)*(1.-matchSurface),validDelta);
-  // Surface identity cannot locate a feature within a mirror. Dielectrics
-  // retain surface history when optical reprojection cannot recover a tap.
-  let fallback = select(1., smoothstep(.05,.20,roughness), metallic > METALLIC_THRESHOLD);
+  // Surface identity cannot locate a feature within a mirror once the image
+  // moves across it. Dielectrics retain surface history when optical
+  // reprojection cannot recover a tap.
+  let fade = mix(1.,smoothstep(.05,.20,roughness),smoothstep(.25,2.,slip));
+  let fallback = select(1., fade, metallic > METALLIC_THRESHOLD);
   // Where the tangent plane does not hold, use the ordinary surface window.
   let surfaceWeight = weight*mix(1.,(1.-amount)*(1.-mismatch)*fallback,trust);
   let virtualW = tent*amount*trust;
