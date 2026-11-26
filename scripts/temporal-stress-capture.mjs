@@ -2,7 +2,8 @@
 // per-frame HDR hashes and an MP4 (native `mutracer encode` via MUTRACER_BIN, or ffmpeg).
 // Usage: node scripts/temporal-stress-capture.mjs OUT_DIR [--frames A-B] [--spp N]
 //   [--mode offline|interactive|off] [--reflection-motion] [--accumulate-guides]
-//   [--no-dof] [--size WxH] [--webgl]
+//   [--save-frames A-B,C-D] [--history-radius N] [--post-radius N] [--no-sparkle]
+//   [--no-dof] [--size WxH] [--webgl] [--no-video]
 import {createServer} from 'vite';
 import {mkdirSync, writeFileSync} from 'node:fs';
 import {spawnSync} from 'node:child_process';
@@ -19,9 +20,18 @@ const settings = {
   mode: value('--mode', 'offline'),
   reflectionMotion: flag('--reflection-motion'),
   accumulateGuides: flag('--accumulate-guides'),
-  depthOfField: !flag('--no-dof')
+  depthOfField: !flag('--no-dof'),
+  historyRadius: flag('--history-radius') ? Number(value('--history-radius')) : undefined,
+  postRadius: flag('--post-radius') ? Number(value('--post-radius')) : undefined,
+  stabilizeSparkle: flag('--no-sparkle') ? false : undefined
 };
 const size = value('--size', '1280x720');
+const saveFrames = value('--save-frames', '').split(',').filter(Boolean).map(range => {
+  if (!/^\d+(?:-\d+)?$/.test(range)) throw new Error(`Invalid output frame range: ${range}`);
+  const [first, last = first] = range.split('-').map(Number);
+  if (first > last) throw new Error(`Invalid output frame range: ${range}`);
+  return [first, last];
+});
 mkdirSync(out, {recursive: true});
 
 const server = await createServer({
@@ -42,18 +52,19 @@ try {
     console.log(`${backend} ${size} frames ${first}-${last ?? first}`, settings);
     const hashes = {};
     const started = performance.now();
-    for (let frame; (frame = await page.tab.evaluate('temporalStress.next()'));) {
+    for (let frame; (frame = await page.tab.evaluate(`temporalStress.next(${JSON.stringify(saveFrames)})`));) {
       writeFileSync(resolve(out, `frame-${String(frame.index).padStart(4, '0')}.png`), Buffer.from(frame.png.split(',')[1], 'base64'));
       hashes[frame.index] = frame.hash;
       process.stdout.write(`\r${frame.index} ${frame.hash}`);
     }
     const seconds = (performance.now() - started) / 1000;
-    writeFileSync(resolve(out, 'capture.json'), JSON.stringify({backend, size, settings, frames: [first, last ?? first], seconds, hashes}, null, 2));
+    writeFileSync(resolve(out, 'capture.json'), JSON.stringify({backend, size, settings, frames: [first, last ?? first], saveFrames, seconds, hashes}, null, 2));
     console.log(`\n${seconds.toFixed(1)} s`);
   } finally { await page.close(); }
 } finally { await chrome.close(); await server.close(); }
 
 // Encode with the native CLI's system encoder when MUTRACER_BIN is set, else ffmpeg.
+if (flag('--no-video')) process.exit(0);
 const video = resolve(out, 'clip.mp4');
 const encoded = process.env.MUTRACER_BIN
   ? spawnSync(process.env.MUTRACER_BIN, ['encode', out, '--fps', '24', '-o', video], {stdio: 'inherit'})

@@ -11,6 +11,9 @@ interface Settings {
   reflectionMotion: boolean;
   accumulateGuides: boolean;
   depthOfField: boolean;
+  historyRadius?: number;
+  postRadius?: number;
+  stabilizeSparkle?: boolean;
 }
 
 const params = new URLSearchParams(location.search);
@@ -54,6 +57,9 @@ async function* frames(options: Settings, start: number, end: number, stopped: (
     mode: options.mode as 'offline' | 'interactive',
     reflectionMotion: options.reflectionMotion,
     accumulateGuides: options.accumulateGuides,
+    historyRadius: options.historyRadius,
+    postRadius: options.postRadius,
+    stabilizeSparkle: options.stabilizeSparkle,
     denoiser: { type: 'oidn', model: 'cleanAuxLarge', weightsBaseUrl: '/oidn/weights/' }
   });
   const detach = temporal?.attach(render);
@@ -152,8 +158,13 @@ Object.assign(window, {
       capture = frames({ ...settings(), ...options }, begin, end, () => false);
       return engine.backend;
     },
-    async next() {
-      const result = await capture?.next();
+    async next(saveFrames: readonly (readonly [number, number])[] = []) {
+      let result = await capture?.next();
+      while (result && !result.done && saveFrames.length) {
+        const { index } = result.value;
+        if (saveFrames.some(([first, last]) => index >= first && index <= last)) break;
+        result = await capture?.next();
+      }
       if (!result || result.done) return null;
       const { image, index } = result.value;
       const blob = image instanceof Render ? await engine.display.toBlob(image) : await engine.display.toBlob(image);
