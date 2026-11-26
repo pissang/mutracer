@@ -613,6 +613,7 @@ pub(super) struct TargetKey {
     camera_override: Option<[u8; 128]>,
     capture_reflections: bool,
     sample_tiles: Option<Arc<[u32]>>,
+    center_material: bool,
 }
 /// Full preparation of the shared scene on a library thread.
 struct Pending {
@@ -1087,6 +1088,7 @@ fn desired(state: &State, render: &RenderState) -> Option<TargetKey> {
         camera_override: None,
         capture_reflections: render.settings.capture_reflections,
         sample_tiles: None,
+        center_material: false,
     })
 }
 
@@ -1480,7 +1482,10 @@ fn target_step(
         key.alpha_blend_strategy as u32,
         &camera,
         key.capture_reflections,
-        key.sample_tiles.as_deref(),
+        context::OfflineTarget {
+            sample_tiles: key.sample_tiles.as_deref(),
+            center_material: key.center_material,
+        },
     ));
     if result.is_err() {
         state
@@ -3344,7 +3349,7 @@ impl Render {
         let gpu = &self.engine.inner.gpu;
         super::checked_gpu(gpu, "offline geometry", || {
             self.with(|state, id| {
-                let key = desired(state, &state.renders[&id]).ok_or_else(|| {
+                let mut key = desired(state, &state.renders[&id]).ok_or_else(|| {
                     error(
                         Status::InvalidState,
                         "Commit a scene before tracing geometry",
@@ -3360,6 +3365,7 @@ impl Render {
                         "Use a dedicated render at the geometry size",
                     ));
                 }
+                key.center_material = true;
                 if !commit(state, id, key.clone(), true)? {
                     return Err(error(Status::Error, "Geometry target preparation failed"));
                 }
@@ -3942,6 +3948,8 @@ fn refine(state: &mut State, id: u64) -> Result<RenderStatus> {
                         && published.alpha_blend_strategy == key.alpha_blend_strategy
                         && published.settings == key.settings
                         && published.capture_reflections == key.capture_reflections
+                        && published.center_material == key.center_material
+                        && published.sample_tiles == key.sample_tiles
                 });
         if retained_graph {
             let limit = next_target(&state.renders[&id]);

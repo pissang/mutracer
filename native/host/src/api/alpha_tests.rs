@@ -101,7 +101,7 @@ fn fresh(
             settings.alpha_blend_strategy as u32,
             camera,
             false,
-            None,
+            Default::default(),
         )
     })
     .unwrap();
