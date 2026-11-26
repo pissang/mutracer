@@ -64,7 +64,7 @@ export class DirectWindowGPU {
     const h = this.history, d = h.device;
     // Camera-cut validation uses stage 1 without a preceding window initialization.
     const mode = Number(this.adaptiveRadius) | 2 | (Number(includeMaterialRevisions) << 2) |
-      (Number(!!this.guides && includeMaterialRevisions) << 3) | (Number(checkLighting) << 4);
+      (Number(!!this.guides && includeMaterialRevisions) << 3) | (Number(checkLighting) << 4) | (Number(symmetric && !includeMaterialRevisions) << 7);
     d.queue.writeBuffer(this.params, 0, new Uint32Array([h.width, h.height, h.slot(current), h.slot(source),
       source - current, Number(symmetric), stage, mode, radiusMin, radiusMax]));
     const resources = [this.params, h.surface, h.id, h.raw, h.meta, this.total, this.output, h.overflow, this.rejects, h.motion, h.material];

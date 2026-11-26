@@ -195,6 +195,7 @@ async function run() {
     const materialAcceptanceResult = await exerciseMaterialAcceptance(device);
     const glossyAcceptance = await exerciseGlossyAcceptance(device);
     await exerciseLightingConfidence(device);
+    await exerciseFocusPull(device);
     const offlineCounts = await exerciseOfflineSampleWeights(device);
     const retainedBaseSamples = await exerciseRetainedBaseSamples(engine);
     const forwardSeed = await exerciseForwardMotionSeed(device);
@@ -339,6 +340,7 @@ async function createTestWindow(device: GPUDevice, width: number, height: number
     guides: window.guides,
     rejects: window.rejects,
     filter: window.filter.bind(window),
+    dispatch: window.dispatch.bind(window),
     read: window.read.bind(window),
     setSampleTiles: window.setSampleTiles.bind(window),
     async upload(frame: number, metadata: Parameters<typeof history.capture>[1],
@@ -465,6 +467,30 @@ async function exerciseMaterialAcceptance(device: GPUDevice) {
     check(tapered === pixels, 'A rougher metal lost its short surface window');
     check(rough === pixels, 'A rough metal lost its full surface window');
     return {materialId: 212, diffuse, nearMirror, tapered, rough};
+  } finally { window.dispose(); }
+}
+
+async function exerciseFocusPull(device: GPUDevice) {
+  const size = 8;
+  const projection = new Camera({projection: 'perspective', fov: 45}).getProjectionMatrix(1);
+  const window = await createTestWindow(device, size, size, 2);
+  const fill = (value: number[]) => {
+    const data = new Float32Array(size * size * 4);
+    for (let i = 0; i < data.length; i += 4) data.set(value, i);
+    return data;
+  };
+  try {
+    for (const frame of [0, 1]) {
+      await window.upload(frame, {viewProjection: projection, projection, apertureRadius: 1, focusDistance: 1+frame},
+        {hdr: fill([1+frame, 0, 0, 1]), id: new Uint32Array(size * size * 4).fill(1),
+          centerDepth: fill([1, 0, 0, 1]), centerNormal: fill([0, 0, 1, 1]),
+          roughness: fill([.5, 0, 0, 1]), motion: fill([0, 0, 1, 3]), albedo: fill([.5, .5, .5, 1])});
+    }
+    const color = new Float32Array(await window.read(await window.filter(1, [0], true, 1, 1)));
+    check(color[0] === 2, 'A focus pull mixed different blur footprints');
+    await window.dispatch(1, 0, true, 1, 1, 1, false);
+    const accepted = new Uint32Array(await window.read(window.rejects, 4))[0];
+    check(accepted === size * size, 'A focus pull invalidated camera correspondence');
   } finally { window.dispose(); }
 }
 

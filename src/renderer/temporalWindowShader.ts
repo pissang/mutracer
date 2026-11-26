@@ -201,7 +201,8 @@ fn rejection(x:vec2i, q:vec3f, nearest:vec2i, partial:bool)->u32 {
   let pos=surface(x,p.current,0u);
   if (!(pos.w>0.0001)) { return 1u; }
   if (!(all(q.xy>=vec2f(0)) && all(q.xy<=vec2f(p.size)-1.0) && q.z>0.0)) { return 3u; }
-  if (!(abs(coc(pos.w,p.current)-coc(q.z,p.source))<=0.5)) { return 4u; }
+  // Focus changes can invalidate a radiance tap without breaking camera correspondence.
+  if ((p.mode & 128u) == 0u && !(abs(coc(pos.w,p.current)-coc(q.z,p.source))<=0.5)) { return 4u; }
   let id=ident(x,p.current);
   let revision=revisionAt(x,p.current);
   let endpointNormal=landingNormal(q.xy,id,revision);

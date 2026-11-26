@@ -428,7 +428,8 @@ impl Passes {
             | u32::from(revisions) << 2
             | u32::from(self.accumulate_guides && revisions) << 3
             | u32::from(check_lighting) << 4
-            | u32::from(self.diagnostic.is_some()) << 5;
+            | u32::from(self.diagnostic.is_some()) << 5
+            | u32::from(!revisions) << 7;
         let mut bindings = Vec::with_capacity(16);
         bindings.extend([
             &self["surface"],
