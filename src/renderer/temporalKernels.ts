@@ -4,6 +4,7 @@ export const temporalOverflowEntryBytes = 32;
 export const temporalFlagsWGSL = /* wgsl */ `
 const GUIDE_MASK = 65535u;
 const CENTER_HIT = 1u << 18u;
+const NEARER_FOREGROUND = 1u << 19u;
 const HDR_OVERFLOW = 1u << 20u;
 const HDR_MISSING = 1u << 21u;
 `;

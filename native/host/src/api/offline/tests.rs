@@ -878,3 +878,89 @@ fn offline_sample_tiles_count_each_pixel_and_reset_for_uniform_convergence() {
     render.converge(ConvergeOptions::new(3)).unwrap();
     assert_eq!(counts(), vec![3; (width * height) as usize]);
 }
+
+#[test]
+#[ignore = "requires a real hardware ray-query GPU"]
+fn offline_window_rejects_unexplained_bright_history_behind_foreground() {
+    use crate::api::Backend;
+    let engine = super::super::aov_tests::aov_engine(Backend::Hardware);
+    let gpu = &engine.inner.gpu;
+    let options = TemporalOptions {
+        history_radius: HistoryRadius::Fixed(1),
+        post_radius: 0,
+        stabilize_sparkle: false,
+        ..Default::default()
+    };
+    let mut filter = TemporalDenoiser::new(&engine, options, TemporalSpatial::None).unwrap();
+    let size = [8, 4];
+    let mut camera = [0.; 20];
+    for i in [0, 5, 10, 15, 18] {
+        camera[i] = 1.;
+    }
+    for index in 0..2 {
+        let guides = std::array::from_fn(|channel| {
+            let pixels = (0..size[0] * size[1])
+                .flat_map(|pixel| {
+                    let x = pixel % size[0];
+                    let foreground = index == 0 && x == 6;
+                    let depth = if foreground { 0.5 } else { 1. };
+                    let value = if x == 1 || index == 0 && matches!(x, 3 | 5) {
+                        24.
+                    } else {
+                        0.2
+                    };
+                    match channel {
+                        0 => [depth, 0., 0., 1.],
+                        1 => [0., 0., 1., 1.],
+                        2 => [0.7, 0., 0., 1.],
+                        3 => [0.3, 0.3, 0.3, 1.],
+                        4 => [value, value, value, 1.],
+                        5 => [0., 0., 1., 3.],
+                        6 => [
+                            f32::from_bits(1 + u32::from(foreground)),
+                            0.,
+                            f32::from_bits(1),
+                            0.,
+                        ],
+                        _ => [0., 0., 1., 1.],
+                    }
+                })
+                .collect::<Vec<f32>>();
+            gpu.device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Bright history at an occlusion edge"),
+                    contents: bytemuck::cast_slice(&pixels),
+                    usage: wgpu::BufferUsages::STORAGE,
+                })
+        });
+        filter
+            .push_capture(
+                index,
+                Capture {
+                    raw: false,
+                    reflections: None,
+                    check_camera: false,
+                    size,
+                    samples: 3,
+                    sample_tiles: None,
+                    camera,
+                    display: Default::default(),
+                    revisions: Vec::new(),
+                    scene_key: 0,
+                    lighting_key: 0,
+                    guides,
+                },
+            )
+            .unwrap();
+    }
+    assert_eq!(filter.drain().unwrap().index, 0);
+    let frame = filter.flush().unwrap().unwrap();
+    assert_eq!(frame.index, 1);
+    let pixels = frame.read_pixels(true).unwrap().data;
+    assert_eq!(pixels[1 * 4], 24.);
+    assert!(
+        pixels[3 * 4] > 5.,
+        "Retain the bright tap away from the edge"
+    );
+    assert!((pixels[5 * 4] - 0.2).abs() < 0.001);
+}

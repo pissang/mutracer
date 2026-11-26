@@ -32,6 +32,20 @@ window applies. The material history stores roughness and metalness in a
 separate four-byte texel per pixel per slot. Virtual-image taps use the
 original radius when reflection motion is enabled.
 
+## Bright foreground silhouettes
+
+A jittered beauty sample can hit a nearby foreground object when the pixel's
+center ray hits the background. The background correspondence can be valid
+while some of its radiance belongs to the foreground. This can leave a bright
+trail after the foreground moves.
+
+The offline window marks source pixels next to substantially nearer geometry.
+If a matched tap is much brighter than the current center and nearby samples
+with the same surface identity, the window reduces its weight. Two nearby
+samples can support a bright value, so one noisy neighbor is insufficient.
+The current frame and independently matched virtual reflections keep their
+weights. Capture stores the foreground marker in the existing motion flags.
+
 ## Experimental geometry-guided sampling
 
 The WebGPU stress capture and the native Node capture command share

@@ -24,20 +24,31 @@ fn nearestHalf(value:f32)->f32{
   return sign(value)*(lower+increment)*step;
 }
 fn nearestHalf4(value:vec4f)->vec4f{return vec4f(nearestHalf(value.x),nearestHalf(value.y),nearestHalf(value.z),nearestHalf(value.w));}
+fn centerDepthAndHit(at: vec2u) -> vec2f {
+  if (p.centerRecords != 0u) {
+    let source = 2u*(p.size.x*p.size.y + (p.size.y-1u-at.y)*p.size.x + at.x);
+    return vec2f(depth[source].w, depth[source+1u].w);
+  }
+  return depth[at.y*p.size.x+at.x].xw;
+}
+fn nearerForeground(at: vec2i, currentDepth: f32) -> bool {
+  for (var dy = -1; dy <= 1; dy++) {
+    for (var dx = -1; dx <= 1; dx++) {
+      let neighbor = at + vec2i(dx,dy);
+      if (any(neighbor < vec2i(0)) || any(neighbor >= vec2i(p.size))) { continue; }
+      let sample = centerDepthAndHit(vec2u(neighbor));
+      if (sample.y > .5 && sample.x > 0. && sample.x < .96*currentDepth) { return true; }
+    }
+  }
+  return false;
+}
 @compute @workgroup_size(8,8) fn main(@builtin(global_invocation_id) g: vec3u) {
   if (any(g.xy >= p.size)) { return; }
   let i = g.y * p.size.x + g.x;
   let at = vec2i(g.xy);
   let layer = i32(p.slot);
-  var depthAndHit = vec2f(0.);
-  var gloss = 0u;
-  if (p.centerRecords != 0u) {
-    let source = 2u*(p.size.x*p.size.y + (p.size.y-1u-g.y)*p.size.x + g.x);
-    depthAndHit = vec2f(depth[source].w, depth[source+1u].w);
-    gloss = u32(max(0., depthAndHit.y-1.));
-  } else {
-    depthAndHit = depth[i].xw;
-  }
+  let depthAndHit = centerDepthAndHit(g.xy);
+  let gloss = select(0u, u32(max(0., depthAndHit.y-1.)), p.centerRecords != 0u);
   let hit = depthAndHit.y > .5;
   let surface = vec4f(normal[i].xyz, depthAndHit.x);
   textureStore(surfaceOut, at, layer * 2, nearestHalf4(surface));
@@ -51,6 +62,7 @@ fn nearestHalf4(value:vec4f)->vec4f{return vec4f(nearestHalf(value.x),nearestHal
   let m = motion[i];
   var flags = u32(m.w) | (guide << 10u) | (coverage << 2u) |
     select(0u, CENTER_HIT, hit);
+  if (hit && nearerForeground(at, depthAndHit.x)) { flags |= NEARER_FOREGROUND; }
 
   let rgba = color[i];
   let stored = vec4f(nearestHalf4(vec4f(clamp(rgba.rgb, vec3f(-65504), vec3f(65504)), 0.)).rgb, rgba.a);

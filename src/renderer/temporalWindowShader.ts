@@ -373,6 +373,36 @@ fn recoverTap(x: vec2i, pos: vec4f, q: vec3f, original: HistoryTap) -> HistoryTa
 }
 `;
 
+// A center ray can miss a foreground silhouette even when jittered beauty
+// samples hit it. The background's motion cannot carry that bright contribution.
+const silhouetteConfidenceWGSL = /* wgsl */ `
+fn silhouetteConfidence(x: vec2i, at: vec2i, pos: vec4f, rgb: vec3f) -> f32 {
+  if (p.symmetric == 0u || (p.mode & 4u) == 0u ||
+      (frameFlags(at,p.source) & NEARER_FOREGROUND) == 0u) { return 1.; }
+  let luma = vec3f(.2126,.7152,.0722);
+  let history = dot(rgb,luma);
+  let current = max(.005,dot(radiance(x,p.current),luma));
+  if (history <= 4.*current) { return 1.; }
+  let id = ident(x,p.current);
+  let revision = revisionAt(x,p.current);
+  var peak = 0.;
+  var supportedPeak = 0.;
+  for (var dy = -1; dy <= 1; dy++) {
+    for (var dx = -1; dx <= 1; dx++) {
+      let neighbor = x+vec2i(dx,dy);
+      if (!inFrame(vec2f(neighbor)) || !sameMaterial(neighbor,p.current,id,revision) ||
+          abs(surface(neighbor,p.current,0u).w-pos.w) > .04*pos.w ||
+          overflowMissing(neighbor,p.current)) { continue; }
+      let value = dot(radiance(neighbor,p.current),luma);
+      supportedPeak = max(supportedPeak,min(peak,value));
+      peak = max(peak,value);
+    }
+  }
+  let allowed = 4.*max(current,supportedPeak);
+  return 1.-smoothstep(allowed,2.*allowed,history);
+}
+`;
+
 const startWindowWGSL = (guides = false, reflections = false, sampleTileSize?: number) => /* wgsl */ `
 @compute @workgroup_size(8,8) fn main(@builtin(global_invocation_id) g:vec3u) {
   if(any(g.xy>=p.size)){return;}
@@ -437,7 +467,7 @@ fn loadNormal(at: vec2i, slot: u32) -> vec3f {
 `;
 
 export const createMixedWindowWGSL = (guides: boolean, reflections = false, sampleTileSize?: number) => /* wgsl */ `${windowBindingsAndGeometry}
-${guides ? windowGuidesWGSL : ''}${recoverHistoryWGSL}
+${guides ? windowGuidesWGSL : ''}${recoverHistoryWGSL}${silhouetteConfidenceWGSL}
 ${sampleTileSize ? /* wgsl */ `
 @group(0) @binding(${11 + (guides ? 3 : 0) + (reflections ? 3 : 0)}) var<storage, read> sampleTiles: array<u32>;
 fn sampleWeight(at: vec2i, slot: u32) -> f32 {
@@ -469,11 +499,15 @@ ${reflections ? `  let accepted = distance <= surfaceWindow && tap.support>0. &&
   if (accepted) { weight = ((surfaceWindow+1.-distance)/(surfaceWindow+1.))*tap.support${sampleTileSize ? "*neighborSampleWeight(x,tap)" : ""}*lightingConfidence(x,tap.at,false); }
   let rgb = select(vec3f(0),skyCorrection(x,tap.at,pos,radiance(tap.at,p.source)),accepted);
   var surfaceConfidence = 1.;
-  if (accepted) { surfaceConfidence = dielectricSurfaceConfidence(x,q.xy,material); }
+  if (accepted) {
+    weight *= silhouetteConfidence(x,tap.at,pos,rgb);
+    surfaceConfidence = dielectricSurfaceConfidence(x,q.xy,material);
+  }
   accumulateReflection(x,index,tap,q,weight,rgb,tent,material.y,surfaceConfidence,hasGlossyDielectric(material));` : `  if(tap.support<=0. || overflowMissing(tap.at,p.source)){atomicAdd(&rejects[reason],1u);return;}
   atomicAdd(&rejects[0],1u);
-  let weight=(surfaceWindow+1.-distance)/(surfaceWindow+1.)*tap.support${sampleTileSize ? '*neighborSampleWeight(x,tap)' : ''}*lightingConfidence(x,tap.at,false);
+  var weight=(surfaceWindow+1.-distance)/(surfaceWindow+1.)*tap.support${sampleTileSize ? '*neighborSampleWeight(x,tap)' : ''}*lightingConfidence(x,tap.at,false);
   let rgb=skyCorrection(x,tap.at,pos,radiance(tap.at,p.source));
+  weight *= silhouetteConfidence(x,tap.at,pos,rgb);
   total[index]+=vec4f(rgb*weight,weight);` }${guides ? `
   if ((p.mode & 8u)!=0u) {
     albedoSum[index]+=vec4f(loadAlbedo(tap.at,p.source)*weight,0.);
