@@ -1155,7 +1155,42 @@ fn hardware_aovs_follow_consecutive_rigid_scene_updates() {
                 .set_scene_shared(scene.descriptor().unwrap())
                 .unwrap();
         }
-        assert!(engine.update().unwrap());
+        if frame == 1 {
+            use std::sync::mpsc;
+            use std::time::{Duration, Instant};
+
+            // An operation on another engine can occupy the global registry
+            // after this transform transaction has started preparing.
+            let (resume, paused) = mpsc::sync_channel(1);
+            *crate::context::PREPARATION_GATE.lock().unwrap() = Some(paused);
+            std::thread::scope(|scope| {
+                let (finished, result) = mpsc::sync_channel(1);
+                let engine = &engine;
+                scope.spawn(move || finished.send(engine.update()).unwrap());
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while crate::context::PREPARATION_GATE.lock().unwrap().is_some() {
+                    assert!(
+                        Instant::now() < deadline,
+                        "transform did not reach preparation"
+                    );
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                let early = crate::context::with_registry_held(|| {
+                    resume.send(()).unwrap();
+                    result.recv_timeout(Duration::from_secs(1))
+                });
+                let updated = match early {
+                    Ok(updated) => updated,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        result.recv_timeout(Duration::from_secs(10)).unwrap()
+                    }
+                    Err(error) => panic!("transform update thread stopped: {error}"),
+                };
+                assert!(updated.unwrap());
+            });
+        } else {
+            assert!(engine.update().unwrap());
+        }
         render.converge(ConvergeOptions::new(4)).unwrap();
         assert_eq!(render.backend().unwrap().0, Backend::Hardware);
         if frame > 0 {

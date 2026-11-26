@@ -130,9 +130,14 @@ static REGISTRY: std::sync::LazyLock<Mutex<Registry>> = std::sync::LazyLock::new
 #[cfg(test)]
 pub(crate) static AUDIT_PREPARATIONS: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
-/// Tests: the next full preparation waits for this gate (or its sender's drop).
+/// Tests: the next scene candidate waits for this gate (or its sender's drop).
 #[cfg(test)]
 pub(crate) static PREPARATION_GATE: Mutex<Option<mpsc::Receiver<()>>> = Mutex::new(None);
+#[cfg(test)]
+pub(crate) fn with_registry_held<T>(operation: impl FnOnce() -> T) -> T {
+    let _guard = REGISTRY.lock().unwrap();
+    operation()
+}
 #[cfg(test)]
 pub(crate) static AUDIT_HISTORY_SAMPLES: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(0);
@@ -971,38 +976,36 @@ fn commit_inner(
                 _ => None,
             })
         });
-        let append = match append_bytes {
-            Some(bytes) => {
-                #[cfg(test)]
-                {
-                    let gate = PREPARATION_GATE.lock().unwrap().take();
-                    if let Some(gate) = gate {
-                        let _ = gate.recv_timeout(Duration::from_secs(60));
-                    }
-                }
-                match retained.transform(bytes) {
-                    Ok(packed) => Some(packed),
-                    Err(error) => {
-                        if profiling::enabled() {
-                            native_log!(
-                                "{}",
-                                serde_json::json!({"nativeIncrementalFallback": {"step": "GeometryAppend", "reason": error.to_string()}})
-                            );
-                        }
-                        retained.reset_sync()?;
-                        steps = None;
-                        None
-                    }
-                }
+        #[cfg(test)]
+        if steps.is_some() {
+            let gate = PREPARATION_GATE.lock().unwrap().take();
+            if let Some(gate) = gate {
+                let _ = gate.recv_timeout(Duration::from_secs(60));
             }
+        }
+        let append = match append_bytes {
+            Some(bytes) => match retained.transform(bytes) {
+                Ok(packed) => Some(packed),
+                Err(error) => {
+                    if profiling::enabled() {
+                        native_log!(
+                            "{}",
+                            serde_json::json!({"nativeIncrementalFallback": {"step": "GeometryAppend", "reason": error.to_string()}})
+                        );
+                    }
+                    retained.reset_sync()?;
+                    steps = None;
+                    None
+                }
+            },
             _ => None,
         };
         let packed = started.elapsed();
         let mut finished = false;
-        // Once the worker has a candidate, publication waits like a full commit.
-        // Returning Busy here would leave `commit` registered and make the worker's
-        // retry fail as an already-preparing transaction.
-        with_registry_mode(path != CommitPath::IncrementalOnly, |registry| {
+        // Once a candidate is registered, wait to publish or discard it just as
+        // for a full commit. Returning Busy here would strand `context.commit`
+        // and make the next attempt fail as an already-preparing transaction.
+        with_registry_mode(true, |registry| {
             let context = context(registry, handle).or_else(|error| {
                 cancelled(&cancel)?;
                 Err(error)
