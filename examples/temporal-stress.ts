@@ -4,7 +4,7 @@ import * as mutracer from '@meimu/mutracer';
 import { Engine, Render } from '@meimu/mutracer';
 import { TemporalDenoiser, type TemporalFrame } from '@meimu/mutracer/temporal';
 import { createTemporalStressShot, temporalStressTiming } from './shared/temporalStressShot';
-import { allocateOfflineSampleTiles } from '../src/temporal/offlineSamplePlan';
+import { captureOfflineGeometry, OfflineGeometryHistory, offlineSampleCap, offlineSampleTileSize } from '../src/temporal/offlineSamplePlan';
 
 interface Settings {
   spp: number;
@@ -16,6 +16,7 @@ interface Settings {
   postRadius?: number;
   stabilizeSparkle?: boolean;
   temporalSampleBudget?: number;
+  temporalSampleFloor?: number;
   sampleStride?: number;
 }
 
@@ -53,43 +54,46 @@ const settings = (): Settings => ({
   depthOfField: dof.checked
 });
 
-const experimentalTileSize = 8;
-const experimentalSampleCap = 8;
-let captureTiming: {pilotMs: number; renderMs: number[]; beautySamples: number[]; belowMinimum: number[]} | undefined;
+const geometryWidth = Math.ceil(width / 16) * (16 / offlineSampleTileSize);
+const geometryHeight = Math.ceil(height / 16) * (16 / offlineSampleTileSize);
+let captureTiming: {pilotMs: number; geometryMs: number[]; allocationMs: number; renderMs: number[];
+  beautySamples: number[]; belowMinimum: number[]} | undefined;
 
 async function planSampling(options: Settings, start: number, end: number, stopped: () => boolean) {
-  const plans = new Map<number, ReturnType<typeof allocateOfflineSampleTiles>>();
-  const pilot = new Render(engine, {width, height, bounces: 6, maxSamples: 1, samplingPattern: 'random'});
-  const temporal = new TemporalDenoiser(engine, {historyRadius: options.historyRadius, postRadius: 0,
-    stabilizeSparkle: false, denoiser: null});
-  const budget = options.temporalSampleBudget! - 1;
-  temporal._configureOfflineSampling({onPilot(index, data) {
-    plans.set(index + start, allocateOfflineSampleTiles(data, budget, experimentalTileSize, 6, experimentalSampleCap));
-  }});
-  const detach = temporal.attach(pilot);
+  const geometry = new Render(engine, {width: geometryWidth, height: geometryHeight, maxSamples: 1,
+    aovs: ['id', 'motion', 'centerPosition'], bounces: 6});
+  const history = new OfflineGeometryHistory(geometryWidth, geometryHeight);
+  const geometryMs = [];
   try {
-    for (let i = start; i < end && !stopped(); i++) {
+    for (let i = start; i < end; i++) {
+      const started = performance.now();
       shot.setTime(i / temporalStressTiming.fps, {depthOfField: options.depthOfField});
       engine.update();
-      await pilot.converge({samples: 1, sampleSequenceOffset: 0x100000 + i * 32});
-      await temporal.push(pilot);
-      for await (const _frame of temporal.drain()) { /* Only the pilot statistics are needed. */ }
+      const frame = await captureOfflineGeometry(geometry, stopped);
+      if (!frame) return;
+      history.add(frame, i === Math.ceil(temporalStressTiming.cut * temporalStressTiming.fps));
+      geometryMs.push(performance.now() - started);
     }
-    if (!stopped()) for await (const _frame of temporal.flush()) { /* Finish the symmetric pilot window. */ }
-    return plans;
-  } finally { detach(); temporal.dispose(); pilot.dispose(); }
+    const started = performance.now();
+    const plans = history.samplePlans(geometryWidth * offlineSampleTileSize, geometryHeight * offlineSampleTileSize,
+      options.spp, options.temporalSampleBudget!, options.historyRadius ?? 8, options.temporalSampleFloor ?? 10);
+    return {plans, geometryMs, allocationMs: performance.now() - started};
+  } finally { geometry.dispose(); }
 }
 
 /** Renders frames [start, end) and yields each displayable result with its frame index. */
 async function* frames(options: Settings, start: number, end: number, stopped: () => boolean) {
   const started = performance.now();
   if (options.temporalSampleBudget !== undefined && (engine.backend !== 'webgpu' || options.mode !== 'offline' ||
-    options.reflectionMotion || options.accumulateGuides || !Number.isFinite(options.temporalSampleBudget) ||
-    options.temporalSampleBudget < 2 || options.temporalSampleBudget > experimentalSampleCap + 1)) {
-    throw new Error('The temporal sampling experiment needs offline WebGPU surface history and a valid sample budget.');
+    options.reflectionMotion || options.accumulateGuides || options.spp !== 3 || !Number.isFinite(options.temporalSampleBudget) ||
+    options.temporalSampleBudget < options.spp || options.temporalSampleBudget > offlineSampleCap)) {
+    throw new Error('The temporal sampling experiment needs offline WebGPU surface history and a total budget of at least 3 spp.');
   }
-  const plans = options.temporalSampleBudget === undefined ? undefined : await planSampling(options, start, end, stopped);
-  const timing = {pilotMs: plans ? performance.now()-started : 0, renderMs: [] as number[], beautySamples: [] as number[], belowMinimum: [] as number[]};
+  const planning = options.temporalSampleBudget === undefined ? undefined : await planSampling(options, start, end, stopped);
+  if (stopped()) return;
+  const timing = {pilotMs: planning ? performance.now()-started : 0, geometryMs: planning?.geometryMs ?? [],
+    allocationMs: planning?.allocationMs ?? 0,
+    renderMs: [] as number[], beautySamples: [] as number[], belowMinimum: [] as number[]};
   if (params.has('capture')) captureTiming = timing;
   // Temporal denoising requires WebGPU; WebGL shows the raw frames.
   const temporal = options.mode === 'off' || engine.backend !== 'webgpu' ? undefined : new TemporalDenoiser(engine, {
@@ -101,7 +105,7 @@ async function* frames(options: Settings, start: number, end: number, stopped: (
     stabilizeSparkle: options.stabilizeSparkle,
     denoiser: { type: 'oidn', model: 'cleanAuxLarge', weightsBaseUrl: '/oidn/weights/' }
   });
-  if (plans) temporal!._configureOfflineSampling({tileSize: experimentalTileSize});
+  if (planning) temporal!._configureOfflineSampling({tileSize: offlineSampleTileSize});
   const detach = temporal?.attach(render);
   render.maxSamples = options.spp;
   try {
@@ -109,12 +113,12 @@ async function* frames(options: Settings, start: number, end: number, stopped: (
       const startFrame = performance.now();
       shot.setTime(i / temporalStressTiming.fps, { depthOfField: options.depthOfField });
       engine.update();
-      const plan = plans?.get(i);
-      const sampleSequenceOffset = i * (options.sampleStride ?? (plans ? 32 : options.spp));
+      const plan = planning?.plans[i - start];
+      const sampleSequenceOffset = i * (options.sampleStride ?? (planning ? 32 : options.spp));
       let average = options.spp;
       if (plan) {
-        render.maxSamples = plan.targets.reduce((cap, target) => Math.max(cap, target), 1);
-        const result = await render._convergeWithSampleTiles({samples: experimentalSampleCap, sampleSequenceOffset}, plan);
+        render.maxSamples = plan.targets.reduce((cap, target) => Math.max(cap, target), options.spp);
+        const result = await render._convergeWithSampleTiles({samples: offlineSampleCap, sampleSequenceOffset}, plan);
         average = result.averageSamplesPerPixel;
         await temporal!.push(render);
       } else {

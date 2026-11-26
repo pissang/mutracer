@@ -9,7 +9,7 @@ export interface OfflineVarianceHistory {
   sampleTargets: Uint32Array;
 }
 
-/** Tile targets from an independent offline pilot, in top-row-first order. */
+/** Offline sample counts, in top-row-first tile order. */
 export interface OfflineSampleTiles {
   width: number;
   height: number;

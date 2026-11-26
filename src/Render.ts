@@ -320,6 +320,24 @@ export default class Render {
   /** @internal */ get _presentable() { return this._complete && (!this._denoisePending || this._denoisedSamples > 0 || (this._schedule() === 'converged' && this.maxSamples > 1)); }
   /** @internal Fixed export crop, applied before display passes. */ get _exportCrop() { return this._fixed; }
   /** @internal */ get _output() { if (this._disposed) throw new Error('Render is disposed.'); return this._target; }
+  /** @internal Reads the two packed pixel-center AOV records for offline geometry prediction. */
+  async _readOfflineGeometry() {
+    const target = this._target;
+    const camera = this._engine._inputs.value;
+    if (!target?.readOfflineGeometry || !camera || !this._current || !this._fixed) {
+      throw new Error('Offline geometry requires a current fixed-size WebGPU render.');
+    }
+    const {width: stride, height: rows} = target.getMemory();
+    const {width, height} = this._fixed;
+    const projection = camera.getProjectionMatrix(camera.aspect ?? width / height);
+    const eye = camera.position;
+    const direction = camera.projection === 'orthographic' ?
+      [-camera.transform[8], -camera.transform[9], -camera.transform[10]] as const : undefined;
+    const buffer = await target.readOfflineGeometry();
+    return {words: new Uint32Array(buffer), values: new Float32Array(buffer),
+      stride, rows, left: (stride - width) >> 1, top: (rows - height) >> 1,
+      eye, direction, focalLength: height * projection[5] * .5};
+  }
   /** @internal Capture converged GPU inputs for the optional temporal sub-path. */
   async _captureTemporal(capture: (input: import('./renderer/accumulationTarget.js').TemporalCaptureInput) => Promise<void>) {
     if (this._disposed) throw new Error('Render is disposed.');
@@ -826,7 +844,7 @@ export default class Render {
   async converge(options: ConvergeOptions): Promise<ConvergeResult> {
     return this._converge(options);
   }
-  /** @internal Runs a WebGPU beauty pass with a budget estimated by an independent pilot. */
+  /** @internal Runs a WebGPU beauty pass with geometry-planned sample counts. */
   async _convergeWithSampleTiles(options: ConvergeOptions, tiles: OfflineSampleTiles) {
     return this._converge(options, {...tiles, targets: tiles.targets.slice()});
   }

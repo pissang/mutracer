@@ -196,11 +196,12 @@ async function run() {
     const materialAcceptanceResult = await exerciseMaterialAcceptance(device);
     const glossyAcceptance = await exerciseGlossyAcceptance(device);
     const offlineCounts = await exerciseOfflineSampleWeights(device);
+    const retainedBaseSamples = await exerciseRetainedBaseSamples(engine);
     const forwardSeed = await exerciseForwardMotionSeed(device);
     const reflectionMotion = await exerciseReflectionMotion(engine, device);
     await device.queue.onSubmittedWorkDone();
     check(uncaptured.length === 0, `Uncaptured WebGPU errors: ${uncaptured.join(' | ')}`);
-    return {identity: true, max, sequence: true, oidnMax, presentationIdentity, vignetteChange, customAov: receivedRoughness, fullIdResult, overflowResult, floatingPostResult, materialAcceptanceResult, glossyAcceptance, offlineCounts, forwardSeed, reflectionMotion, uncapturedErrors: uncaptured.length, plan: temporal.plan};
+    return {identity: true, max, sequence: true, oidnMax, presentationIdentity, vignetteChange, customAov: receivedRoughness, fullIdResult, overflowResult, floatingPostResult, materialAcceptanceResult, glossyAcceptance, offlineCounts, retainedBaseSamples, forwardSeed, reflectionMotion, uncapturedErrors: uncaptured.length, plan: temporal.plan};
   } finally { temporal.dispose(); render.dispose(); sync.dispose(); engine.dispose(); device.destroy(); }
 }
 
@@ -538,6 +539,32 @@ async function exerciseOfflineSampleWeights(device: GPUDevice) {
     check(Math.abs(past - 4.2) < 1e-6, 'The center and past tap did not preserve their sample counts');
     return {future, past};
   } finally { window.dispose(); }
+}
+
+async function exerciseRetainedBaseSamples(engine: Engine) {
+  const size = 32, tileSize = 8, base = 3;
+  const render = new Render(engine, {width: size, height: size, maxSamples: base});
+  const offset = 991;
+  try {
+    await render.converge({samples: base, sampleSequenceOffset: offset});
+    const uniform = (await render.readPixels('hdr')).data;
+    const columns = size / tileSize;
+    const targets = Uint32Array.from({length: columns ** 2}, (_, i) => i % columns < columns / 2 ? base : 5);
+    render.maxSamples = 5;
+    const plan = await render._convergeWithSampleTiles({samples: 5, sampleSequenceOffset: offset},
+      {width: size, height: size, tileSize, targets});
+    check(plan.averageSamplesPerPixel === 4, 'The adaptive pass did not spend its additional sample budget');
+    const adaptive = (await render.readPixels('hdr')).data;
+    let maxDelta = 0;
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size / 2; x++) {
+        const offset = (y * size + x) * 4;
+        for (let c = 0; c < 4; c++) maxDelta = Math.max(maxDelta, Math.abs(uniform[offset + c] - adaptive[offset + c]));
+      }
+    }
+    check(maxDelta === 0, 'Adaptive sampling changed the base samples in unselected tiles');
+    return {average: plan.averageSamplesPerPixel, maxDelta};
+  } finally { render.dispose(); }
 }
 
 async function exerciseForwardMotionSeed(device: GPUDevice) {

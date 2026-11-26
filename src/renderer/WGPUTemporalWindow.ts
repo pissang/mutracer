@@ -15,7 +15,7 @@ export class DirectWindowGPU {
   private readonly tilesPerFrame: number;
 
   private constructor(private readonly history: TemporalHistoryGPU, private readonly adaptiveRadius: boolean,
-    accumulateGuides: boolean, private readonly experiment?: 'pilot' | number, private readonly opticalMotion = true) {
+    accumulateGuides: boolean, private readonly sampleTileSize?: number, private readonly opticalMotion = true) {
     const d = history.device;
     const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
     this.total = d.createBuffer({label: 'Direct window weighted sum', size: history.bytes, usage});
@@ -27,24 +27,24 @@ export class DirectWindowGPU {
       };
     }
     if (history.reflections) this.reflectionSum = d.createBuffer({label: 'Reflected radiance weighted sum', size: history.bytes, usage});
-    this.tilesPerFrame = typeof experiment === 'number'
-      ? Math.ceil(history.width / experiment) * Math.ceil(history.height / experiment) : 0;
-    if (experiment) this.experimentBuffer = d.createBuffer({label: 'Offline temporal sampling',
-      size: experiment === 'pilot' ? history.bytes / 2 : history.capacity * this.tilesPerFrame * 4, usage});
+    this.tilesPerFrame = sampleTileSize
+      ? Math.ceil(history.width / sampleTileSize) * Math.ceil(history.height / sampleTileSize) : 0;
+    if (sampleTileSize) this.experimentBuffer = d.createBuffer({label: 'Offline temporal sampling',
+      size: history.capacity * this.tilesPerFrame * 4, usage});
     this.rejects = d.createBuffer({label: 'Direct window validation counts', size: 64, usage});
     this.params = d.createBuffer({label: 'Direct window parameters', size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST});
   }
 
-  static async create(history: TemporalHistoryGPU, adaptiveRadius = false, accumulateGuides = false, experiment?: 'pilot' | number, opticalMotion = true) {
-    const window = new DirectWindowGPU(history, adaptiveRadius, accumulateGuides, experiment, opticalMotion);
+  static async create(history: TemporalHistoryGPU, adaptiveRadius = false, accumulateGuides = false, sampleTileSize?: number, opticalMotion = true) {
+    const window = new DirectWindowGPU(history, adaptiveRadius, accumulateGuides, sampleTileSize, opticalMotion);
     const device = history.device;
     try {
       const createPipeline = (code: string) => {
         const module = device.createShaderModule({label: 'Direct temporal window', code});
         return device.createComputePipelineAsync({layout: 'auto', compute: {module, entryPoint: 'main'}});
       };
-      window.pipeline = await createPipeline(createMixedWindowWGSL(accumulateGuides, !!history.reflections, experiment));
-      if (history.reflections || experiment) window.cameraCutPipeline = await createPipeline(createMixedWindowWGSL(accumulateGuides));
+      window.pipeline = await createPipeline(createMixedWindowWGSL(accumulateGuides, !!history.reflections, sampleTileSize));
+      if (history.reflections || sampleTileSize) window.cameraCutPipeline = await createPipeline(createMixedWindowWGSL(accumulateGuides));
       return window;
     } catch (error) { window.dispose(); throw error; }
   }
@@ -54,16 +54,9 @@ export class DirectWindowGPU {
 
   setSampleTiles(frame: number, plan: OfflineSampleTiles) {
     const h = this.history;
-    if (!this.experimentBuffer || plan.tileSize !== this.experiment || plan.width !== h.width || plan.height !== h.height ||
+    if (!this.experimentBuffer || plan.tileSize !== this.sampleTileSize || plan.width !== h.width || plan.height !== h.height ||
       plan.targets.length !== this.tilesPerFrame) throw new Error('Temporal sample tiles do not match the window.');
     h.device.queue.writeBuffer(this.experimentBuffer, h.slot(frame) * this.tilesPerFrame * 4, plan.targets);
-  }
-
-  async readPilot() {
-    if (this.experiment !== 'pilot') throw new Error('The window has no pilot moments.');
-    const [sum, moments] = await Promise.all([this.read(this.total), this.read(this.experimentBuffer!)]);
-    return {width: this.history.width, height: this.history.height,
-      sum: new Float32Array(sum), moments: new Float32Array(moments)};
   }
 
   async dispatch(current: number, source: number, symmetric: boolean, stage: number,

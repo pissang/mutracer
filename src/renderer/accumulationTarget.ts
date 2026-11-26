@@ -13,6 +13,7 @@ export interface TargetPipeline extends RenderPasses {
   captureTemporalInput?(aovs: readonly import('./aov.js').AovKind[], capture: (input: TemporalCaptureInput) => Promise<void>): Promise<void>;
   composeExternalDenoiseInput?(input: {width: number; height: number; samples: number; color: GPUBuffer; albedo: GPUBuffer; normal: GPUBuffer}): {color: GPUBuffer; albedo: GPUBuffer; normal: GPUBuffer};
   setExternalDenoisedOutput?(input: GPUBuffer, displayLinear: boolean, encodedCodes: boolean, capturedBaseline?: GPUBuffer): void;
+  readOfflineGeometry?(): Promise<ArrayBuffer>;
   setTemporalReflections?(enabled: boolean): void;
   activate(): void;
   invalidateDenoisedOutput(): void;
