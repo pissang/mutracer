@@ -477,7 +477,7 @@ fn window_guides_match_web_packed_guides() {
         ..Default::default()
     };
     let plan = options.plan(size, 0, &gpu.device.limits()).unwrap();
-    let passes = Passes::new(gpu.clone(), size, plan, 0, false, true, false).unwrap();
+    let passes = Passes::new(gpu.clone(), size, plan, 0, false, true, false, false).unwrap();
     let mut camera = [0.; 20];
     for i in [0, 5, 10, 15, 18] {
         camera[i] = 1.;
@@ -557,7 +557,7 @@ fn reflection_window_accumulates_a_translating_highlight_in_both_directions() {
         ..Default::default()
     };
     let plan = options.plan(size, 0, &gpu.device.limits()).unwrap();
-    let passes = Passes::new(gpu.clone(), size, plan, 0, false, false, true).unwrap();
+    let passes = Passes::new(gpu.clone(), size, plan, 0, false, false, true, false).unwrap();
     let mut camera = [0.; 20];
     for i in [0, 5, 10, 15, 18] {
         camera[i] = 1.;
@@ -677,7 +677,17 @@ fn curved_mirror_window(
         ..Default::default()
     };
     let plan = options.plan(size, 0, &gpu.device.limits()).unwrap();
-    let passes = Passes::new(gpu.clone(), size, plan, 0, false, false, reflection_motion).unwrap();
+    let passes = Passes::new(
+        gpu.clone(),
+        size,
+        plan,
+        0,
+        false,
+        false,
+        reflection_motion,
+        false,
+    )
+    .unwrap();
     let mut camera = [0.; 20];
     for i in [0, 5, 10, 15, 18] {
         camera[i] = 1.;

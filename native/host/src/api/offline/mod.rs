@@ -104,6 +104,7 @@ pub struct TemporalDenoiser {
     engine: Engine,
     options: TemporalOptions,
     spatial: TemporalSpatial,
+    planar_reflections: bool,
     passes: Option<Passes>,
     oidn: Option<crate::oidn_webgpu::Denoiser>,
     display: Option<crate::display::Display>,
@@ -133,6 +134,7 @@ impl TemporalDenoiser {
             engine: engine.clone(),
             options,
             spatial,
+            planar_reflections: false,
             passes: None,
             oidn: None,
             display: None,
@@ -148,6 +150,15 @@ impl TemporalDenoiser {
             flushing: false,
             failed: false,
         })
+    }
+    /// Select tangent-plane reflection reprojection for a controlled comparison.
+    #[doc(hidden)]
+    pub fn experimental_planar_reflections(&mut self, enabled: bool) -> Result<()> {
+        if self.passes.is_some() {
+            return Err("Set reflection projection before pushing frames".into());
+        }
+        self.planar_reflections = enabled;
+        Ok(())
     }
     /// Effective plan after the first push.
     pub fn plan(&self) -> Option<TemporalPlan> {
@@ -217,6 +228,7 @@ impl TemporalDenoiser {
                     self.options.stabilize_sparkle,
                     self.options.guide_window(cost, plan.max),
                     self.options.reflection_motion,
+                    self.planar_reflections,
                 )?;
                 let spatial = match &self.spatial {
                     TemporalSpatial::Oidn(weights) => Some((

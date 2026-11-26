@@ -51,6 +51,11 @@ struct Overrides {
     seed_value: Option<u32>,
     sample_sequence_offset: Option<u32>,
     sample_sequence: Option<SampleSequence>,
+    experimental_sequence_stride: Option<u32>,
+    #[serde(default)]
+    experimental_capture: bool,
+    #[serde(default)]
+    experimental_planar: bool,
     render: Option<RenderOptions>,
     display: Option<shot::Display>,
     format: Option<Format>,
@@ -70,6 +75,9 @@ enum Request {
     Camera {
         id: u32,
         bytes: u32,
+    },
+    Capture {
+        id: u32,
     },
     Flush {
         id: u32,
@@ -211,6 +219,7 @@ enum Scene {
 struct Session {
     hello: bool,
     temporal: Option<Stream>,
+    capture_ready: bool,
     fallback_reported: bool,
     scene: Option<Scene>,
     renderer: Option<(Settings, Renderer)>,
@@ -227,6 +236,7 @@ struct Stream {
     last: u32,
     last_time: f64,
     flushing: bool,
+    planar: bool,
 }
 fn temporal_reply(
     writer: &mut impl Write,
@@ -235,7 +245,12 @@ fn temporal_reply(
     format: Format,
     done: bool,
     latency: u32,
+    elapsed_ms: Option<f64>,
 ) -> Result<()> {
+    let mut header = json!({"type":"frames","id":id,"done":done,"latency":latency,"frames":[]});
+    if let Some(elapsed_ms) = elapsed_ms {
+        header["elapsedMs"] = json!(elapsed_ms);
+    }
     if let Some(frame) = frame {
         let bytes = crate::temporal::encode(&frame, format)?;
         if bytes.len() > MAX_PAYLOAD {
@@ -306,7 +321,29 @@ impl Session {
             return Err(invalid("/type", "Send hello first"));
         }
         let check_only = matches!(request, Request::Check { .. });
+        if !matches!(request, Request::Capture { .. }) {
+            self.capture_ready = false;
+        }
         match request {
+            Request::Capture { id } => {
+                if !self.capture_ready {
+                    return Err(invalid(
+                        "/type",
+                        "Render an experimental capture frame first",
+                    ));
+                }
+                self.capture_ready = false;
+                let renderer = &self.renderer.as_ref().unwrap().1;
+                let (size, bytes) = crate::temporal::capture_inputs(&renderer.render)?;
+                if bytes.len() > MAX_PAYLOAD {
+                    return Err(Error::budget("Capture exceeds the stdio payload limit"));
+                }
+                reply(
+                    writer,
+                    json!({"type":"capture","id":id,"size":size,"bytes":bytes.len()}),
+                    Some(&bytes),
+                )
+            }
             Request::Cut { id } => {
                 let stream = self
                     .temporal
@@ -331,7 +368,7 @@ impl Session {
             }
             Request::Flush { id } => {
                 let Some(stream) = self.temporal.as_mut() else {
-                    return temporal_reply(writer, id, None, Format::Png, true, 0);
+                    return temporal_reply(writer, id, None, Format::Png, true, 0, None);
                 };
                 stream.flushing = true;
                 let latency = stream.filter.latency();
@@ -341,7 +378,7 @@ impl Session {
                 if done {
                     self.temporal = None;
                 }
-                temporal_reply(writer, id, frame, format, done, latency)
+                temporal_reply(writer, id, frame, format, done, latency, None)
             }
             Request::Hello { id, protocol } => {
                 if protocol != 1 || self.hello {
@@ -354,7 +391,7 @@ impl Session {
                 reply(
                     writer,
                     json!({"type":"ok","id":id,"protocol":1,"shotVersion":1,"descriptorVersions":[8],
-                    "capabilities":["shot-json","descriptor-v8","asset-path","asset-bytes","shot-edit","png","oidn","image-decode","exr","render-settings","display-settings","frame-sample-sequence","check-settings","oidn-clean-aux-large","structured-warnings","temporal-offline","descriptor-camera"],
+                    "capabilities":["shot-json","descriptor-v8","asset-path","asset-bytes","shot-edit","png","oidn","image-decode","exr","render-settings","display-settings","frame-sample-sequence","check-settings","oidn-clean-aux-large","structured-warnings","temporal-offline","descriptor-camera","experimental-capture"],
                     "maxHeaderBytes":MAX_HEADER,"maxPayloadBytes":MAX_PAYLOAD,"build":env!("MUTRACER_CLI_BUILD_ID")}),
                     None,
                 )
@@ -608,6 +645,7 @@ impl Session {
                     sample_sequence: overrides.sample_sequence.unwrap_or_else(|| {
                         defaults.map_or(SampleSequence::Fixed, |o| o.sample_sequence)
                     }),
+                    sequence_stride: overrides.experimental_sequence_stride,
                     render: overrides.render.unwrap_or_else(|| {
                         defaults.map_or_else(RenderOptions::default, |o| o.render)
                     }),
@@ -620,6 +658,14 @@ impl Session {
                     stride: 1,
                     gpu: None,
                 };
+                if settings.sequence_stride.is_some_and(|stride| {
+                    stride < settings.spp || settings.sample_sequence != SampleSequence::Frame
+                }) {
+                    return Err(invalid(
+                        "/settings/experimentalSequenceStride",
+                        "Use frame sampling and a stride at least as large as spp",
+                    ));
+                }
                 settings.validate(defaults.map_or(1., |o| o.duration), "/settings")?;
                 settings.offset(frame, "/settings")?;
                 let config = overrides
@@ -628,11 +674,20 @@ impl Session {
                     .unwrap_or_default();
                 config.validate("/settings/temporal", defaults.map(|o| o.duration), fps)?;
                 config.check_budget(settings, "/settings/temporal")?;
+                if overrides.experimental_planar
+                    && (settings.denoise != Denoise::Temporal || !config.options.reflection_motion)
+                {
+                    return Err(invalid(
+                        "/settings/experimentalPlanar",
+                        "Planar reflections require temporal reflection motion",
+                    ));
+                }
                 if !check_only
                     && self.temporal.as_ref().is_some_and(|s| {
                         s.flushing
                             || s.settings != settings
                             || s.config != config
+                            || s.planar != overrides.experimental_planar
                             || s.last.checked_add(1) != Some(frame)
                     })
                 {
@@ -694,6 +749,17 @@ impl Session {
                 }
                 let renderer = &mut self.renderer.as_mut().unwrap().1;
                 config.configure_capture(&renderer.render, settings.denoise)?;
+                if overrides.experimental_capture {
+                    let mut options = renderer.render.settings().map_err(crate::temporal::gpu)?;
+                    let id_mask = mutracer_native::api::PixelKind::Id.aov_mask();
+                    if options.aovs & id_mask == 0 {
+                        options.aovs |= id_mask;
+                        renderer
+                            .render
+                            .set_settings(options)
+                            .map_err(crate::temporal::gpu)?;
+                    }
+                }
                 reply(
                     writer,
                     json!({"type":"progress","id":id,"frame":frame,"samples":0,"targetSamples":settings.spp}),
@@ -727,12 +793,16 @@ impl Session {
                     renderer.converge(settings, frame)?;
                     if self.temporal.is_none() {
                         self.temporal = Some(Stream {
-                            filter: config.start(&renderer.engine)?,
+                            filter: config.start_with_planar(
+                                &renderer.engine,
+                                overrides.experimental_planar,
+                            )?,
                             config: config.clone(),
                             settings,
                             last: frame,
                             last_time: f64::NEG_INFINITY,
                             flushing: false,
+                            planar: overrides.experimental_planar,
                         });
                     }
                     let stream = self.temporal.as_mut().unwrap();
@@ -746,6 +816,7 @@ impl Session {
                 } else {
                     Some(renderer.capture(settings, frame)?)
                 };
+                self.capture_ready = overrides.experimental_capture;
                 let render_warnings = renderer.graph_warnings(&graph_targets);
                 for warning in render_warnings {
                     if seen_warnings.insert(warning.clone()) {
@@ -762,6 +833,9 @@ impl Session {
                         settings.format,
                         false,
                         stream.filter.latency(),
+                        overrides
+                            .experimental_capture
+                            .then(|| tick.elapsed().as_secs_f64() * 1000.),
                     );
                 };
                 reply(

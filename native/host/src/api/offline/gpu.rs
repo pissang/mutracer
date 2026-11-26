@@ -46,6 +46,7 @@ impl Passes {
         sparkle: bool,
         accumulate_guides: bool,
         reflection_motion: bool,
+        planar_reflections: bool,
     ) -> Result<Self> {
         let shaders = &crate::postprocess::sources()?.temporal;
         let pixels = u64::from(size[0]) * u64::from(size[1]);
@@ -188,12 +189,20 @@ impl Passes {
             // Several shared post kernels keep optional statistics bindings even when
             // the entry point does not read them. Match the explicit browser layouts.
             let explicit = post_layout(device, name);
+            let constants: &[(&str, f64)] = if planar_reflections && name == "captureReflections" {
+                &[("EXPERIMENTAL_PLANAR_REFLECTIONS", 1.0)]
+            } else {
+                &[]
+            };
             let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some(name),
                 layout: explicit.as_ref(),
                 module: &module,
                 entry_point: Some("main"),
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants,
+                    ..Default::default()
+                },
                 cache: None,
             });
             pass.pipelines.insert(name.into(), pipeline);

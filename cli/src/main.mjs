@@ -49,11 +49,15 @@ function args() {
       t: {type: 'string'}, seed: {type: 'string'}, denoise: {type: 'string'}, tracer: {type: 'string'},
       bounces: {type: 'string'}, format: {type: 'string'}, 'sample-sequence': {type: 'string'},
       'keep-frames': {type: 'string'}, 'contact-sheet': {type: 'string'},
+      'seed-value': {type: 'string'}, 'sample-stride': {type: 'string'},
+      'reflection-motion': {type: 'string'}, 'history-radius': {type: 'string'},
+      'post-radius': {type: 'string'}, 'timing-only': {type: 'boolean'},
+      'context': {type: 'string'},
     },
   });
   if (values.help) return {};
   const [command, file] = positionals;
-  if (positionals.length !== 2 || !['validate','still','preview','render'].includes(command)) {
+  if (positionals.length !== 2 || !['validate','still','preview','render','capture'].includes(command)) {
     throw new Error('Usage: mutracer-js validate|still|preview|render SHOT.mjs [-o FILE]');
   }
   if (command !== 'validate' && !values.output) throw new Error('Specify -o FILE.');
@@ -102,7 +106,7 @@ function options(input, command, values) {
   if (!['oidn','cleanAuxLarge','temporal','none'].includes(denoise)) throw new Error('Use --denoise oidn, cleanAuxLarge, temporal or none.');
   const tracer = values.tracer ?? input.tracer ?? 'hardware';
   if (!['hardware','software'].includes(tracer)) throw new Error('Use --tracer hardware or software.');
-  const seedValue = number(input.seedValue ?? 12345, 'seedValue', 0, 0xffffffff);
+  const seedValue = number(values['seed-value'] ?? input.seedValue ?? 12345, 'seedValue', 0, 0xffffffff);
   const offset = number(input.sampleSequenceOffset ?? 0, 'sampleSequenceOffset', 0, 0xffffffff);
   if (offset + spp > 0x100000000) throw new Error('Sequence range exceeds 32-bit sample indices.');
   if (values.frames !== undefined && !/^\d+(?:-\d+)?$/.test(values.frames)) {
@@ -128,14 +132,36 @@ function options(input, command, values) {
   if (denoise === 'temporal' && (preview || sampleSequence !== 'frame')) {
     throw new Error('Temporal rendering requires stride 1 and output.sampleSequence set to frame.');
   }
-  const temporal = input.temporal && {...input.temporal};
+  const experimentalKeys = ['seed-value','sample-stride','reflection-motion','history-radius','post-radius','timing-only','context'];
+  const experimental = command === 'capture';
+  if (!experimental && experimentalKeys.some(key => values[key] !== undefined)) {
+    throw new Error('Experimental options require the capture command.');
+  }
+  const temporal = denoise === 'temporal' && experimental ? {...input.temporal} : input.temporal && {...input.temporal};
+  const projection = values['reflection-motion'];
+  if (projection !== undefined) {
+    if (!temporal || denoise !== 'temporal' || !['off','planar','curved'].includes(projection)) {
+      throw new Error('Use --reflection-motion off, planar or curved with temporal denoising.');
+    }
+    temporal.reflectionMotion = projection !== 'off';
+  }
+  for (const [flag, key] of [['history-radius','historyRadius'], ['post-radius','postRadius']]) {
+    if (values[flag] === undefined) continue;
+    if (!temporal || denoise !== 'temporal') throw new Error(`--${flag} requires temporal denoising.`);
+    temporal[key] = number(values[flag], flag, 0, key === 'postRadius' ? 3 : 32);
+  }
+  if (temporal?.postRadius === 0 && experimental) temporal.stabilizeSparkle = false;
+  const sequenceStride = values['sample-stride'] === undefined ? undefined :
+    number(values['sample-stride'], 'sample stride', spp, 0xffffffff);
   const format = values.format;
   if (format !== undefined && (command !== 'still' || !['png','exr'].includes(format))) {
     throw new Error('Use --format png or exr for a still.');
   }
   return {duration, fps, first, last, time, stride: preview ? 2 : 1,
     settings: {size:[w,h], spp, seed, denoise, seedValue, sampleSequenceOffset:offset, tracer,
-      sampleSequence, ...(temporal && {temporal}), display: canonicalDisplay(display, command === 'validate'), format,
+      sampleSequence, ...(experimental && {experimentalCapture:true}),
+      ...(sequenceStride !== undefined && {experimentalSequenceStride: sequenceStride}),
+      ...(projection === 'planar' && {experimentalPlanar:true}), ...(temporal && {temporal}), display: canonicalDisplay(display, command === 'validate'), format,
       render: values.bounces === undefined ? render : {...render, bounces:number(values.bounces, 'Bounces', 1, 20)}}};
 }
 
@@ -235,6 +261,12 @@ async function prepare(module, url, worker, settings) {
   }) : undefined;
   const encoder = new NativeSceneEncoder(async () => {throw new Error('Use a loaded HDR texture for the environment.');});
   return {
+    get materialsByMeshName() {
+      const meshes = (sync ? sink.scene : scene).meshes;
+      const materials = [...new Set(meshes.flatMap(mesh => mesh.materials))];
+      return Object.fromEntries(meshes.filter(mesh => mesh.name)
+        .map(mesh => [mesh.name, mesh.materials.map(material => materials.indexOf(material) + 1)]));
+    },
     get assets() { return [...dependencies.entries()].sort(([a],[b]) => a.localeCompare(b)); },
     async frame(t, index) {
       await module.frame({t,frame:index,scene,camera});
@@ -296,6 +328,81 @@ async function lock(directory) {
   }
 }
 
+async function captureShot(worker, shot, opts, values, directory) {
+  if (!worker.info.capabilities.includes('experimental-capture')) {
+    throw new Error('Build the native worker with experimental capture support.');
+  }
+  const {settings, fps, duration, first, last} = opts;
+  const radius = settings.temporal?.historyRadius;
+  const latency = settings.denoise === 'temporal' ?
+    (typeof radius === 'number' ? radius : radius?.max ?? 16) + (settings.temporal?.postRadius ?? 3) : 0;
+  const context = values.context?.split('-');
+  if (context && !/^\d+-\d+$/.test(values.context)) throw new Error('Use --context FIRST-LAST.');
+  const maxFrame = Math.ceil(duration * fps) - 1;
+  const begin = context ? number(context[0], 'Context start', 0, first) :
+    latency ? Math.max(0, first - latency - 1) : first;
+  const end = context ? number(context[1], 'Context end', last, maxFrame) :
+    Math.min(maxFrame, last + latency);
+  const save = index => index >= first && index <= last;
+  const prefix = index => resolve(directory, `frame-${String(index).padStart(4,'0')}`);
+  const started = performance.now();
+  const timing = {renderMs: [], workerMs: [], outputMs: {}};
+  const materials = {}, cameras = {};
+  async function saveInput(index) {
+    if (!save(index) || values['timing-only']) return;
+    const {header,bytes} = await worker.request('capture', {});
+    const length = settings.size[0] * settings.size[1] * 16;
+    if (header.type !== 'capture' || bytes?.length !== length * 2) throw new NativeError('Invalid capture readback.');
+    materials[index] = shot.materialsByMeshName;
+    await Promise.all([
+      atomic(prefix(index) + '.hdr.f32', bytes.subarray(0,length)),
+      atomic(prefix(index) + '.id.u32', bytes.subarray(length)),
+    ]);
+  }
+  async function saveOutput(index, bytes) {
+    if (!save(index)) return;
+    await atomic(prefix(index) + '.png', bytes);
+    timing.outputMs[index] = performance.now() - started;
+    emit({event:'frame',frame:index,path:prefix(index) + '.png'});
+  }
+  let tick;
+  async function* inputs() {
+    for (let index = begin; index <= end; index++) {
+      tick = performance.now();
+      const t = index / fps;
+      const descriptor = await shot.frame(t,index);
+      const camera = cameraRange(descriptor);
+      const words = new Float32Array(descriptor.buffer, descriptor.byteOffset + camera[0], C.WORDS);
+      cameras[index] = {transform: [...words.slice(C.TRANSFORM)], fov: words[C.FOV], zoom: words[C.ZOOM]};
+      yield {frame:index,t,descriptor,camera};
+    }
+  }
+  async function submitted(index, header) {
+    timing.renderMs.push(performance.now() - tick);
+    timing.workerMs.push(header.elapsedMs);
+    await saveInput(index);
+  }
+  if (settings.denoise === 'temporal') {
+    let expected = begin;
+    for await (const {frame,bytes} of worker.temporalFrames(inputs(),settings,submitted)) {
+      if (frame !== expected++) throw new NativeError(`Unexpected capture frame ${frame}.`);
+      await saveOutput(frame,bytes);
+    }
+    if (expected !== end + 1) throw new NativeError('Incomplete capture sequence.');
+  } else {
+    for await (const {frame,t,descriptor,camera} of inputs()) {
+      await worker.scene(descriptor,camera);
+      const {header,bytes} = await worker.request('render',{frame,t,settings});
+      await submitted(frame,header);
+      await saveOutput(frame,bytes);
+    }
+  }
+  await atomic(resolve(directory,'capture.json'),JSON.stringify({
+    backend:settings.tracer, build:worker.info.build, first:begin, last:end, saved:[[first,last]],
+    fps, settings, materials, cameras, seconds:(performance.now()-started)/1000, timing,
+  },null,2) + '\n');
+}
+
 async function main() {
   const {command,file,values} = args();
   if (!command) {
@@ -310,7 +417,7 @@ async function main() {
   const module = await import(url.href);
   const opts = options(module.output,command,values);
   const extension = command === 'still' ? (opts.settings.format ?? 'png') : 'mp4';
-  if (values.output && !values.output.toLowerCase().endsWith('.' + extension)) {
+  if (command !== 'capture' && values.output && !values.output.toLowerCase().endsWith('.' + extension)) {
     throw new Error(`Output must end in .${extension}.`);
   }
   let worker = await openWorker();
@@ -361,6 +468,16 @@ async function main() {
       return worker.request('render',{t,frame:index,settings});
     });
     const output = resolve(values.output);
+    if (command === 'capture') {
+      await mkdir(output,{recursive:true});
+      release = await lock(output);
+      if ((await readdir(output)).some(name => name.startsWith('frame-') || name === 'capture.json')) {
+        throw new Error('Use an empty capture directory.');
+      }
+      if (denoiserWeights) emit({event:'denoiser',weights:denoiserWeights});
+      await captureShot(worker, shot, opts, values, output);
+      return;
+    }
     if (command === 'still' && settings.denoise === 'temporal') {
       const descriptor = await frame(time,indexA);
       const inputs = [{frame:indexA,t:time,descriptor,camera:cameraRange(descriptor)}];

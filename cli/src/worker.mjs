@@ -188,7 +188,7 @@ export class Worker {
   }
 
   /** Submit one input at a time and yield finished frames in display order. */
-  async *temporalFrames(inputs, settings) {
+  async *temporalFrames(inputs, settings, submitted) {
     if (!this.info.capabilities.includes('temporal-offline')) throw new NativeError('Update the native CLI for offline temporal rendering.', 2);
     const unpack = function* ({header, bytes}) {
       if (header.type !== 'frames') throw new NativeError('Expected a temporal frame batch.');
@@ -197,7 +197,9 @@ export class Worker {
     for await (const {frame, t, descriptor, camera, cut} of inputs) {
       if (descriptor) await this.scene(descriptor, camera);
       if (cut) await this.request('cut', {});
-      yield* unpack(await this.request('render', {frame, t, settings}));
+      const result = await this.request('render', {frame, t, settings});
+      await submitted?.(frame, result.header);
+      yield* unpack(result);
     }
     for (;;) {
       const result = await this.request('flush', {});
