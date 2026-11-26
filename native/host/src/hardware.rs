@@ -1139,6 +1139,11 @@ impl Resources {
         if plan.instances.is_empty() && plan.replacement.is_none() {
             return Ok(());
         }
+        #[cfg(target_os = "macos")]
+        let dependencies_changed = plan.replacement.is_some()
+            || plan.instances.iter().any(|(index, instance, _)| {
+                capture.instances[*index].geometry != instance.geometry
+            });
         if let Some(count) = plan.replacement {
             if plan.instances.len() != count {
                 return Err("Incomplete instance replacement".into());
@@ -1180,31 +1185,31 @@ impl Resources {
         }
         #[cfg(target_os = "macos")]
         {
-            if plan.replacement.is_some() {
-                self.metal_instances = metal_instance_inputs(device, &self._blases, capture)?;
-            }
-            // A membership change can introduce a BLAS absent from the old
-            // TLAS dependency list. Use the tracked build below to register it.
-            if let Some(inputs) = self
-                .metal_instances
-                .as_ref()
-                .filter(|_| plan.replacement.is_none())
-            {
+            if dependencies_changed {
+                // A tracked build must register new BLASes. After a shrink it
+                // can include masked slots, so refit only if the descriptor
+                // count will match the tracked build's count.
+                self.metal_instances = if self.tlas.get()[capture.instances.len()..]
+                    .iter()
+                    .all(Option::is_none)
+                {
+                    metal_instance_inputs(device, &self._blases, capture)?
+                } else {
+                    None
+                };
+            } else if let Some(inputs) = &self.metal_instances {
                 let started = std::time::Instant::now();
                 // Refit through half the resident batch; dense complete edits
                 // rebuild traversal quality. The override supports measured A/B runs.
                 let rebuild = match std::env::var("MUTRACER_NATIVE_TLAS_BUILD").as_deref() {
                     Ok("refit") => false,
                     Ok("rebuild") => true,
-                    _ => {
-                        plan.replacement.is_some()
-                            || plan.instances.len() > capture.instances.len() / 2
-                    }
+                    _ => plan.instances.len() > capture.instances.len() / 2,
                 };
                 let (bytes, calls) = inputs.update(
                     device,
                     queue,
-                    &self._blases,
+                    &mut self._blases,
                     &mut self.tlas,
                     plan.instances
                         .iter()
@@ -1223,12 +1228,23 @@ impl Resources {
                 return Ok(());
             }
         }
-        let mut encoder = device.create_command_encoder(&Default::default());
+        // Membership edits rebuild through wgpu, which registers their BLASes
+        // for both this build and subsequent trace passes.
+        #[cfg(target_os = "macos")]
+        let completion = crate::native_completion::Recording::new();
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("MuTracer retained TLAS build"),
+        });
         encoder.build_acceleration_structures(
             std::iter::empty::<&wgpu::BlasBuildEntry<'_>>(),
             [&self.tlas],
         );
-        queue.submit([encoder.finish()]);
+        let _submission = queue.submit([encoder.finish()]);
+        #[cfg(target_os = "macos")]
+        if metal_refit::available(device) {
+            wait_for_as(device, _submission)?;
+            completion.finish().require_success("retained TLAS build")?;
+        }
         Ok(())
     }
 }

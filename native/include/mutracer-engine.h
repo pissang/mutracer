@@ -165,8 +165,12 @@ int32_t mt_engine_set_camera(mt_engine engine, const mt_camera_v4 *camera, char 
  * changed. Incremental edits are applied to every render on this thread, except
  * new geometry appends. New geometry and full preparation run on a library
  * thread; affected renders report MT_RENDER_PREPARING or MT_RENDER_COMPILING
- * until the scene is published. A failing render reports an error event and
- * does not stop the others. */
+ * until the scene is published. A failing render reports an error event.
+ * Other renders continue.
+ * Eligible Metal hardware matrix batches with stable membership refit the TLAS
+ * through half the active instances and rebuild for larger edits. Referenced
+ * BLASes are resident during the TLAS update, which completes before
+ * publication. Camera-only updates skip TLAS work. */
 int32_t mt_engine_update(mt_engine engine, uint32_t *changed, char *error, size_t capacity);
 
 enum { MT_DEPTH_SAMPLE_GRID = 7, MT_DEPTH_SAMPLE_COUNT = 49 };
@@ -611,6 +615,8 @@ MT_ENGINE_LAYOUT(mt_converge_options, 160 + 2 * sizeof(void *));
 int32_t mt_converge_options_default(uint32_t samples, mt_converge_options *output);
 /* Renders exactly options->samples samples, blocking until they complete, then
  * denoises when a denoiser is set. samples (optional) receives the count.
+ * Uses the scene and camera committed by mt_engine_update when convergence begins.
+ * Waits for preparation as needed. New input commits interrupt convergence.
  * mt_render_cancel from another thread returns MT_ERROR_CANCELLED. refine on the
  * same render returns MT_ERROR_INVALID_STATE meanwhile. */
 int32_t mt_render_converge(mt_render render, const mt_converge_options *options, uint32_t *samples,

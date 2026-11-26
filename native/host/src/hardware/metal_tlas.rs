@@ -2,7 +2,8 @@
 //! complete descriptor array even when only one public Tlas slot changed.
 //! Use HAL's encoder and descriptor conversion, without duplicating Metal ABI.
 use super::{Capture, Instance, Result};
-use wgpu::hal::{self, CommandEncoder as _, Device as _};
+use objc2_metal::{MTLCommandBuffer as _, MTLCommandBufferStatus};
+use wgpu::hal::{self, CommandEncoder as _, Device as _, Queue as _};
 use wgpu::util::DeviceExt;
 type Metal = hal::api::Metal;
 const FLAGS: wgpu::AccelerationStructureFlags = wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE
@@ -13,6 +14,7 @@ pub(super) struct Inputs {
     scratch: wgpu::Buffer,
     stride: usize,
     count: u32,
+    referenced_blases: Vec<usize>,
 }
 
 fn encode_instances(
@@ -92,11 +94,15 @@ impl Inputs {
             usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
+        let mut referenced_blases: Vec<_> = capture.instances.iter().map(|i| i.geometry).collect();
+        referenced_blases.sort_unstable();
+        referenced_blases.dedup();
         Ok(Self {
             buffer,
             scratch,
             stride,
             count: capture.instances.len() as u32,
+            referenced_blases,
         })
     }
 
@@ -104,7 +110,7 @@ impl Inputs {
         &self,
         device: &wgpu::Device,
         queue: &crate::GpuQueue,
-        blases: &[wgpu::Blas],
+        blases: &mut [wgpu::Blas],
         tlas: &mut wgpu::Tlas,
         instances: impl IntoIterator<Item = (usize, Instance)>,
         rebuild: bool,
@@ -149,14 +155,40 @@ impl Inputs {
             let raw = unsafe { tlas.as_hal::<Metal>() }.ok_or("Metal TLAS unavailable")?;
             &*raw as *const hal::metal::AccelerationStructure
         };
-        let completion = crate::native_completion::Recording::new();
-        let mut encoder = device.create_command_encoder(&Default::default());
-        // SAFETY: registry ownership excludes concurrent AS use. Source and
-        // destination are the same ALLOW_UPDATE TLAS with stable membership.
-        // Inputs, scratch and every referenced BLAS are owned by Resources.
-        unsafe {
-            encoder.as_hal_mut::<Metal, _, _>(|raw| -> Result<()> {
-                let raw = raw.ok_or("Metal TLAS encoder unavailable")?;
+        let dependencies = self
+            .referenced_blases
+            .iter()
+            .map(|&index| {
+                let raw = unsafe { blases[index].as_hal::<Metal>() }
+                    .ok_or("Metal TLAS BLAS unavailable")?;
+                Ok(&*raw as *const hal::metal::AccelerationStructure)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        // SAFETY: The owning wgpu handles stay live until completion. The
+        // registry serializes edits and tracing, and the input upload has
+        // completed. HAL guards cannot nest, so each resource pointer is
+        // obtained separately while these invariants hold.
+        let dependencies: Vec<_> = dependencies.iter().map(|ptr| unsafe { &**ptr }).collect();
+        queue.exclusive_submit(|queue| -> Result<()> {
+            let raw_queue = {
+                let raw =
+                    unsafe { queue.as_hal::<Metal>() }.ok_or("Metal TLAS queue unavailable")?;
+                &*raw as *const hal::metal::Queue
+            };
+            let raw_device =
+                unsafe { device.as_hal::<Metal>() }.ok_or("Metal TLAS device unavailable")?;
+            // Use a separate HAL encoder so we can attach the dependencies to
+            // its finished command buffer using wgpu-hal's residency helper.
+            // Submit through the same Metal queue and retain the tracked wgpu
+            // TLAS dependencies for subsequent tracing.
+            unsafe {
+                let raw_queue = &*raw_queue;
+                let mut encoder =
+                    raw_device.create_command_encoder(&hal::CommandEncoderDescriptor {
+                        label: Some("MuTracer retained Metal TLAS"),
+                        queue: raw_queue,
+                    })?;
+                encoder.begin_encoding(Some("MuTracer retained Metal TLAS"))?;
                 let entries = hal::AccelerationStructureEntries::Instances(
                     hal::AccelerationStructureInstances {
                         buffer: Some(&*input),
@@ -164,7 +196,7 @@ impl Inputs {
                         count: self.count,
                     },
                 );
-                raw.build_acceleration_structures(
+                encoder.build_acceleration_structures(
                     1,
                     [hal::BuildAccelerationStructureDescriptor {
                         entries: &entries,
@@ -184,20 +216,39 @@ impl Inputs {
                         scratch_buffer_offset: 0,
                     }],
                 );
-                Ok(())
-            })?;
-            // This TLAS was already built through wgpu with the same BLASes.
-            // Marking it built again would replace its tracked dependencies
-            // with an empty list, losing Metal residency on later trace passes.
-            // Stable matrix edits preserve that dependency list instead.
-        }
-        queue.submit([encoder.finish()]);
-        // Raw submissions do not register buffer dependencies with wgpu.
-        // Complete before a subsequent update can overwrite these inputs.
-        super::wait_for_as(device, queue.submit([]))?;
-        completion
-            .finish()
-            .require_success("retained Metal TLAS update")?;
+                let native_buffer = objc2::rc::Retained::retain(
+                    std::ptr::from_ref(encoder.raw_command_buffer().unwrap()).cast_mut(),
+                )
+                .unwrap();
+                let commands = encoder.end_encoding()?;
+                hal::metal::CommandEncoder::set_acceleration_structure_dependencies(
+                    &[&commands],
+                    &dependencies,
+                );
+                let fence = raw_device.create_fence()?;
+                let submitted = raw_queue.submit(&[&commands], &[], (&fence, 1));
+                if submitted.is_ok() {
+                    // A HAL submission is invisible to wgpu's resource
+                    // tracker. Complete it before returning so these inputs
+                    // and the in-place TLAS can be reused safely.
+                    native_buffer.waitUntilCompleted();
+                }
+                encoder.reset_all(std::iter::once(commands));
+                raw_device.destroy_fence(fence);
+                submitted?;
+                if native_buffer.status() != MTLCommandBufferStatus::Completed {
+                    let detail = native_buffer
+                        .error()
+                        .map(|error| error.localizedDescription().to_string())
+                        .unwrap_or_else(|| format!("Metal status {}", native_buffer.status().0));
+                    return Err(crate::status::fail(
+                        crate::Status::ContextFailed,
+                        format!("GPU execution failed (retained Metal TLAS update): {detail}"),
+                    ));
+                }
+            }
+            Ok(())
+        })?;
         Ok((bytes, calls))
     }
 }

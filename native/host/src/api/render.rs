@@ -2968,6 +2968,8 @@ impl Render {
         .flatten()
     }
     /// Renders exactly `options.samples` samples, blocking until they complete.
+    /// Uses the scene and camera committed by [`Engine::update`] when convergence
+    /// begins, waiting for preparation as needed. New input commits interrupt convergence.
     /// Progress callbacks may use the API; refine on this render is rejected meanwhile.
     /// Sampling recovery follows [`Render::refine`]. On an observed Metal queue,
     /// a failed surface AOV, display capture or GPU denoising submission returns
