@@ -16,6 +16,7 @@ interface Settings {
   postRadius?: number;
   stabilizeSparkle?: boolean;
   temporalSampleBudget?: number;
+  temporalReconstruction?: boolean;
   sampleStride?: number;
 }
 
@@ -83,6 +84,9 @@ async function planSampling(options: Settings, start: number, end: number, stopp
 /** Renders frames [start, end) and yields each displayable result with its frame index. */
 async function* frames(options: Settings, start: number, end: number, stopped: () => boolean) {
   const started = performance.now();
+  if (options.temporalReconstruction && options.temporalSampleBudget === undefined) {
+    throw new Error('The reconstruction experiment needs a temporal sample budget.');
+  }
   if (options.temporalSampleBudget !== undefined && (engine.backend !== 'webgpu' || options.mode !== 'offline' ||
     options.reflectionMotion || options.accumulateGuides || !Number.isFinite(options.temporalSampleBudget) ||
     options.temporalSampleBudget < 2 || options.temporalSampleBudget > experimentalSampleCap + 1)) {
@@ -101,7 +105,7 @@ async function* frames(options: Settings, start: number, end: number, stopped: (
     stabilizeSparkle: options.stabilizeSparkle,
     denoiser: { type: 'oidn', model: 'cleanAuxLarge', weightsBaseUrl: '/oidn/weights/' }
   });
-  if (plans) temporal!._configureOfflineSampling({tileSize: experimentalTileSize});
+  if (plans) temporal!._configureOfflineSampling({tileSize: experimentalTileSize, reconstruct: options.temporalReconstruction});
   const detach = temporal?.attach(render);
   render.maxSamples = options.spp;
   try {

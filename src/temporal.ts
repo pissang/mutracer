@@ -9,6 +9,7 @@ import {cameraApertureRadius} from './renderer/cameraLens.js';
 import {TemporalHistoryGPU} from './renderer/WGPUTemporalHistory.js';
 import {TemporalPostGPU} from './renderer/WGPUTemporalPost.js';
 import {DirectWindowGPU} from './renderer/WGPUTemporalWindow.js';
+import {TemporalReconstructionGPU} from './renderer/WGPUTemporalReconstruction.js';
 import {createSparklePost} from './renderer/WGPUTemporalSparkle.js';
 import {createOIDNFilter, type OIDNFilter} from './oidn.js';
 import {hasTemporalFrameGap, historyNeighbors, isTemporalCameraCut, readyThrough, temporalLatency} from './temporal/schedule.js';
@@ -21,7 +22,7 @@ import {createComposePackWGSL,motionCoverageWGSL} from './renderer/temporalCompo
 
 export type TemporalPixelKind = 'denoised' | 'accumulated';
 export interface TemporalPlan extends TemporalMemoryPlan {}
-type OfflineSamplingExperiment = {tileSize: number} | {onPilot: (index: number, data: Awaited<ReturnType<DirectWindowGPU['readPilot']>>) => void};
+type OfflineSamplingExperiment = {tileSize: number; reconstruct?: boolean} | {onPilot: (index: number, data: Awaited<ReturnType<DirectWindowGPU['readPilot']>>) => void};
 
 function copyBuffer(device: GPUDevice, source: GPUBuffer, bytes: number, label: string) {
   const target = device.createBuffer({label, size: bytes,
@@ -164,6 +165,8 @@ export class TemporalDenoiser {
   private composeParams?: GPUBuffer;
   private presentationInputs = new Map<number, {color: GPUBuffer; albedo: GPUBuffer; normal: GPUBuffer}>();
   private samplingExperiment?: OfflineSamplingExperiment;
+  private reconstruction?: TemporalReconstructionGPU;
+  private reconstructed = new Map<number, {denoised: GPUBuffer; mask: GPUBuffer}>();
 
   constructor(engine: Engine, options: import('./temporal/options.js').TemporalDenoiserOptions = {}) {
     this.engine = engine;
@@ -178,6 +181,9 @@ export class TemporalDenoiser {
       this.options.reflectionMotion || this.options.accumulateGuides || this.options.memoryBudget !== undefined ||
       ('tileSize' in experiment && (!Number.isSafeInteger(experiment.tileSize) || experiment.tileSize < 1))) {
       throw new Error('Offline sampling experiments require an unattached offline surface window and the default memory budget.');
+    }
+    if ('tileSize' in experiment && experiment.reconstruct && this.options.denoiser?.type !== 'oidn') {
+      throw new Error('Offline reconstruction requires OIDN.');
     }
     this.samplingExperiment = experiment;
   }
@@ -378,7 +384,9 @@ export class TemporalDenoiser {
       catch (error) { this.releaseResources(); this.activeOptions = this.options; throw error; }
       const error = scopedError ?? allocationError;
       if (!error) {
-        this._plan = Object.freeze({...candidate, bytes: candidate.bytes + this.window!.experimentBytes});
+        // One packed HDR scratch buffer and one RGBA result plus a float mask per pending frame.
+        const rebuildBytes = this.reconstruction ? 16 + this.history!.bytes * (1 + (candidate.postRadius + 1) * 1.25) : 0;
+        this._plan = Object.freeze({...candidate, bytes: candidate.bytes + this.window!.experimentBytes + rebuildBytes});
         this.revisionMaterialCapacity=Math.max(1,materialCount);
         if (!this.warnedBudget && (candidate.historyRadius.min !== this.options.historyRadius.min ||
           candidate.historyRadius.max !== this.options.historyRadius.max || candidate.postRadius !== this.options.postRadius)) {
@@ -404,7 +412,9 @@ export class TemporalDenoiser {
       temporalGuideSlots(this.activeOptions), denoiser?.type === 'custom', reflections);
     // The selected mixed window stays enabled when the post sparkle pass is disabled.
     const experiment = this.samplingExperiment && ('tileSize' in this.samplingExperiment ? this.samplingExperiment.tileSize : 'pilot');
-    this.window = await DirectWindowGPU.create(this.history, historyRadius.min !== historyRadius.max, accumulateGuides, experiment);
+    const reconstruct = !!(this.samplingExperiment && 'tileSize' in this.samplingExperiment && this.samplingExperiment.reconstruct);
+    this.window = await DirectWindowGPU.create(this.history, historyRadius.min !== historyRadius.max, accumulateGuides, experiment, reconstruct);
+    if (reconstruct) this.reconstruction = await TemporalReconstructionGPU.create(this.history);
     if (this.activeOptions.postRadius > 0) {
       const postSlots = this.activeOptions.mode === 'offline' ? this.activeOptions.postRadius * 2 + 1 : this.activeOptions.postRadius + 1;
       this.post = await TemporalPostGPU.create(this.history, postSlots, materialCount);
@@ -423,13 +433,15 @@ export class TemporalDenoiser {
     this.composeParams = device.createBuffer({size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST});
   }
 
-  private async spatial(frame: number, accumulated: GPUBuffer) {
+  private async spatial(frame: number, accumulated: GPUBuffer, color?: GPUBuffer) {
     const device = this.engine.device!, bytes = this.history!.bytes;
     const output = device.createBuffer({label: 'Temporal spatial output', size: bytes,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST});
     if (this.oidn) {
-      const input = this.composeForOIDN(frame);
-      await this.oidn.denoise({width: this.history!.width, height: this.history!.height, ...input, output});
+      try {
+        const input = this.composeForOIDN(frame, color);
+        await this.oidn.denoise({width: this.history!.width, height: this.history!.height, ...input, output});
+      } catch (error) { output.destroy(); throw error; }
     }
     else if (this.activeOptions.denoiser?.type === 'custom') {
       const guides = this.history!.getCustomGuides(frame);
@@ -496,11 +508,12 @@ export class TemporalDenoiser {
     device.queue.submit([encoder.finish()]);
   }
 
-  private composeForOIDN(frame: number) {
+  private composeForOIDN(frame: number, color?: GPUBuffer) {
     const buffers = this.presentationInputs.get(frame)!;
     const samples = this.sampleCounts[frame];
     return this.engine.display._withSettings(this.displaySettings[frame], () =>
-      this.replay!._composeExternalDenoiseInput({width: this.history!.width, height: this.history!.height, samples, ...buffers}));
+      this.replay!._composeExternalDenoiseInput({width: this.history!.width, height: this.history!.height, samples, ...buffers,
+        color: color ?? buffers.color}));
   }
 
   private async process(flush: boolean) {
@@ -523,6 +536,14 @@ export class TemporalDenoiser {
       const denoised = await this.spatial(i, output);
       if (!this.post) this.spatialOutputs.set(i, denoised);
       else { await this.post.setDisplayBuffer(i, denoised); denoised.destroy(); }
+      if (this.reconstruction) {
+        // Use the ordinary OIDN result for the post window. The alternate
+        // spatial pass can affect only the selected pixels in its own frame.
+        const {color, mask} = this.reconstruction.rebuild(i, this.window!.geometrySupport!, this.presentationInputs.get(i)!.color);
+        try { this.reconstructed.set(i, {denoised: await this.spatial(i, output, color), mask}); }
+        catch (error) { mask.destroy(); throw error; }
+        finally { color.destroy(); }
+      }
       await this.publishReady(this.activeOptions.mode === 'interactive' ? this.nextWindow - 1 : this.nextWindow - 1 - this.activeOptions.postRadius);
     }
     if (flush) await this.publishReady(this.nextWindow - 1);
@@ -551,6 +572,11 @@ export class TemporalDenoiser {
         await this.post.filter(i, neighbors, false, undefined, changedByFrame); this.sparkle?.filter(this.post, i, neighbors);
         denoised = copyBuffer(device, this.post.output, bytes, 'Temporal finished output');
       }
+      const rebuilt = this.reconstructed.get(i);
+      if (rebuilt) {
+        this.reconstruction!.select(rebuilt.denoised, rebuilt.mask, denoised, !!this.post);
+        rebuilt.denoised.destroy(); rebuilt.mask.destroy(); this.reconstructed.delete(i);
+      }
       const packed = this.presentationInputs.get(i)!;
       const source = {...packed, samples: this.sampleCounts[i], settings: this.displaySettings[i], baseline: undefined as GPUBuffer | undefined};
       if (this.activeOptions.denoiser?.type === 'oidn') {
@@ -572,6 +598,8 @@ export class TemporalDenoiser {
     this.frames = this.nextWindow = this.nextOutput = this.epoch = 0; this.epochs.length = 0; this.materialRevisionFrames.clear(); this.globalIndices.length = 0; this.sampleCounts.length = 0; this.displaySettings.length = 0; this.previousOffset = undefined; this.previousFrameSequence = undefined; this.previousScene = undefined; this.previousCameraSource = undefined; this.previousSceneRevision = undefined;
     for (const buffer of this.accumulated.values()) buffer.destroy(); this.accumulated.clear();
     for (const buffer of this.spatialOutputs.values()) buffer.destroy(); this.spatialOutputs.clear();
+    for (const entry of this.reconstructed.values()) { entry.denoised.destroy(); entry.mask.destroy(); }
+    this.reconstructed.clear();
     for (const input of this.presentationInputs.values()) for (const buffer of Object.values(input)) buffer.destroy();
     this.presentationInputs.clear();
     for (const aovs of this.customAovs.values()) for (const buffer of Object.values(aovs)) buffer?.destroy(); this.customAovs.clear();
@@ -581,6 +609,7 @@ export class TemporalDenoiser {
   }
 
   private releaseResources() {
+    this.reconstruction?.dispose(); this.reconstruction = undefined;
     this.sparkle?.dispose(); this.sparkle = undefined;
     this.oidn?.dispose(); this.oidn = undefined;
     this.history?.dispose(); this.history = undefined;

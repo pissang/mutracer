@@ -6,6 +6,7 @@ export class DirectWindowGPU {
   readonly rejects: GPUBuffer;
   readonly total: GPUBuffer;
   readonly output: GPUBuffer;
+  readonly geometrySupport?: GPUBuffer;
   readonly guides?: {albedo: GPUBuffer; normal: GPUBuffer};
   private readonly params: GPUBuffer;
   private pipeline!: GPUComputePipeline;
@@ -15,7 +16,7 @@ export class DirectWindowGPU {
   private readonly tilesPerFrame: number;
 
   private constructor(private readonly history: TemporalHistoryGPU, private readonly adaptiveRadius: boolean,
-    accumulateGuides: boolean, private readonly experiment?: 'pilot' | number) {
+    accumulateGuides: boolean, private readonly experiment?: 'pilot' | number, reconstruct = false) {
     const d = history.device;
     const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
     this.total = d.createBuffer({label: 'Direct window weighted sum', size: history.bytes, usage});
@@ -31,26 +32,27 @@ export class DirectWindowGPU {
       ? Math.ceil(history.width / experiment) * Math.ceil(history.height / experiment) : 0;
     if (experiment) this.experimentBuffer = d.createBuffer({label: 'Offline temporal sampling',
       size: experiment === 'pilot' ? history.bytes / 2 : history.capacity * this.tilesPerFrame * 4, usage});
+    if (reconstruct) this.geometrySupport = d.createBuffer({label: 'Temporal geometric support', size: history.bytes / 4, usage});
     this.rejects = d.createBuffer({label: 'Direct window validation counts', size: 64, usage});
     this.params = d.createBuffer({label: 'Direct window parameters', size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST});
   }
 
-  static async create(history: TemporalHistoryGPU, adaptiveRadius = false, accumulateGuides = false, experiment?: 'pilot' | number) {
-    const window = new DirectWindowGPU(history, adaptiveRadius, accumulateGuides, experiment);
+  static async create(history: TemporalHistoryGPU, adaptiveRadius = false, accumulateGuides = false, experiment?: 'pilot' | number, reconstruct = false) {
+    const window = new DirectWindowGPU(history, adaptiveRadius, accumulateGuides, experiment, reconstruct);
     const device = history.device;
     try {
       const createPipeline = (code: string) => {
         const module = device.createShaderModule({label: 'Direct temporal window', code});
         return device.createComputePipelineAsync({layout: 'auto', compute: {module, entryPoint: 'main'}});
       };
-      window.pipeline = await createPipeline(createMixedWindowWGSL(accumulateGuides, !!history.reflections, experiment));
+      window.pipeline = await createPipeline(createMixedWindowWGSL(accumulateGuides, !!history.reflections, experiment, reconstruct));
       if (history.reflections || experiment) window.cameraCutPipeline = await createPipeline(createMixedWindowWGSL(accumulateGuides));
       return window;
     } catch (error) { window.dispose(); throw error; }
   }
 
   get capacity() { return this.history.capacity; }
-  get experimentBytes() { return this.experimentBuffer?.size ?? 0; }
+  get experimentBytes() { return (this.experimentBuffer?.size ?? 0) + (this.geometrySupport?.size ?? 0); }
 
   setSampleTiles(frame: number, plan: OfflineSampleTiles) {
     const h = this.history;
@@ -80,6 +82,7 @@ export class DirectWindowGPU {
       resources.push(h.reflections.radiance, h.reflections.endpoint, this.reflectionSum!);
     }
     if (this.experimentBuffer && includeMaterialRevisions) resources.push(this.experimentBuffer);
+    if (this.geometrySupport && includeMaterialRevisions) resources.push(this.geometrySupport);
     const pipeline = includeMaterialRevisions ? this.pipeline : this.cameraCutPipeline ?? this.pipeline;
     const group = d.createBindGroup({layout: pipeline.getBindGroupLayout(0), entries: resources.map((resource, binding) => ({
       binding, resource: resource instanceof GPUBuffer ? {buffer: resource} : resource.createView({dimension: '2d-array'}),
@@ -125,6 +128,7 @@ export class DirectWindowGPU {
 
   dispose() {
     this.experimentBuffer?.destroy();
+    this.geometrySupport?.destroy();
     this.reflectionSum?.destroy();
     this.guides?.albedo.destroy();
     this.guides?.normal.destroy();

@@ -324,13 +324,13 @@ fn recoverTap(x: vec2i, pos: vec4f, q: vec3f, original: HistoryTap) -> HistoryTa
 }
 `;
 
-const startWindowWGSL = (guides = false, reflections = false, experiment?: 'pilot' | number) => /* wgsl */ `
+const startWindowWGSL = (guides = false, reflections = false, experiment?: 'pilot' | number, reconstruct = false) => /* wgsl */ `
 @compute @workgroup_size(8,8) fn main(@builtin(global_invocation_id) g:vec3u) {
   if(any(g.xy>=p.size)){return;}
   let x=vec2i(g.xy); let index=g.y*p.size.x+g.x;
   if(p.stage==0u){
     total[index]=vec4f(radiance(x,p.current),1.0);${experiment === 'pilot' ? '\n    pilotMoments[index]=pilotMoment(total[index].rgb,1.);' :
-    typeof experiment === 'number' ? '\n    total[index]*=sampleWeight(x,p.current);' : ''}${reflections ? `
+    typeof experiment === 'number' ? '\n    total[index]*=sampleWeight(x,p.current);' : ''}${reconstruct ? '\n    geometrySupport[index]=1.;' : ''}${reflections ? `
     let reflected = reflection(x,p.current);
     total[index] = vec4f(total[index].rgb-reflected,1.0);
     reflectedTotal[index] = vec4f(reflected,1.0);
@@ -388,7 +388,7 @@ fn loadNormal(at: vec2i, slot: u32) -> vec3f {
 }
 `;
 
-export const createMixedWindowWGSL = (guides: boolean, reflections = false, experiment?: 'pilot' | number) => /* wgsl */ `${windowBindingsAndGeometry}
+export const createMixedWindowWGSL = (guides: boolean, reflections = false, experiment?: 'pilot' | number, reconstruct = false) => /* wgsl */ `${windowBindingsAndGeometry}
 ${guides ? windowGuidesWGSL : ''}${recoverHistoryWGSL(!!experiment)}
 ${experiment === 'pilot' ? /* wgsl */ `
 @group(0) @binding(11) var<storage, read_write> pilotMoments: array<vec2f>;
@@ -404,7 +404,7 @@ fn sampleWeight(at: vec2i, slot: u32) -> f32 {
   let tile = vec2u(at)/step;
   return f32(sampleTiles[(slot*grid.y+tile.y)*grid.x+tile.x])/3.;
 }
-` : ''}${reflections ? reflectionWindowWGSL(guides ? 14 : 11) : ''}${startWindowWGSL(guides, reflections, experiment)}${experiment ? '  if(hitCoverage(x,p.current)<1.){return;}\n' : ''}  var tap=HistoryTap(nearest,0.);
+` : ''}${reconstruct ? '\n@group(0) @binding(12) var<storage, read_write> geometrySupport: array<f32>;\n' : ''}${reflections ? reflectionWindowWGSL(guides ? 14 : 11) : ''}${startWindowWGSL(guides, reflections, experiment, reconstruct)}${experiment ? '  if(hitCoverage(x,p.current)<1.){return;}\n' : ''}  var tap=HistoryTap(nearest,0.);
   if(reason==0u){
     tap.support=1.;
     if(partial){tap.support=footprintWeight(x,q.xy,nearest,q.z);}
@@ -422,7 +422,7 @@ ${reflections ? `  let accepted = distance <= surfaceWindow && tap.support>0. &&
   if (accepted) { surfaceConfidence = dielectricSurfaceConfidence(x,q.xy,material); }
   accumulateReflection(x,index,tap,q,weight,rgb,tent,material.y,surfaceConfidence);` : `  if(tap.support<=0. || overflowMissing(tap.at,p.source)${experiment ? ' || hitCoverage(tap.at,p.source)<1.' : ''}){atomicAdd(&rejects[reason],1u);return;}
   atomicAdd(&rejects[0],1u);
-  let weight=${experiment ? 'min(1.,' : ''}(surfaceWindow+1.-distance)/(surfaceWindow+1.)*tap.support*dielectricSurfaceConfidence(x,q.xy,material)${experiment ? ')' : ''}${typeof experiment === 'number' ? '*sampleWeight(tap.at,p.source)' : ''};
+  ${reconstruct ? 'let geometricWeight=' : 'let weight='}${experiment ? 'min(1.,' : ''}(surfaceWindow+1.-distance)/(surfaceWindow+1.)*tap.support*dielectricSurfaceConfidence(x,q.xy,material)${experiment ? ')' : ''}${typeof experiment === 'number' && !reconstruct ? '*sampleWeight(tap.at,p.source)' : ''};${reconstruct ? '\n  geometrySupport[index]+=geometricWeight;\n  let weight=geometricWeight*sampleWeight(tap.at,p.source);' : ''}
   let rgb=${experiment ? 'radiance(tap.at,p.source)' : 'skyCorrection(x,tap.at,pos,radiance(tap.at,p.source))'};
   total[index]+=vec4f(rgb*weight,weight);${experiment === 'pilot' ? '\n  pilotMoments[index]+=pilotMoment(rgb,weight);' : ''}` }${guides ? `
   if ((p.mode & 8u)!=0u) {
