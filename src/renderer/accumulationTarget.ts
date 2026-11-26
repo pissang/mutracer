@@ -4,6 +4,7 @@ import type { TraceSettings } from './renderPipeline.js';
 import type { RenderPasses } from './RenderingPipeline.js';
 
 export interface TemporalCaptureInput extends DenoiseInput {
+  centerRecords?: GPUBuffer;
   reflection?: { radiance: GPUBuffer; albedo: GPUBuffer; records: GPUBuffer; samples: number };
 }
 

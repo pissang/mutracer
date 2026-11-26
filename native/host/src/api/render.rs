@@ -3341,6 +3341,7 @@ impl Render {
             // The native resolve pipeline uses consecutive channel indices.
             let resolve_mask = (0..10)
                 .filter(|i| PixelKind::from_aov_index(*i).aov_mask() & TemporalDenoiser::AOVS != 0)
+                .filter(|i| PixelKind::from_aov_index(*i) != PixelKind::CenterDepth)
                 .fold(0, |mask, i| mask | 1 << i);
             let shots = context_result(aov.ordered_snapshot(resolve_mask, true))?;
             let get = |kind| {
@@ -3396,7 +3397,7 @@ impl Render {
                 revisions,
                 scene_key,
                 guides: [
-                    get(PixelKind::CenterDepth),
+                    aov.primary_records().clone(),
                     get(PixelKind::CenterNormal),
                     get(PixelKind::Roughness),
                     albedo,

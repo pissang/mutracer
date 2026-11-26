@@ -1251,7 +1251,8 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       const reflection = temporalReflections ? {
         radiance: buffers.reflectedRadiance!, albedo: buffers.albedo, records: aov.center!, samples: sampleCount
       } : undefined;
-      await capture({device, width: renderWidth, height: renderHeight, color, albedo, normal, output, aovs, reflection});
+      await capture({device, width: renderWidth, height: renderHeight, color, albedo, normal, output, aovs,
+        centerRecords: aov.primary ? aov.center : undefined, reflection});
     } finally {
       if (aovs) void device.queue.onSubmittedWorkDone().catch(() => undefined).then(() => aov.releaseSnapshot(aovs));
     }

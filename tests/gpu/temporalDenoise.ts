@@ -193,11 +193,12 @@ async function run() {
     const overflowResult = await exerciseFullOverflow(device);
     const floatingPostResult = await exerciseFloatingPostCodes(device);
     const materialAcceptanceResult = await exerciseMaterialAcceptance(device);
+    const glossyAcceptance = await exerciseGlossyAcceptance(device);
     const forwardSeed = await exerciseForwardMotionSeed(device);
     const reflectionMotion = await exerciseReflectionMotion(engine, device);
     await device.queue.onSubmittedWorkDone();
     check(uncaptured.length === 0, `Uncaptured WebGPU errors: ${uncaptured.join(' | ')}`);
-    return {identity: true, max, sequence: true, oidnMax, presentationIdentity, vignetteChange, customAov: receivedRoughness, fullIdResult, overflowResult, floatingPostResult, materialAcceptanceResult, forwardSeed, reflectionMotion, uncapturedErrors: uncaptured.length, plan: temporal.plan};
+    return {identity: true, max, sequence: true, oidnMax, presentationIdentity, vignetteChange, customAov: receivedRoughness, fullIdResult, overflowResult, floatingPostResult, materialAcceptanceResult, glossyAcceptance, forwardSeed, reflectionMotion, uncapturedErrors: uncaptured.length, plan: temporal.plan};
   } finally { temporal.dispose(); render.dispose(); sync.dispose(); engine.dispose(); device.destroy(); }
 }
 
@@ -345,7 +346,7 @@ async function createTestWindow(device: GPUDevice, width: number, height: number
           device.queue.writeBuffer(buffer, 0, data);
           buffers[key === 'hdr' ? 'color' : key] = buffer;
         }
-        await history.capture(frame, metadata, buffers);
+        await history.capture(frame, metadata, buffers, [], undefined, buffers.centerRecords);
       } finally { for (const buffer of Object.values(buffers)) buffer.destroy(); }
     },
     dispose() { window.dispose(); history.dispose(); },
@@ -461,6 +462,47 @@ async function exerciseMaterialAcceptance(device: GPUDevice) {
   } finally { window.dispose(); }
 }
 
+async function exerciseGlossyAcceptance(device: GPUDevice) {
+  const size = 8, pixels = size * size;
+  const projection = new Camera({projection: 'perspective', fov: 45}).getProjectionMatrix(1);
+  const centerNormal = new Float32Array(pixels * 4), roughness = new Float32Array(pixels * 4);
+  const albedo = new Float32Array(pixels * 4), id = new Uint32Array(pixels * 4);
+  for (let i = 0; i < pixels; i++) {
+    centerNormal.set([0, 0, 1, 1], i * 4);
+    roughness.set([.45, 0, 0, 1], i * 4);
+    albedo.set([.5, .5, .5, 1], i * 4);
+    id.set([1, 2, 3, 0], i * 4);
+  }
+  const window = await createTestWindow(device, size, size, 2);
+  async function upload(frame: number, slide: number, gloss: number) {
+    const centerRecords = new Float32Array(pixels * 16);
+    const hdr = new Float32Array(pixels * 4), motion = new Float32Array(pixels * 4);
+    for (let i = 0; i < pixels; i++) {
+      centerRecords.set([0, 0, 1, 1, 0, 0, 0, 1 + gloss], (pixels + i) * 8);
+      hdr.set([frame === 0 ? 9 : 1, 0, 0, 1], i * 4);
+      motion.set([slide, 0, 1, 3], i * 4);
+    }
+    await window.upload(frame, {viewProjection: projection, projection, apertureRadius: 0, focusDistance: 1},
+      {centerRecords, centerNormal, roughness, albedo, hdr, motion, id});
+  }
+  async function resolve(slide: number, gloss: number) {
+    await upload(1, slide, gloss);
+    const color = new Float32Array(await window.read(await window.filter(1, [0], true)));
+    return color[4 * (size * 4 + 4)];
+  }
+  try {
+    const narrowCoat = (16 << 8) | 10;
+    await upload(0, 0, narrowCoat);
+    const stationary = await resolve(0, narrowCoat);
+    const glossy = await resolve(1, narrowCoat);
+    const broad = await resolve(1, (16 << 8) | 115);
+    check(Math.abs(stationary - 81 / 17) < 1e-5, 'A stationary narrow coat lost its surface history');
+    check(glossy === 1, 'A sliding narrow coat accepted a stale highlight');
+    check(broad === stationary, 'A broad lobe lost its surface history');
+    return {stationary, glossy, broad};
+  } finally { window.dispose(); }
+}
+
 async function exerciseForwardMotionSeed(device: GPUDevice) {
   const width = 16;
   const height = 8;
@@ -470,7 +512,7 @@ async function exerciseForwardMotionSeed(device: GPUDevice) {
   const metadata = {viewProjection: identity, projection: identity, apertureRadius: 0, focusDistance: 1};
   const window = await createTestWindow(device, width, height, 3, true);
 
-  async function upload(frame: number, start: number, brightness: number, visible: boolean) {
+  async function upload(frame: number, start: number, brightness: number, visible: boolean, motionX = -3) {
     const depth = new Float32Array(pixels * 4);
     const position = new Float32Array(pixels * 4);
     const normal = new Float32Array(pixels * 4);
@@ -493,7 +535,7 @@ async function exerciseForwardMotionSeed(device: GPUDevice) {
       albedo.set(i < width ? [1, 1, 1, 1] : [grey, grey, grey, brightness === 1 ? .5 : 1], at);
       guideNormal.set(inside ? [0.5, 0.5, 0.5 + grey / 2, 1] : [0, 0, 0, 0], at);
       roughness.set([.5, 0, 0, 1], at);
-      if (inside && visible) motion.set([-3, 0, 1, 3], at);
+      if (inside && visible) motion.set([motionX, 0, 1, 3], at);
       hdr.set([brightness, brightness, brightness, 1], at);
       id.set([inside ? 1 : 9, 0, 1, 0], at);
     }
@@ -524,6 +566,9 @@ async function exerciseForwardMotionSeed(device: GPUDevice) {
       'Packing lost the averaged albedo or changed current coverage');
     check(Math.abs(packed.normal[2] - expected / 2) < 1e-6 && packed.normal[3] === 2,
       'Packing changed the weighted normal or sample count');
+    await upload(1, 7, 3, true, -2.6);
+    const contour = new Float32Array(await window.read(await window.filter(0, [1], true)));
+    check(contour[pixel] === 1, 'A partial forward footprint crossed the silhouette');
     await upload(1, 7, 3, false);
     await upload(2, 10, 9, true);
     const occluded = new Float32Array(await window.read(await window.filter(0, [2], true)));

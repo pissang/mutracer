@@ -68,6 +68,21 @@ fn aovSurface(rayInput: Ray, si: ptr<function, SurfaceInteraction>, material: pt
   }
   return false;
 }
+// The primary record stores two unorm8 values above the zero/miss sentinel.
+// A narrow lobe can carry a bright highlight even if it reflects little light
+// on average. Keep the narrower of the base and coat lobes that can contribute.
+fn aovDielectricGloss(ray: Ray, si: SurfaceInteraction, material: OpenPbrResolvedMaterial) -> f32 {
+  if (material.materialType != STANDARD || material.baseMetalness > 0.10) { return 1.; }
+  if (material.specularRoughness >= .2 && (material.coatWeight <= .005 || material.coatRoughness >= .2)) { return 1.; }
+  let cosine = clamp(abs(dot(ray.d, si.normal)), 0., 1.);
+  let grazing = pow(1. - cosine, 5.);
+  let base = material.specularWeight * mix(openpbr_f0_from_ior(material.specularIor), 1., grazing);
+  let coat = material.coatWeight * mix(openpbr_f0_from_ior(material.coatIor), 1., grazing);
+  let useCoat = coat > .005 && (base <= .005 || material.coatRoughness < material.specularRoughness);
+  let values = vec2u(round(255. * clamp(select(vec2f(material.specularRoughness, base),
+    vec2f(material.coatRoughness, coat), useCoat), vec2f(0.), vec2f(1.))));
+  return f32(1u + values.x + (values.y << 8u));
+}
 @compute @workgroup_size(8, 8)
 fn aovTrace(@builtin(global_invocation_id) id: vec3u) {
   let size = aovParameters.xy;
@@ -133,7 +148,7 @@ ${reflections ? `  let reflectionIndex = primaryIndex + select(0u, size.x*size.y
   if (!aovSurface(ray, &si, &material)) { return; }
   if (AOV_PRIMARY) {
     let depth = max(dot(si.position-cameraUniform.viewInv[3].xyz, -normalize(cameraUniform.viewInv[2].xyz)), 0.0);
-    aovCenter[primaryIndex] = AovCenter(bitcast<vec4u>(vec4f(si.normal, depth)), vec4f(si.position, 1.0));
+    aovCenter[primaryIndex] = AovCenter(bitcast<vec4u>(vec4f(si.normal, depth)), vec4f(si.position, aovDielectricGloss(ray, si, material)));
   }
   let offset = 52u + u32(si.instanceIndex) * 24u;
 ${reflections ? `  aovCenter[reflectionIndex] = traceReflection(id.xy, size, ray, si, material, offset);

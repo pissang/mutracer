@@ -8,22 +8,28 @@ const HDR_OVERFLOW = 1u << 20u;
 const HDR_MISSING = 1u << 21u;
 `;
 
-// The material history texel contains two unsigned normalized 16-bit fields.
+// Metals keep the original pair of unorm16 fields. The upper word of other
+// records is at most 255 and stores estimated dielectric reflection strength.
 export const temporalMaterialFormat = 'r32uint';
 export const temporalMaterialBytes = 4;
 export const temporalMaterialWGSL = /* wgsl */ `
 const METALLIC_THRESHOLD = 0.10;
-fn packSurfaceMaterial(roughness: vec2f) -> u32 {
+fn packSurfaceMaterial(roughness: vec2f, gloss: u32) -> u32 {
   let r = select(0., roughness.x, abs(roughness.x) <= 3.402823e38);
+  if (!(roughness.y > METALLIC_THRESHOLD)) {
+    if (gloss >> 8u == 0u) { return u32(round(clamp(r, 0., 1.) * 65535.)); }
+    return ((gloss & 255u) * 257u) | ((gloss >> 8u) << 16u);
+  }
   // The scale gives .10 an exact code. Preserve the threshold classification
   // when a metallic value slightly above it rounds down to the same code.
   let encodedMetallic = u32(round(clamp(roughness.y, 0., 1.) * 65530.));
-  let metallic = select(min(encodedMetallic, 6553u), max(encodedMetallic, 6554u),
-    roughness.y > METALLIC_THRESHOLD);
+  let metallic = max(encodedMetallic, 6554u);
   return u32(round(clamp(r, 0., 1.) * 65535.)) | (metallic << 16u);
 }
-fn unpackSurfaceMaterial(record: u32) -> vec2f {
-  return vec2f(f32(record & 65535u) / 65535., f32(record >> 16u) / 65530.);
+fn unpackSurfaceMaterial(record: u32) -> vec3f {
+  let upper = record >> 16u;
+  let metallic = upper > 6553u;
+  return vec3f(f32(record & 65535u) / 65535., f32(metallic), select(f32(upper)/255.,0.,metallic));
 }
 `;
 

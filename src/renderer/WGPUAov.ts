@@ -230,7 +230,7 @@ export class WGPUAov {
         if (kind === 'id') data.set(u.subarray(o, o+4), target);
         else if (kind === 'motion') data.set([f[o+4],f[o+5],f[o+7],f[o+7]!==0?3:0], target);
         else if (center) {
-          const tail = o + this.width*this.height*8, alpha = f[tail+7];
+          const tail = o + this.width*this.height*8, alpha = Number(f[tail+7] > 0);
           if (kind === 'centerDepth') data.set([f[tail+3],0,0,alpha], target);
           else { const lane = tail + (kind === 'centerPosition' ? 4 : 0);
             data.set([f[lane],f[lane+1],f[lane+2],alpha], target); }

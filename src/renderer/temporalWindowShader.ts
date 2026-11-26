@@ -17,6 +17,7 @@ ${temporalMetadataWGSL}
 fn inFrame(q:vec2f)->bool{return all(q>=vec2f(0))&&all(q<=vec2f(p.size)-1.0);}
 fn revisionAt(x:vec2i,frame:u32)->u32{return select(0u,textureLoad(ids,x,i32(frame),0).w,(p.mode&4u)!=0u);}
 fn sameMaterial(x:vec2i,frame:u32,id:vec3u,revision:u32)->bool{return all(ident(x,frame)==id)&&revisionAt(x,frame)==revision;}
+fn strictSilhouette() -> bool { return p.symmetric == 1u && (p.mode & 4u) != 0u; }
 fn motionAt(q:vec2f,frame:u32,id:vec3u,revision:u32)->vec4f{
   if(!inFrame(q)){return vec4f(0);}let origin=vec2i(floor(q));let phase=fract(q);var value=vec4f(0);var total=0.;
   for(var dy=0;dy<2;dy++){for(var dx=0;dx<2;dx++){
@@ -77,17 +78,18 @@ fn guideAt(q:vec2f,frame:u32,field:u32,id:vec3u,revision:u32)->vec4f{
     let s=surface(at,frame,field);if(s.w<=0.){continue;}
     let w=select(1.-phase.x,phase.x,dx==1)*select(1.-phase.y,phase.y,dy==1);value+=s*w;total+=w;
   }}if(total<=0.){return vec4f(0);}value/=total;
-  if(field==1u){value=vec4f(normalize(value.xyz),1.);}return value;
+  if(field==1u){value=vec4f(normalize(value.xyz),total);}return value;
 }
 fn traceMotionFrom(x:vec2f,id:vec3u,first:u32,delta:i32)->vec4f{
   let revision=revisionAt(vec2i(x),first);
   var q=x;var depth=guideAt(x,first,0u,id,revision).w;var normal=guideAt(x,first,1u,id,revision).xyz;
   let capacity=i32(arrayLength(&cameras));
+  let minCoverage=select(0.,.90,strictSilhouette());
   for(var step=0;step<abs(delta);step++){
     let laterI=i32(first)+select(-step,step+1,delta>0);let later=u32((laterI%capacity+capacity)%capacity);
     let prior=(later+u32(capacity)-1u)%u32(capacity);let src=select(prior,later,delta<0);let dst=select(later,prior,delta<0);
     let sourceNormal=guideAt(q,src,1u,id,revision);
-    if(sourceNormal.w<=0.||dot(normal,sourceNormal.xyz)<.95){return vec4f(q,depth,0);}
+    if(sourceNormal.w<=minCoverage||dot(normal,sourceNormal.xyz)<.95){return vec4f(q,depth,0);}
     let motion = motionAt(q, later, id, revision);
     var next: vec2f;
     if (delta < 0) {
@@ -107,7 +109,7 @@ fn traceMotionFrom(x:vec2f,id:vec3u,first:u32,delta:i32)->vec4f{
       depth += currentDepth.w - forward.z;
     }
     if(!inFrame(next)){return vec4f(q,depth,0);}let destNormal=guideAt(next,dst,1u,id,revision);
-    if(destNormal.w<=0.||dot(normal,destNormal.xyz)<.95){return vec4f(q,depth,0);}
+    if(destNormal.w<=minCoverage||dot(normal,destNormal.xyz)<.95){return vec4f(q,depth,0);}
     q=next;normal=destNormal.xyz;
   }
   return vec4f(q,depth,1.);
@@ -136,10 +138,10 @@ ${temporalOverflowWGSL}
 @group(0) @binding(10) var materials: texture_2d_array<u32>;
 
 ${temporalMaterialWGSL}
-fn surfaceMaterial(at: vec2i) -> vec2f {
+fn surfaceMaterial(at: vec2i) -> vec3f {
   return unpackSurfaceMaterial(textureLoad(materials, at, i32(p.current), 0).x);
 }
-fn surfaceRadius(radius: f32, material: vec2f) -> f32 {
+fn surfaceRadius(radius: f32, material: vec3f) -> f32 {
   if (material.y <= METALLIC_THRESHOLD || material.x >= .24) { return radius; }
   return (radius + 1.) * smoothstep(.05, .24, material.x) - 1.;
 }
@@ -156,6 +158,34 @@ fn landingNormal(q: vec2f, id: vec3u, revision:u32) -> vec3f {
   if (p.symmetric == 1u) { return guideAt(q, p.source, 1u, id, revision).xyz; }
   let nearest = clamp(vec2i(floor(q + 0.5)), vec2i(0), vec2i(p.size) - 1);
   return surface(nearest, p.source, 1u).xyz;
+}
+fn viewRay(q: vec2f, frame: u32) -> vec3f {
+  let vp = cameras[frame].vp;
+  let right = vec3f(vp[0].x,vp[1].x,vp[2].x);
+  let up = vec3f(vp[0].y,vp[1].y,vp[2].y);
+  let perspective = vec3f(vp[0].w,vp[1].w,vp[2].w);
+  if (dot(perspective,perspective) < 1e-12) { return normalize(cross(up,right)); }
+  let forward = normalize(perspective);
+  let offset = vec2f(dot(right,forward),dot(up,forward));
+  let xAxis = right-offset.x*forward;
+  let yAxis = up-offset.y*forward;
+  let ndc = (2.*(q+.5)/vec2f(p.size)-1.)*vec2f(1.,-1.)-offset;
+  return normalize(forward+ndc.x*xAxis/dot(xAxis,xAxis)+ndc.y*yAxis/dot(yAxis,yAxis));
+}
+// A matched surface point can see different incident light through a narrow
+// reflection lobe. Compare its reflected rays in world space, so a pure camera
+// pan around the same origin can keep samples from stationary reflectors.
+fn dielectricSurfaceConfidence(x: vec2i, q: vec2f, material: vec3f) -> f32 {
+  if (p.symmetric != 1u || (p.mode & 4u) == 0u || material.z <= .005 || material.x >= .2) { return 1.; }
+  let n = normalize(surface(x,p.current,1u).xyz);
+  let oldNormal = landingNormal(q,ident(x,p.current),revisionAt(x,p.current));
+  let current = reflect(viewRay(vec2f(x),p.current),n);
+  let neighbor = reflect(viewRay(q,p.source),oldNormal);
+  let focal = cameras[p.current].lens.x;
+  let slip = focal*length(current-neighbor);
+  let tolerance = max(.15,.12*focal*material.x*material.x);
+  let glossy = smoothstep(.005,.035,material.z)*(1.-smoothstep(.09,.2,material.x));
+  return 1.-glossy*smoothstep(.035,tolerance,slip);
 }
 fn tapRejection(at:vec2i, targetDepth:f32, targetNormal:vec3f, id:vec3u, revision:u32)->u32 {
   let oldPos=surface(at,p.source,0u);
@@ -200,6 +230,7 @@ fn footprintWeight(x:vec2i,q:vec2f,nearest:vec2i,targetDepth:f32)->f32 {
   }}
   // At a silhouette, even a validated nearest tap can have different subpixel coverage.
   let offset=q-vec2f(nearest);
+  if (strictSilhouette() && coverage < .90) { return 0.; }
   return select(0.35*coverage*exp(-16.*dot(offset,offset)),1.,coverage>.9999);
 }
 `;
@@ -248,8 +279,9 @@ fn skyCorrection(x: vec2i, tap: vec2i, pos: vec4f, rgb: vec3f) -> vec3f {
 
 struct HistoryTap { at: vec2i, support: f32 }
 fn recoverTap(x: vec2i, pos: vec4f, q: vec3f, original: HistoryTap) -> HistoryTap {
+  let strict = strictSilhouette();
   let nearestDepth=surface(original.at,p.source,0u).w;
-  if(nearestDepth>.0001 && nearestDepth<q.z*.985){return original;}
+  if(nearestDepth>.0001 && nearestDepth<q.z*select(.985,.992,strict)){return original;}
   let normal=surface(x,p.current,1u);
   let id=ident(x,p.current);
   let revision=revisionAt(x,p.current);
@@ -262,16 +294,16 @@ fn recoverTap(x: vec2i, pos: vec4f, q: vec3f, original: HistoryTap) -> HistoryTa
       if(any(tap<vec2i(0)) || any(tap>=vec2i(p.size))){continue;}
       let endpointNormal=landingNormal(q.xy,id,revision);
       let why=tapRejection(tap,q.z,endpointNormal,id,revision);
-      if(why!=0u && why!=9u){continue;}
+      if(why!=0u && (strict || why!=9u)){continue;}
       let source=surface(tap,p.source,0u);
       let alignment=dot(endpointNormal,surface(tap,p.source,1u).xyz);
-      if(alignment<.80 || abs(source.w-q.z)>.015*q.z){continue;}
+      if(alignment<select(.80,.975,strict) || abs(source.w-q.z)>select(.015,.008,strict)*q.z){continue;}
       let forward=vec2f(tap)-q.xy;
       let reversePath=traceMotionFrom(vec2f(tap),id,p.source,-p.delta);
       if(reversePath.w<=.5){continue;}
       let reverse=reversePath.xy-vec2f(x);
       let distance2=max(dot(forward,forward),dot(reverse,reverse));
-      if(distance2>2.25){continue;}
+      if(distance2>select(2.25,.64,strict)){continue;}
       let coverageDelta=coverage-hitCoverage(tap,p.source);
       let score=exp(-1.5*distance2-(1.-min(alignment,1.))*24.-coverageDelta*coverageDelta*18.);
       if(score>best){
@@ -371,9 +403,11 @@ ${reflections ? `  let accepted = distance <= surfaceWindow && tap.support>0. &&
   var weight = 0.;
   if (accepted) { weight = ((surfaceWindow+1.-distance)/(surfaceWindow+1.))*tap.support; }
   let rgb = select(vec3f(0),skyCorrection(x,tap.at,pos,radiance(tap.at,p.source)),accepted);
-  accumulateReflection(x,index,tap,q,weight,rgb,tent,material.y);` : `  if(tap.support<=0. || overflowMissing(tap.at,p.source)){atomicAdd(&rejects[reason],1u);return;}
+  var surfaceConfidence = 1.;
+  if (accepted) { surfaceConfidence = dielectricSurfaceConfidence(x,q.xy,material); }
+  accumulateReflection(x,index,tap,q,weight,rgb,tent,material.y,surfaceConfidence);` : `  if(tap.support<=0. || overflowMissing(tap.at,p.source)){atomicAdd(&rejects[reason],1u);return;}
   atomicAdd(&rejects[0],1u);
-  let weight=(surfaceWindow+1.-distance)/(surfaceWindow+1.)*tap.support;
+  let weight=(surfaceWindow+1.-distance)/(surfaceWindow+1.)*tap.support*dielectricSurfaceConfidence(x,q.xy,material);
   let rgb=skyCorrection(x,tap.at,pos,radiance(tap.at,p.source));
   total[index]+=vec4f(rgb*weight,weight);` }${guides ? `
   if ((p.mode & 8u)!=0u) {

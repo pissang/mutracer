@@ -12,9 +12,10 @@ fn aovResolvedValue(source: u32, kind: u32) -> vec4u {
 ${primary ? /* wgsl */ `  else if(kind>=${primaryStart}u){
     let primary=center[source+parameters.x*parameters.y];
     let normalDepth=bitcast<vec4f>(primary.identity);
-    if(kind==${primaryStart}u){value=vec4f(normalDepth.xyz,primary.motion.w);}
-    else if(kind==${primaryStart + 1}u){value=vec4f(normalDepth.w,0.0,0.0,primary.motion.w);}
-    else{value=primary.motion;}
+    let hit=f32(primary.motion.w>0.0);
+    if(kind==${primaryStart}u){value=vec4f(normalDepth.xyz,hit);}
+    else if(kind==${primaryStart + 1}u){value=vec4f(normalDepth.w,0.0,0.0,hit);}
+    else{value=vec4f(primary.motion.xyz,hit);}
   }
 ` : ''}  else{
     let pixel=accumulation[source];let hits=pixel.position.w;

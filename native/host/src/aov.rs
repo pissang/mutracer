@@ -412,6 +412,10 @@ impl Output {
         debug_assert!(self.layout.reflections);
         &self.center
     }
+    pub(crate) fn primary_records(&self) -> &wgpu::Buffer {
+        debug_assert!(self.layout.primary);
+        &self.center
+    }
     /// Shared AOV_COMPACT override of the resolve and display shaders.
     fn constants(&self) -> [(&'static str, f64); 1] {
         [("AOV_COMPACT", f64::from(u8::from(self.layout.compact)))]

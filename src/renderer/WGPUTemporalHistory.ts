@@ -98,7 +98,7 @@ export class TemporalHistoryGPU {
   guideSlot(frame: number) { return frame % this.guideCapacity; }
 
   async capture(frame: number, meta: CaptureMetadata, buffers: Record<string, GPUBuffer>,
-    revisionEntries: readonly (readonly [number, number])[] = [], reflection?: TemporalCaptureInput['reflection']) {
+    revisionEntries: readonly (readonly [number, number])[] = [], reflection?: TemporalCaptureInput['reflection'], centerRecords?: GPUBuffer) {
     const d = this.device;
     if (this.reflections && !reflection) throw new Error('Temporal capture is missing reflection inputs.');
     const slot = this.slot(frame), guideSlot = this.guideSlot(frame);
@@ -112,8 +112,8 @@ export class TemporalHistoryGPU {
     }
     d.queue.submit([encoder.finish()]);
 
-    this.dispatch(this.capturePipeline, [slot, 0],
-      [buffers.centerDepth, buffers.centerNormal, buffers.roughness, buffers.albedo, buffers.color,
+    this.dispatch(this.capturePipeline, [slot, Number(!!centerRecords)],
+      [centerRecords ?? buffers.centerDepth, buffers.centerNormal, buffers.roughness, buffers.albedo, buffers.color,
         buffers.motion, this.surface, this.raw, this.motion, this.overflow, this.material]);
     if (this.reflections && reflection) {
       this.dispatch(this.reflectionPipeline!, [slot, reflection.samples],

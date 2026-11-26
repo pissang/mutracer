@@ -1,6 +1,6 @@
 import {temporalFlagsWGSL, temporalMaterialFormat, temporalMaterialWGSL, temporalOverflowWGSL} from './temporalKernels.js';
 export const captureWGSL = /* wgsl */ `
-struct Params { size: vec2u, slot: u32, revisionCount: u32 }
+struct Params { size: vec2u, slot: u32, centerRecords: u32 }
 @group(0) @binding(0) var<uniform> p: Params;
 @group(0) @binding(1) var<storage, read> depth: array<vec4f>;
 @group(0) @binding(2) var<storage, read> normal: array<vec4f>;
@@ -29,13 +29,22 @@ fn nearestHalf4(value:vec4f)->vec4f{return vec4f(nearestHalf(value.x),nearestHal
   let i = g.y * p.size.x + g.x;
   let at = vec2i(g.xy);
   let layer = i32(p.slot);
-  let hit = depth[i].w > .5;
-  let surface = vec4f(normal[i].xyz, depth[i].x);
+  var depthAndHit = vec2f(0.);
+  var gloss = 0u;
+  if (p.centerRecords != 0u) {
+    let source = 2u*(p.size.x*p.size.y + (p.size.y-1u-g.y)*p.size.x + g.x);
+    depthAndHit = vec2f(depth[source].w, depth[source+1u].w);
+    gloss = u32(max(0., depthAndHit.y-1.));
+  } else {
+    depthAndHit = depth[i].xw;
+  }
+  let hit = depthAndHit.y > .5;
+  let surface = vec4f(normal[i].xyz, depthAndHit.x);
   textureStore(surfaceOut, at, layer * 2, nearestHalf4(surface));
   textureStore(surfaceOut, at, layer * 2 + 1, surface);
 
   let r = roughness[i];
-  textureStore(materialOut, at, layer, vec4u(packSurfaceMaterial(r.xy), 0, 0, 0));
+  textureStore(materialOut, at, layer, vec4u(packSurfaceMaterial(r.xy, gloss), 0, 0, 0));
   let peak = max(albedo[i].x, max(albedo[i].y, albedo[i].z));
   let guide = u32(floor(255. * sqrt(clamp(peak, 0., 1.)) + .5));
   let coverage = u32(floor(255. * clamp(r.w, 0., 1.) + .5));

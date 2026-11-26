@@ -246,7 +246,8 @@ export class TemporalDenoiser {
           viewProjection, projection, apertureRadius: direct.apertureRadius ?? cameraApertureRadius(targetCamera),
           focusDistance: direct.focusDistance ?? targetCamera.focusDistance
         }, {color: input.color, albedo: input.albedo, normal: input.normal, centerDepth: aovs.centerDepth!,
-          centerNormal: aovs.centerNormal!, roughness: aovs.roughness!, motion: aovs.motion!, id: aovs.id!}, revisionEntries, input.reflection);
+          centerNormal: aovs.centerNormal!, roughness: aovs.roughness!, motion: aovs.motion!, id: aovs.id!},
+          revisionEntries, input.reflection, input.centerRecords);
         if (this.activeOptions.historyInvalidation === 'auto' && aovs.centerPosition && frame > 0 && this.activeOptions.historyRadius.max > 0 &&
             this.previousFrameSequence === metadata.frameSequence - 1 && this.previousSceneRevision === metadata.sceneRevision &&
             this.previousScene === metadata.scene && this.previousCameraSource === metadata.cameraSource &&

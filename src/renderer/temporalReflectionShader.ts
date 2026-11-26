@@ -41,6 +41,7 @@ export function reflectionWindowWGSL(binding: number) {
 @group(0) @binding(${binding}) var reflected: texture_2d_array<f32>;
 @group(0) @binding(${binding + 1}) var endpoints: texture_2d_array<u32>;
 @group(0) @binding(${binding + 2}) var<storage, read_write> reflectedTotal: array<vec4f>;
+const OPTICAL_SILHOUETTE = 14.;
 
 fn reflection(at: vec2i, frame: u32) -> vec3f {
   return textureLoad(reflected,at,i32(frame),0).rgb;
@@ -82,6 +83,19 @@ fn reflectionAgreement(a: vec4u, b: vec4u) -> f32 {
   if (d0 == 65535u || d1 == 65535u) { return select(0.,roughness,d0==d1); }
   let error = 1.-exp2(-abs(f32(d1)-f32(d0))/256.);
   return roughness * (1.-smoothstep(.08,.35,error));
+}
+
+// Near an optical silhouette the center reflection and jittered rays can
+// land on different objects even when the virtual center maps correctly.
+fn endpointInterior(at: vec2i, slot: u32, id: vec3u, revision: u32, record: vec4u) -> bool {
+  let offsets = array<vec2i, 4>(vec2i(-1, 0), vec2i(1, 0), vec2i(0, -1), vec2i(0, 1));
+  for (var i = 0u; i < 4u; i++) {
+    let q = at+offsets[i];
+    if (any(q < vec2i(0)) || any(q >= vec2i(p.size)) || !sameMaterial(q,slot,id,revision)) { return false; }
+    let old = endpoint(q,slot);
+    if (any(old.xy != record.xy) || reflectionAgreement(record,old) < .6) { return false; }
+  }
+  return true;
 }
 
 // Debug counts pack four eight-bit bins in each lane. A window has at most 64 neighbors.
@@ -229,7 +243,7 @@ fn planarTrust(x: vec2i, id: vec3u, revision: u32, record: vec4u, parallax: vec2
 
 fn accumulateReflection(
   x: vec2i, index: u32, tap: HistoryTap, q: vec3f, weight: f32, surfaceRgb: vec3f, tent: f32,
-  metallic: f32
+  metallic: f32, surfaceConfidence: f32
 ) {
   let record = endpoint(x,p.current);
   let lobes = roughnessCosine(record);
@@ -251,10 +265,23 @@ fn accumulateReflection(
   // The image parallax is the gap between the planar and the surface landing.
   // Without a landing, extrapolate the current frame's virtual motion.
   let slipped = select(vec2f(0),(delta-localMotion)*f32(abs(p.delta)),validDelta);
-  let trust = planarTrust(x,id,revision,record,select(slipped,land.xy-q.xy,land.z>0.));
-  let validation = virtualWeight(x,land,q.z,record);
-  let amount = dominant*validation.x;
+  let parallax = select(slipped,land.xy-q.xy,land.z>0.);
+  let trust = planarTrust(x,id,revision,record,parallax);
+  var validation = virtualWeight(x,land,q.z,record);
   let virtualTap = vec2i(floor(land.xy+0.5));
+  let isMetal = metallic > METALLIC_THRESHOLD;
+  if (!isMetal && roughness < .15 && trust > 0. && validation.x > 0. &&
+      (surfaceConfidence < .95 || length(parallax) > .15) &&
+      (!endpointInterior(x,p.current,id,revision,record) ||
+       !endpointInterior(virtualTap,p.source,id,revision,record))) {
+    validation = vec2f(0.,OPTICAL_SILHOUETTE);
+  }
+  // At small parallax the projected separation can be inside the lobe's
+  // footprint. In that case a changing view still limits optical confidence.
+  let footprint = max(.5,cameras[p.current].lens.x*roughness*roughness);
+  let reliableParallax = smoothstep(footprint,2.*footprint,length(parallax));
+  let opticalConfidence = select(mix(surfaceConfidence,1.,reliableParallax),1.,isMetal || roughness >= .15);
+  let amount = dominant*validation.x*opticalConfidence;
   let srcHdr = radiance(tap.at,p.source);
   let positiveSurface = max(surfaceRgb,vec3f(0));
   let reflectedSurface = min(positiveSurface,reflection(tap.at,p.source) *
@@ -263,13 +290,11 @@ fn accumulateReflection(
   let slip = length(slipped);
   let matchSurface = select(0.,reflectionAgreement(record,srcEndpoint),all(srcEndpoint.xy==record.xy));
   let mismatch = select(0.,dominant*smoothstep(.25,2.,slip)*(1.-matchSurface),validDelta);
-  // Surface identity cannot locate a feature within a mirror once the image
-  // moves across it. Dielectrics retain surface history when optical
-  // reprojection cannot recover a tap.
-  let fade = mix(1.,smoothstep(.05,.20,roughness),smoothstep(.25,2.,slip));
-  let fallback = select(1., fade, metallic > METALLIC_THRESHOLD);
-  // Where the tangent plane does not hold, use the ordinary surface window.
-  let surfaceWeight = weight*mix(1.,(1.-amount)*(1.-mismatch)*fallback,trust);
+  // Optical parallax can invalidate a reflected surface sample even when
+  // geometric reprojection succeeds. The unreflected residual keeps its weight.
+  let fallback = mix(1.,smoothstep(.05,.20,roughness),smoothstep(.25,2.,select(length(parallax),slip,isMetal)));
+  let geometricFallback = mix(1.,(1.-amount)*(1.-mismatch)*fallback,trust);
+  let surfaceWeight = select(weight*min(surfaceConfidence,geometricFallback),0.,validation.y==OPTICAL_SILHOUETTE);
   let virtualW = tent*amount*trust;
   total[index] += vec4f((surfaceRgb-reflectedSurface)*weight,weight);
   reflectedTotal[index] += vec4f(reflectedSurface*surfaceWeight +

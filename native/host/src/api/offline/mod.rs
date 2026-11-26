@@ -304,7 +304,7 @@ impl TemporalDenoiser {
         }
         let auto = self.options.history_invalidation == HistoryInvalidation::Auto;
         let revisions = if auto { capture.revisions } else { Vec::new() };
-        p.capture(i, &guides, &capture.camera, &revisions);
+        p.capture(i, &guides, &capture.camera, &revisions, capture.raw);
         if self.options.reflection_motion {
             let (radiance, records) = capture
                 .reflections
