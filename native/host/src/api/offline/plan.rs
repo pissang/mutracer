@@ -34,7 +34,8 @@ pub struct TemporalOptions {
     pub stabilize_sparkle: bool,
     /// Accumulate albedo and normal for offline OIDN when the history radius is positive. Default false.
     pub accumulate_guides: bool,
-    /// Reproject the reflected radiance with virtual-image motion. Default false.
+    /// Reproject reflected radiance on flat reflectors with virtual-image motion.
+    /// Curved reflectors keep the default surface history. Default false.
     /// Enable [crate::api::RenderSettings::capture_reflections] on input renders.
     pub reflection_motion: bool,
     /// Default Auto. Manual uses explicit cuts and frame gaps only.

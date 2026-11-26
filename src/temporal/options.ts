@@ -18,7 +18,10 @@ export interface TemporalDenoiserOptions {
   denoiser?: TemporalSpatialDenoiser;
   /** Accumulate albedo and normal for offline OIDN when the history radius is positive. Default `false`. */
   accumulateGuides?: boolean;
-  /** Use virtual-image motion for reflected radiance in the offline WebGPU window. Default `false`. */
+  /**
+   * Use virtual-image motion for reflected radiance on flat reflectors in the offline WebGPU window.
+   * Curved reflectors keep the default surface history. Default `false`.
+   */
   reflectionMotion?: boolean;
   /** History invalidation policy. Default `'auto'`. */
   historyInvalidation?: 'auto' | 'manual';

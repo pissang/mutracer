@@ -55,14 +55,16 @@ independent noise. The example advances by its samples-per-frame count.
 | `postRadius` | `3` | Radius of post stabilization, from 0 to 3. Set to 0 with `stabilizeSparkle: false` to disable post stabilization. |
 | `stabilizeSparkle` | `true` | Suppresses one-frame bright impulses while preserving persistent highlights. |
 | `denoiser` | OIDN `cleanAuxLarge` | Spatial filter applied to the accumulated frame. Accepts OIDN options, a custom denoiser, or `null`. |
-| `reflectionMotion` | `false` | Uses virtual-image motion to accumulate reflections in the offline window. |
+| `reflectionMotion` | `false` | Uses virtual-image motion to accumulate reflections on flat reflectors in the offline window. |
 | `accumulateGuides` | `false` | Averages OIDN albedo and normal guides across the offline window when the history radius is positive to reduce flicker. |
 | `historyInvalidation` | `'auto'` | Splits history on detected cuts and lighting or visibility changes. Material edits invalidate history on the affected surfaces. Use `'manual'` to control cuts in scenes with continuously changing light. |
 | `memoryBudget` | Full plan | GPU bytes for temporal history and scratch. A smaller budget can reduce the effective radii in `plan`. |
 
 Smooth metals now blend in more surface history as roughness increases. Near
 mirrors still use mostly the current frame. Enable `reflectionMotion` when
-a flat mirror needs to accumulate moving reflections.
+a flat mirror needs to accumulate moving reflections. On curved reflectors,
+such as spheres or turned metal, a flat-mirror image would land in the wrong
+place, so those pixels keep the default surface history.
 
 The default offline latency is 19 frames. Inspect `latency` and, after the
 first `push`, `plan` for the effective radii and GPU byte estimate.
@@ -81,8 +83,8 @@ Other renderer and OIDN allocations are additional.
   render resolution. Keep draining its finished frames. After device loss,
   create a new temporal denoiser.
 - Reflection motion requires 10 storage buffers per shader stage, or 11 with
-  bindless textures. It works best on flat reflectors and uses less history
-  when correspondence fails on a near-mirror metal. Glass reflections can
+  bindless textures. It helps flat reflectors only. A near-mirror metal uses
+  less history where correspondence fails. Glass reflections can
   fall back to surface motion. Transmission uses surface motion.
 - `frame.readPixels('denoised')` returns final RGBA float32 pixels in the
   spatial denoiser's color representation. `frame.readPixels('accumulated')`
