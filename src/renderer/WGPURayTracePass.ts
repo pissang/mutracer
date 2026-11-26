@@ -240,6 +240,7 @@ interface TraceRequest {
   constants: Record<string, boolean | number>; hasAlpha: boolean; hasSceneAlpha: boolean; defineCode: string;
   pipelineConstantsKeys: string[]; structureKey: string; capabilities: ShaderCapabilities; baseSignature: string;
   signature: string; graphPlan: GraphPlan; fallbackSignature: string; blasLayoutMask: number;
+  captureReflections: boolean;
 }
 /** Background compiles (gated upgrades, the editing-interpreter prefetch) leave this many
  * slots to compiles that render an edit correctly, which never wait behind them. */
@@ -386,11 +387,13 @@ class WGPURayTracePass {
     );
   }
 
-  useTarget(target: object) {
+  useTarget(target: object, captureReflections = false) {
+    this._captureReflections = captureReflections;
     if (this._photonMapping && this._activeTarget !== target) this._needsPhotonTargetBindGroups = true;
     this._activeTarget = target;
     const output = this._targetOutputs.get(target);
-    [this._outColorBuffer, this._outNormalBuffer, this._outAlbedoBuffer, this._outShadowCatcherBuffer] =
+    [this._outColorBuffer, this._outNormalBuffer, this._outAlbedoBuffer, this._outShadowCatcherBuffer,
+      this._outReflectedRadianceBuffer] =
       output?.buffers ?? [];
     if (output?.bindGroup && output.pipeline === this._rayTracePipeline && this._rayTraceBindGroups) {
       this._rayTraceBindGroups[this._bindless ? 2 : 3] = output.bindGroup;
@@ -404,6 +407,8 @@ class WGPURayTracePass {
   private _outNormalBuffer!: GPUBuffer;
   private _outAlbedoBuffer!: GPUBuffer;
   private _outShadowCatcherBuffer!: GPUBuffer;
+  private _outReflectedRadianceBuffer?: GPUBuffer;
+  private _captureReflections = false;
 
   private _uniforms!: {
     cameraUniform: GPUBuffer;
@@ -614,7 +619,8 @@ class WGPURayTracePass {
         : {}),
       normal: this._outNormalBuffer,
       albedo: this._outAlbedoBuffer,
-      shadowCatcher: this._outShadowCatcherBuffer
+      shadowCatcher: this._outShadowCatcherBuffer,
+      ...(this._outReflectedRadianceBuffer ? {reflectedRadiance: this._outReflectedRadianceBuffer} : {})
     };
   }
 
@@ -867,7 +873,7 @@ class WGPURayTracePass {
     }
   }
 
-  private _createPipelineLayout(bindless: boolean, photonMapping: boolean) {
+  private _createPipelineLayout(bindless: boolean, photonMapping: boolean, captureReflections: boolean) {
     const descriptor = {
       label: 'Ray Trace Pipeline Layout',
       bindGroupLayouts: (bindless ? bindlessBindGroupLayouts() : rayTraceBindGroupLayouts()).map(
@@ -890,6 +896,11 @@ class WGPURayTracePass {
                 }))
               ]
             };
+          if (captureReflections && index === (bindless ? 2 : 3)) {
+            layout = {...layout, entries: [...layout.entries, {
+              binding: 14, visibility: GPUShaderStage.COMPUTE, buffer: {type: 'storage'}
+            }]};
+          }
           return this._shaderCache.createBindGroupLayout(layout);
         }
       )
@@ -1016,7 +1027,7 @@ class WGPURayTracePass {
       this.graphs.tick(this._activeCompiles + this._queuedCompiles.length);
       const geometry = this._preparedMeshData?.geometry;
       if (this._rtUniform.vertexLayout) packWgpuVertexLayout(this._constants, this._rtUniform.vertexLayout);
-      const fallbackSignature = JSON.stringify([this._constants, this._hasDisplacement, this._alphaBlendStrategy, this._blasLayoutMask, this._causticKey, !!this._bindless]);
+      const fallbackSignature = JSON.stringify([this._constants, this._hasDisplacement, this._alphaBlendStrategy, this._blasLayoutMask, this._causticKey, !!this._bindless, ...(this._captureReflections ? ['reflections'] : [])]);
       // A variant request: lean (what the scene needs) or, with editing prefetch, the
       // editing variant that also enables every lobe and code-adding structure flag.
       const request = (editing: boolean, plan: GraphPlan) => this._traceRequest(editing, plan, fallbackSignature);
@@ -1055,7 +1066,8 @@ class WGPURayTracePass {
         this._blasLayoutMask,
         this._bakePipelineConstants,
         this._causticKey,
-        !!this._bindless
+        !!this._bindless,
+        ...(this._captureReflections ? ['reflections'] : [])
       ]);
       // Steady rendering must not repeat capability retention and pipeline-key
       // preparation. Dirty resources still take the normal bind-group path.
@@ -1106,7 +1118,7 @@ class WGPURayTracePass {
       const previousVariant = this._traceVariants.get(signature);
       if(previousVariant?.status === 'failed' && previousVariant.graphKey && previousVariant.graphRevision < this.graphs.revision) this._traceVariants.delete(signature);
       const variant = this._traceVariants.get(signature) ??
-        this._startTraceVariant(signature, constants, {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys, structureKey, capabilities, graphPlan: chosen.graphPlan, baseSignature:fallbackSignature, blasLayoutMask: chosen.blasLayoutMask, editingFamily: chosen.editingFamily}, this.graphs.compileRole(chosen.graphPlan));
+        this._startTraceVariant(signature, constants, {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys, structureKey, capabilities, graphPlan: chosen.graphPlan, baseSignature:fallbackSignature, blasLayoutMask: chosen.blasLayoutMask, editingFamily: chosen.editingFamily, captureReflections: chosen.captureReflections}, this.graphs.compileRole(chosen.graphPlan));
       this._requestedVariant = variant;
       this._canTraceOldGraph = !!this._activeVariant && this._activeVariant.baseSignature === fallbackSignature && this._activeVariant.graphKey !== variant.graphKey;
       // A gated upgrade or a structure edit that needs a new variant compiles while
@@ -1135,7 +1147,7 @@ class WGPURayTracePass {
         } else {
           const prefetchSignature = baseSignature + '\n' + graphShaderKey(prefetch);
           if (!this._traceVariants.has(prefetchSignature))
-            this._startTraceVariant(prefetchSignature, constants, {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys, capabilities, graphPlan: prefetch, baseSignature: fallbackSignature,
+            this._startTraceVariant(prefetchSignature, constants, {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys, capabilities, graphPlan: prefetch, baseSignature: fallbackSignature, captureReflections: chosen.captureReflections,
               structureKey: JSON.stringify({...JSON.parse(structureKey), graph: graphShaderKey(prefetch)})}, 'prefetch');
         }
       }
@@ -1172,7 +1184,8 @@ class WGPURayTracePass {
       hasAnisotropyDirections: Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
       hasCoatNormals: Boolean(constants.USE_COAT_NORMAL_FRAMES),
       blasLayoutMask: canonical ? this._blasLayoutMask | 1 : this._blasLayoutMask,
-      bakePipelineConstants: this._bakePipelineConstants
+      bakePipelineConstants: this._bakePipelineConstants,
+      ...(this._captureReflections ? {captureReflections: true} : {})
     };
     const structureKey = JSON.stringify({
       graph: graphShaderKey(plan),
@@ -1202,7 +1215,7 @@ class WGPURayTracePass {
     // reuses the installed variant and only uploads programs.
     const signature = graphShaderKey(plan) ? baseSignature + '\n' + graphShaderKey(plan) : baseSignature;
     return {constants, hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys, structureKey, capabilities, baseSignature, signature, editingFamily,
-      graphPlan: plan, fallbackSignature, blasLayoutMask: structure.blasLayoutMask};
+      graphPlan: plan, fallbackSignature, blasLayoutMask: structure.blasLayoutMask, captureReflections: this._captureReflections};
   }
 
   /** Start scene-independent work as soon as the device/resources exist. */
@@ -1286,7 +1299,7 @@ class WGPURayTracePass {
   /** Snapshots everything compilation needs. The task must not read mutable pass state afterwards. */
   private _startTraceVariant(signature: string, constants: Record<string, boolean | number>, shader: {
     hasAlpha: boolean; hasSceneAlpha: boolean; defineCode: string; pipelineConstantsKeys: string[];
-    structureKey: string; capabilities: ShaderCapabilities; graphPlan: GraphPlan; baseSignature: string; blasLayoutMask?: number; editingFamily?: string;
+    structureKey: string; capabilities: ShaderCapabilities; graphPlan: GraphPlan; baseSignature: string; blasLayoutMask?: number; editingFamily?: string; captureReflections: boolean;
   }, role: CompileRole = 'edit') {
     this._hasUniversalVariant ||= !!shader.graphPlan.shape?.universal;
     if (shader.editingFamily) this._acceptedEditingFamily = shader.editingFamily;
@@ -1298,7 +1311,7 @@ class WGPURayTracePass {
     const unifiedEditingQueries = runtimeVertexLayout && bake && graphCompilerBackend() === 'd3d12' &&
       !constants.SPECTRAL && !shader.hasAlpha && blasLayoutMask === 1 && !this._transport && !this._causticKey && !lightTracing && !photonMapping;
     const causticKey = this._causticKey, transport = this._transport;
-    const {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys} = shader;
+    const {hasAlpha, hasSceneAlpha, defineCode, pipelineConstantsKeys, captureReflections} = shader;
     const causticGraphFlags = this._causticGraphFlags;
     const lightEmitter = lightTracing ? this._causticLight ??= new (getCausticsRuntime()!.WGPUCausticLightPass)(this._device) : undefined;
     const photonEmitter = photonMapping ? this._photonMap?.emission : undefined;
@@ -1338,7 +1351,7 @@ class WGPURayTracePass {
       // quality edit can share the module that the driver has already parsed.
       const moduleKey = JSON.stringify([graphShaderKey(shader.graphPlan), causticKey, !!bindless, shareSpectralPrefix, Boolean(constants.SPECTRAL), hasAlpha, hasSceneAlpha, hasDisplacement, unifiedEditingQueries,
         constants.USE_ANISOTROPY_DIRECTIONS, constants.USE_COAT_NORMAL_FRAMES, blasLayoutMask, defineCode, pipelineConstantsKeys,
-        bake && pipelineConstantsKeys.map((key) => constants[key])]);
+        bake && pipelineConstantsKeys.map((key) => constants[key]), ...(captureReflections ? ['reflections'] : [])]);
       let source = this._traceModules.get(moduleKey);
       if (!source) {
         let code = wgpuShaderSource(
@@ -1368,8 +1381,9 @@ class WGPURayTracePass {
             runtimeVertexLayout,
             unifiedEditingQueries,
             dynamicEnvironment: true,
-            displayAovStorage: true
-            ,analyticLightStorage: true
+            displayAovStorage: true,
+            analyticLightStorage: true,
+            ...(captureReflections ? {radianceOutputs: true} : {})
           },
           bake
         );
@@ -1389,7 +1403,10 @@ class WGPURayTracePass {
         modules: [{label: 'Ray Trace', sourceBytes: source.bytes, sourceLines: source.lines, sourceFingerprint: source.fingerprint}]
       });
       const {module} = source;
-      const layout = this._createPipelineLayout(!!bindless, photonMapping);
+      if (captureReflections && device.limits.maxStorageBuffersPerShaderStage < (bindless ? 11 : 10)) {
+        throw new RangeError('Reflection motion exceeds the device storage-buffer binding limit.');
+      }
+      const layout = this._createPipelineLayout(!!bindless, photonMapping, captureReflections);
       const pipelineConstants = !bake
         ? pipelineConstantsKeys.reduce(
             (obj, key) => {
@@ -1575,7 +1592,8 @@ class WGPURayTracePass {
     const compact = !!resolution && kinds.every(kind => COMPACT_AOV_KINDS.includes(kind));
     const pipelines = this._prepareAovPipelines(kinds, compact);
     if (!pipelines?.accumulation || !pipelines.center) return false;
-    state.resize(resolution?.width ?? this._width, resolution?.height ?? this._height, compact, (aovMask(kinds) & AOV_PRIMARY_MASK) !== 0);
+    state.resize(resolution?.width ?? this._width, resolution?.height ?? this._height, compact,
+      (aovMask(kinds) & AOV_PRIMARY_MASK) !== 0, this._captureReflections);
     const textures = this._bindless, groupIndex = textures ? 2 : 3;
     const target = Math.min(samples, cap);
     if (state.centerReady && state.samples >= target) return true;
@@ -1806,18 +1824,10 @@ class WGPURayTracePass {
       (target.pipeline === bindGroupPipeline && target.bindGroup) ||
       _device.createBindGroup({
         layout: bindGroupPipeline.getBindGroupLayout(this._bindless ? 2 : 3),
-        entries: [
-          this._outColorBuffer,
-          this._outNormalBuffer,
-          this._outAlbedoBuffer,
-          this._outShadowCatcherBuffer
-        ].map(
-          (buffer, i) =>
-            ({
-              binding: i,
-              resource: {buffer}
-            }) satisfies GPUBindGroupEntry
-        )
+        entries: target.buffers.map((buffer, i) => ({
+          binding: i === 4 ? 14 : i,
+          resource: {buffer}
+        }))
       });
 
     target.bindGroup = outputBindGroup;
@@ -1866,6 +1876,7 @@ class WGPURayTracePass {
       encoder.clearBuffer(this._outNormalBuffer);
       encoder.clearBuffer(this._outAlbedoBuffer);
       encoder.clearBuffer(this._outShadowCatcherBuffer);
+      if (this._outReflectedRadianceBuffer) encoder.clearBuffer(this._outReflectedRadianceBuffer);
     }
 
     const offset = this._rtUniform.views.scaleOffset;
@@ -3257,7 +3268,7 @@ class WGPURayTracePass {
 
     const outColorBuffer = this._outColorBuffer;
     const bufferSize = width * height * 4 * 4;
-    if (outColorBuffer && outColorBuffer.size === bufferSize) {
+    if (outColorBuffer && outColorBuffer.size === bufferSize && this._captureReflections === !!this._outReflectedRadianceBuffer) {
       return;
     }
 
@@ -3281,7 +3292,14 @@ class WGPURayTracePass {
           GPUBufferUsage.COPY_SRC
       });
     }
-    this._targetOutputs.set(this._activeTarget, { buffers: [this._outColorBuffer, this._outNormalBuffer, this._outAlbedoBuffer, this._outShadowCatcherBuffer] });
+    const buffers = [this._outColorBuffer, this._outNormalBuffer, this._outAlbedoBuffer, this._outShadowCatcherBuffer];
+    if (this._outReflectedRadianceBuffer) previousBuffers.push(this._outReflectedRadianceBuffer);
+    this._outReflectedRadianceBuffer = this._captureReflections ? this._device.createBuffer({
+      label: 'Reflected radiance accumulation', size: bufferSize,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
+    }) : undefined;
+    if (this._outReflectedRadianceBuffer) buffers.push(this._outReflectedRadianceBuffer);
+    this._targetOutputs.set(this._activeTarget, {buffers});
     // A preview-resolution update can replace these buffers immediately after
     // an encoded ray-trace or output command was submitted. Retire every old
     // output only after the queue has completed work already submitted

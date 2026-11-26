@@ -34,6 +34,10 @@ pub struct TemporalOptions {
     pub stabilize_sparkle: bool,
     /// Accumulate albedo and normal for offline OIDN when the history radius is positive. Default false.
     pub accumulate_guides: bool,
+    /// Reproject reflected radiance on flat reflectors with virtual-image motion.
+    /// Curved reflectors keep the default surface history. Default false.
+    /// Enable [crate::api::RenderSettings::capture_reflections] on input renders.
+    pub reflection_motion: bool,
     /// Default Auto. Manual uses explicit cuts and frame gaps only.
     pub history_invalidation: HistoryInvalidation,
     /// Maximum temporal GPU bytes. Default None selects the full plan.
@@ -46,6 +50,7 @@ impl Default for TemporalOptions {
             post_radius: 3,
             stabilize_sparkle: true,
             accumulate_guides: false,
+            reflection_motion: false,
             history_invalidation: HistoryInvalidation::Auto,
             memory_budget: None,
         }
@@ -177,6 +182,7 @@ impl TemporalOptions {
                 .max_buffer_size
                 .min(limits.max_storage_buffer_binding_size as u64);
             if history * 2 > limits.max_texture_array_layers as u64
+                || (self.reflection_motion && px * 96 > max_buffer)
                 || [px * 16, overflow, history * 80, revisions, changed]
                     .into_iter()
                     .any(|bytes| bytes > max_buffer)
@@ -190,8 +196,11 @@ impl TemporalOptions {
                 } else {
                     80
                 };
-            plan.bytes = history * (px * 56 + 80)
+            plan.bytes = history * (px * 60 + 80)
                 + overflow
+                // Specular RGB, endpoint records and half-precision motion per history
+                // slot. Include the window sum, center capture and beauty/checkpoint sums.
+                + if self.reflection_motion { px * (24 * history + 80) } else { 0 }
                 + guides * px * 16
                 + 32
                 + px * if accumulate_guides { 64 } else { 32 }
@@ -264,6 +273,26 @@ mod tests {
     }
 
     #[test]
+    fn reflection_motion_is_opt_in_and_counts_the_history_allocation() {
+        let legacy = TemporalOptions::default();
+        assert!(!legacy.reflection_motion);
+        let options = TemporalOptions {
+            reflection_motion: true,
+            ..legacy
+        };
+        let size = [1280, 720];
+        let original = legacy.estimate(size, 0).unwrap();
+        let reflected = options.estimate(size, 0).unwrap();
+        assert_eq!(reflected.max, 16);
+        assert_eq!(reflected.bytes - original.bytes, 803_635_200);
+        let constrained = TemporalOptions {
+            memory_budget: Some(original.bytes),
+            ..options
+        };
+        assert!(constrained.estimate(size, 0).unwrap().max < 16);
+    }
+
+    #[test]
     fn shared_memory_contract() {
         let f: serde_json::Value = serde_json::from_str(include_str!(
             "../../../../../tests/fixtures/temporal-offline.json"
@@ -284,6 +313,7 @@ mod tests {
                 "postRadius",
                 "stabilizeSparkle",
                 "accumulateGuides",
+                "reflectionMotion",
                 "historyInvalidation",
                 "memoryBudget",
             ] {

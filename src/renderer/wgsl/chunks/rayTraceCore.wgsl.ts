@@ -24,6 +24,7 @@ export default function rayTraceCore({
   cameraProjectionInverse = false,
   analyticLightStorage = false,
   caustics = false,
+  radianceOutputs = false,
   lightCapabilities = ALL_LIGHT_SHADER_CAPABILITIES
 }: {
   materialHooks?: MaterialShaderHooks;
@@ -36,6 +37,7 @@ export default function rayTraceCore({
   cameraProjectionInverse?: boolean;
   analyticLightStorage?: boolean;
   caustics?: boolean;
+  radianceOutputs?: boolean;
   lightCapabilities?: number;
 }) {
   // Keep the direction word in this position: specialized u32 bit 0 selects
@@ -208,7 +210,17 @@ struct Path {
   causticPhotonReceiver:bool,
   causticMneeReceiver: bool,` : ''}
 };
+${radianceOutputs ? `
+var<private> primarySpecularDirect: vec3f;
+var<private> primaryContinuationStart: vec3f;
+var<private> primarySpecularFraction: vec3f;
 
+fn resetRadianceSplit() {
+  primarySpecularDirect = vec3f(0.0);
+  primaryContinuationStart = vec3f(0.0);
+  primarySpecularFraction = vec3f(0.0);
+}
+` : ''}
 struct LightSampleRec {
   normal: vec3f,
   emission: vec3f,

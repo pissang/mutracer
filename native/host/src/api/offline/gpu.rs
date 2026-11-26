@@ -29,6 +29,8 @@ pub(super) struct Passes {
     pub bytes: u64,
     pub material_capacity: u32,
     accumulate_guides: bool,
+    reflection_motion: bool,
+    diagnostic: Option<std::path::PathBuf>,
     pipelines: HashMap<String, wgpu::ComputePipeline>,
     resources: HashMap<&'static str, Resource>,
 }
@@ -43,9 +45,12 @@ impl Passes {
         materials: usize,
         sparkle: bool,
         accumulate_guides: bool,
+        reflection_motion: bool,
     ) -> Result<Self> {
         let shaders = &crate::postprocess::sources()?.temporal;
         let pixels = u64::from(size[0]) * u64::from(size[1]);
+        let diagnostic =
+            std::env::var_os("MUTRACER_TEMPORAL_WINDOW_DUMP").map(std::path::PathBuf::from);
         let mut pass = Self {
             gpu,
             size,
@@ -53,6 +58,8 @@ impl Passes {
             bytes: pixels * 16,
             material_capacity: materials.max(1) as u32,
             accumulate_guides,
+            reflection_motion,
+            diagnostic,
             pipelines: Default::default(),
             resources: Default::default(),
         };
@@ -62,6 +69,7 @@ impl Passes {
         for (name, layers, format) in [
             ("surface", 2 * slots, Rgba16Float),
             ("motion", slots, Rgba32Float),
+            ("material", slots, R32Uint),
             ("id", slots, Rgba32Uint),
             ("raw", slots, Rgba16Float),
             (
@@ -100,6 +108,20 @@ impl Passes {
             "snapshot",
             "coverage",
         ];
+        if reflection_motion {
+            pass.texture("reflected", slots, size, Rgba16Float);
+            pass.texture("endpoints", slots, size, Rgba32Uint);
+            pass.buffer(
+                "reflectedTotal",
+                pass.bytes * if pass.diagnostic.is_some() { 3 } else { 1 },
+            );
+            names.push("captureReflections");
+            names.push(if accumulate_guides {
+                "windowGuidesReflections"
+            } else {
+                "windowReflections"
+            });
+        }
         if accumulate_guides {
             pass.buffer("albedoSum", pass.bytes);
             pass.buffer("normalSum", pass.bytes);
@@ -321,6 +343,7 @@ impl Passes {
                 &self["raw"],
                 &self["motion"],
                 &self["overflow"],
+                &self["material"],
             ],
         );
         self.write("revision", 0, revisions);
@@ -333,6 +356,51 @@ impl Passes {
             self.image_pass("snapshot", &[w, h, layer], &[input, &self["guides"]]);
         }
         self.write("meta", u64::from(s) * 80, meta);
+    }
+    pub fn capture_reflections(
+        &self,
+        index: u32,
+        samples: u32,
+        radiance: wgpu::Buffer,
+        records: wgpu::Buffer,
+        albedo: &Resource,
+        hdr: &Resource,
+    ) {
+        let [w, h] = self.size;
+        self.image_pass(
+            "captureReflections",
+            &[w, h, index % self.plan.slots(), samples],
+            &[
+                &Resource::Buffer(radiance),
+                albedo,
+                &Resource::Buffer(records),
+                hdr,
+                &self["reflected"],
+                &self["endpoints"],
+            ],
+        );
+    }
+    pub fn dump_window(&self, frame: u32) -> Result<()> {
+        let Some(path) = &self.diagnostic else {
+            return Ok(());
+        };
+        let frames = std::env::var("MUTRACER_TEMPORAL_WINDOW_DUMP_FRAMES").unwrap_or_default();
+        if !frames.is_empty() && !frames.split(',').any(|s| s.parse() == Ok(frame)) {
+            return Ok(());
+        }
+        std::fs::create_dir_all(path)?;
+        let mut fields = vec!["window", "sum"];
+        if self.reflection_motion {
+            fields.push("reflectedTotal");
+        }
+        for name in fields {
+            let data = self.read::<f32>(&self[name])?;
+            std::fs::write(
+                path.join(format!("{frame:04}-{name}.f32")),
+                bytemuck::cast_slice(&data),
+            )?;
+        }
+        Ok(())
     }
     pub fn resize_materials(&mut self, count: u32) {
         if count <= self.material_capacity {
@@ -357,8 +425,9 @@ impl Passes {
         let mode = u32::from(p.min != p.max)
             | 2
             | u32::from(revisions) << 2
-            | u32::from(self.accumulate_guides && revisions) << 3;
-        let mut bindings = Vec::with_capacity(12);
+            | u32::from(self.accumulate_guides && revisions) << 3
+            | u32::from(self.diagnostic.is_some()) << 5;
+        let mut bindings = Vec::with_capacity(16);
         bindings.extend([
             &self["surface"],
             &self["id"],
@@ -369,12 +438,24 @@ impl Passes {
             &self["overflow"],
             &self["rejects"],
             &self["motion"],
+            &self["material"],
         ]);
-        let kernel = if self.accumulate_guides {
+        if self.accumulate_guides {
             bindings.extend([&self["guides"], &self["albedoSum"], &self["normalSum"]]);
-            "windowGuides"
-        } else {
-            "window"
+        }
+        let reflections = self.reflection_motion && revisions;
+        if reflections {
+            bindings.extend([
+                &self["reflected"],
+                &self["endpoints"],
+                &self["reflectedTotal"],
+            ]);
+        }
+        let kernel = match (self.accumulate_guides, reflections) {
+            (true, true) => "windowGuidesReflections",
+            (false, true) => "windowReflections",
+            (true, false) => "windowGuides",
+            (false, false) => "window",
         };
         self.image_pass(
             kernel,

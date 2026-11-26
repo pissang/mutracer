@@ -278,6 +278,7 @@ export default class Render {
   private _filterRevision = 0;
   private _filterPending?: Promise<void>;
   private _temporalAovs?: readonly AovKind[];
+  private _temporalReflections = false;
   private _lastConvergeCamera?: Camera;
   private _lastSequenceOffset?: number;
   private _temporalFrameSequence = 0;
@@ -319,7 +320,7 @@ export default class Render {
   /** @internal Fixed export crop, applied before display passes. */ get _exportCrop() { return this._fixed; }
   /** @internal */ get _output() { if (this._disposed) throw new Error('Render is disposed.'); return this._target; }
   /** @internal Capture converged GPU inputs for the optional temporal sub-path. */
-  async _captureTemporal(capture: (input: DenoiseInput) => Promise<void>) {
+  async _captureTemporal(capture: (input: import('./renderer/accumulationTarget.js').TemporalCaptureInput) => Promise<void>) {
     if (this._disposed) throw new Error('Render is disposed.');
     if (!this.converged || !this._target?.captureTemporalInput) throw new Error('Temporal push requires a converged WebGPU render.');
     this._target.activate(); this._engine.display._configure(this); this._target.drawPostProcess();
@@ -337,11 +338,17 @@ export default class Render {
     this._target.setExternalDenoisedOutput(input, displayLinear, encodedCodes, capturedBaseline);
   }
   /** @internal Register hidden AOV inputs without changing Render.aovs. */
-  _attachTemporal(aovs: readonly AovKind[]) {
+  _attachTemporal(aovs: readonly AovKind[], reflectionMotion = false) {
     if (this._temporalAovs) throw new Error('This render is already attached to a temporal denoiser.');
     const request = this._temporalAovs = Object.freeze([...aovs]);
+    this._temporalReflections = reflectionMotion;
     this.restart();
-    return () => { if (this._temporalAovs !== request) return; this._temporalAovs = undefined; this.restart(); };
+    return () => {
+      if (this._temporalAovs !== request) return;
+      this._temporalAovs = undefined;
+      this._temporalReflections = false;
+      this.restart();
+    };
   }
   /** @internal */ get _temporalMetadata() {
     const memory = this._target?.getMemory();
@@ -480,6 +487,7 @@ export default class Render {
     const settings = this._settings(sampleCap), size = this._size();
     const key = imageSettingsKey(settings, size);
     const inputs = this._engine._inputs;
+    target.setTemporalReflections?.(this._temporalReflections);
     target.configure(settings); target.activate();
     target.setRealtimeBatchBudget?.(this._refineOptions?.targetBatchTimeMs ?? Infinity);
     target.setRealtimeDeferPostProcess?.(!!this._refineOptions?.deferResolve);

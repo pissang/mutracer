@@ -20,7 +20,7 @@ async function run() {
   if (location.search === '?webgl') {
     const engine = new Engine({canvas: document.createElement('canvas'), backend: 'webgl'});
     const render = new Render(engine, {width: 64, height: 64, maxSamples: 1});
-    const temporal = new TemporalDenoiser(engine, {historyRadius: 0, postRadius: 0, stabilizeSparkle: false, denoiser: null});
+    const temporal = new TemporalDenoiser(engine, {reflectionMotion: true, historyRadius: 0, postRadius: 0, stabilizeSparkle: false, denoiser: null});
     temporal.attach(render);
     try { await rejects(temporal.push(render), /requires WebGPU/); return {webgl: 'rejected'}; }
     finally { temporal.dispose(); render.dispose(); engine.dispose(); }
@@ -194,10 +194,89 @@ async function run() {
     const floatingPostResult = await exerciseFloatingPostCodes(device);
     const materialAcceptanceResult = await exerciseMaterialAcceptance(device);
     const forwardSeed = await exerciseForwardMotionSeed(device);
+    const reflectionMotion = await exerciseReflectionMotion(engine, device);
     await device.queue.onSubmittedWorkDone();
     check(uncaptured.length === 0, `Uncaptured WebGPU errors: ${uncaptured.join(' | ')}`);
-    return {identity: true, max, sequence: true, oidnMax, presentationIdentity, vignetteChange, customAov: receivedRoughness, fullIdResult, overflowResult, floatingPostResult, materialAcceptanceResult, forwardSeed, uncapturedErrors: uncaptured.length, plan: temporal.plan};
+    return {identity: true, max, sequence: true, oidnMax, presentationIdentity, vignetteChange, customAov: receivedRoughness, fullIdResult, overflowResult, floatingPostResult, materialAcceptanceResult, forwardSeed, reflectionMotion, uncapturedErrors: uncaptured.length, plan: temporal.plan};
   } finally { temporal.dispose(); render.dispose(); sync.dispose(); engine.dispose(); device.destroy(); }
+}
+
+async function exerciseReflectionMotion(engine: Engine, device: GPUDevice) {
+  const size = 32;
+  const scene = new THREE.Scene();
+  const mirror = new THREE.Mesh(new THREE.PlaneGeometry(8, 8),
+    new THREE.MeshStandardMaterial({metalness: 1, roughness: 0.02, color: 0xffffff}));
+  const receiver = new THREE.Mesh(new THREE.PlaneGeometry(16, 16),
+    new THREE.MeshStandardMaterial({emissive: 0xe08040, emissiveIntensity: 2}));
+  receiver.position.z = 6;
+  receiver.rotation.y = Math.PI;
+  scene.add(mirror, receiver);
+  const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
+  camera.position.z = 4;
+  camera.updateMatrixWorld(true);
+  const sync = new THREESync(engine, {scene});
+  sync.update();
+  engine.scene = sync.scene!;
+  engine.camera = fromTHREECamera(camera);
+  engine.update();
+  const render = new Render(engine, {width: size, height: size, maxSamples: 1});
+  const plain = new Render(engine, {width: size, height: size, maxSamples: 1});
+  const temporal = new TemporalDenoiser(engine, {reflectionMotion: true, accumulateGuides: true,
+    historyRadius: 1, postRadius: 0, stabilizeSparkle: false,
+    denoiser: {type: 'oidn', model: 'standard', weightsBaseUrl: '/oidn/weights/'}});
+  const detach = temporal.attach(render);
+  const plainHdr = async () => {
+    await plain.converge({samples: 1, sampleSequenceOffset: 5});
+    return (await plain.readPixels('hdr')).data;
+  };
+  try {
+    await render.converge({samples: 1, sampleSequenceOffset: 0});
+    await temporal.push(render);
+    camera.position.x = 0.125;
+    camera.updateMatrixWorld(true);
+    const moved = fromTHREECamera(camera);
+    await render.converge({samples: 1, sampleSequenceOffset: 1, camera: moved});
+    await temporal.push(render);
+    const window = (temporal as unknown as {window: DirectWindowGPU}).window;
+    let valid = 0;
+    await render._captureTemporal(async input => {
+      const reflection = input.reflection;
+      check(reflection, 'Reflection motion did not retain its capture inputs');
+      const records = new Float32Array(await window.read(reflection.records));
+      const radiance = new Float32Array(await window.read(reflection.radiance));
+      const rawIndex = (size / 2 * size + size / 2) * 4;
+      check(radiance[rawIndex] > 0, 'The mirror did not write reflected radiance');
+      for (let offset = 2 * size * size * 8; offset < records.length; offset += 8) {
+        const [distance, x, y] = [records[offset+2], records[offset+4], records[offset+5]];
+        if (Math.abs(x) >= size || Math.abs(y) >= size) continue;
+        check(Math.abs(distance - 6) < 1e-3 && Math.hypot(x-2, y) < 0.02,
+          `Wrong virtual image landing: ${distance}, ${x}, ${y}`);
+        valid++;
+      }
+    });
+    check(valid >= size * size / 2, `Insufficient mirror correspondence: ${valid}`);
+    const before = await plainHdr();
+    let outputs = 0;
+    for await (const frame of temporal.drain()) {
+      check((await frame.readPixels('accumulated')).data.every(Number.isFinite), 'Invalid reflected window HDR');
+      check((await frame.readPixels('denoised')).data.every(Number.isFinite), 'Invalid reflected OIDN output');
+      outputs++;
+    }
+    for await (const frame of temporal.flush()) {
+      check((await frame.readPixels('accumulated')).data.every(Number.isFinite), 'Invalid reflected tail HDR');
+      check((await frame.readPixels('denoised')).data.every(Number.isFinite), 'Invalid reflected OIDN tail');
+      outputs++;
+    }
+    const after = await plainHdr();
+    check(outputs === 2 && before.every((v,i) => Object.is(v,after[i])), 'Reflection motion changed a separate render target');
+    return {valid, outputs};
+  } finally {
+    detach();
+    temporal.dispose();
+    render.dispose();
+    plain.dispose();
+    sync.dispose();
+  }
 }
 
 async function exercisePaddedPresentation(engine: Engine) {
@@ -362,13 +441,23 @@ async function exerciseMaterialAcceptance(device: GPUDevice) {
       const roughness=new Float32Array(pixels*4);for(let i=0;i<pixels;i++)roughness.set([rough,metal,0,1],i*4);
       await window.upload(frame,meta,{centerPosition,centerDepth,centerNormal,roughness,motion,id,hdr,albedo,normal});
     };
-    await upload(0,.5,0); await upload(1,.5,0); await window.filter(1, [0], false);
-    const diffuse = new Uint32Array(await window.read(window.rejects, 4))[0];
-    await upload(0,.1,.5); await upload(1,.1,.5); await window.filter(1, [0], false);
-    const metal = new Uint32Array(await window.read(window.rejects, 4))[0];
-    check(diffuse === pixels, 'Material 212 was scene-specifically rejected');
-    check(metal === 0, 'Smooth-metal roughness rule was lost');
-    return {materialId: 212, diffuseAccepted: diffuse, smoothMetalRejected: pixels - metal};
+    const accepted = async (roughness: number, metallic: number) => {
+      await upload(1, roughness, metallic);
+      await window.filter(1, [0], false, 8);
+      return new Uint32Array(await window.read(window.rejects, 4))[0];
+    };
+    // The source material stays unchanged. Only the current-frame
+    // properties should affect the surface radius.
+    await upload(0, 0, 1);
+    const diffuse = await accepted(.05, .10);
+    const nearMirror = await accepted(.05, .100001);
+    const tapered = await accepted(.15, 1);
+    const rough = await accepted(.24, 1);
+    check(diffuse === pixels, 'A dielectric lost its full surface window');
+    check(nearMirror === 0, 'A near-mirror metal accepted a neighboring surface tap');
+    check(tapered === pixels, 'A rougher metal lost its short surface window');
+    check(rough === pixels, 'A rough metal lost its full surface window');
+    return {materialId: 212, diffuse, nearMirror, tapered, rough};
   } finally { window.dispose(); }
 }
 

@@ -22,6 +22,7 @@ limits. Usage stays in the [guides](../).
   comparison conversions.
 - [Temporal denoising](./temporal-denoising.md): window, correspondence chain,
   memory and regression gates.
+- [Reflection motion](./temporal-reflection-motion.md) in the offline window.
 - [Tile scheduling](./tiling.md): GPU-time tile prediction and unattainable budgets.
 - [WebGL 2 backend](./webgl.md): constraints and open issues.
 

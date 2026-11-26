@@ -603,6 +603,11 @@ pub fn still(args: Still, worker: bool) -> Result<()> {
             crate::temporal::fallback(settings.denoise, "/output/denoise"),
             &mut seen_warnings,
         );
+        input
+            .shot
+            .output
+            .temporal
+            .configure_capture(&renderer.render, settings.denoise)?;
         let mut stream = input.shot.output.temporal.start(&renderer.engine)?;
         renderer.prepare_shot(&mut input, settings, args.t, None)?;
         renderer.converge(settings, frame)?;
@@ -910,6 +915,7 @@ fn temporal_sequence(
     progress(json!({"event":"worker","pid":std::process::id()}));
     let mut renderer = Renderer::new(settings)?;
     let config = input.shot.output.temporal.clone();
+    config.configure_capture(&renderer.render, settings.denoise)?;
     let mut stream = config.start(&renderer.engine)?;
     let latency = stream.latency();
     let end = missing

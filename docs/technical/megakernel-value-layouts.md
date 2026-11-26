@@ -98,6 +98,12 @@ locals so its local names retain their meaning. The extra array elements do not
 carry another material or path; compare both HDR output and GPU timestamps when
 changing their addressability.
 
+The optional offline radiance variant adds a `vec3f` reflected value to the
+sample auxiliary result, the direct-light candidate and the continuation
+result. It uses the unchanged `Path` and `OpenPbrPreparedBsdf` values.
+The native target binds one additional 16 B/px accumulation buffer. See the
+[reflection window](./temporal-reflection-motion.md) for the GPU comparison.
+
 ## Compiler sensitivity and measured headroom
 
 On Apple M4 Max / Chrome Metal, one leading boolean added to either resolved

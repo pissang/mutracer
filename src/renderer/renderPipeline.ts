@@ -26,7 +26,6 @@ export interface RenderTarget extends TargetPipeline {
   readonly label: string;
   configure(settings: TraceSettings): void;
   synchronizeBackground(background: Scene['background']): void;
-  captureTemporalInput?(aovs: readonly import('./aov.js').AovKind[], capture: (input: import('../Render.js').DenoiseInput) => Promise<void>): Promise<void>;
 }
 export interface RenderPipeline {
   getSharedMemoryBytes(): number;

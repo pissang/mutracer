@@ -526,6 +526,12 @@ impl Checkpoint {
                 resource: target.output(binding).unwrap().as_entire_binding(),
             })
             .collect();
+        if let Some(buffer) = &target.reflected_radiance {
+            entries.push(wgpu::BindGroupEntry {
+                binding: REFLECTED_RADIANCE_BINDING,
+                resource: buffer.as_entire_binding(),
+            });
+        }
         entries.extend(resources.entries(&flag));
         let pipeline = target.pipeline.as_ref().unwrap_or(&scene.pipeline);
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -538,8 +544,10 @@ impl Checkpoint {
             label: Some("Sampling checkpoint"),
         });
         let copies = (0..4)
-            .map(|i| {
-                let original = target.output(i).unwrap().clone();
+            .map(|i| target.output(i).unwrap())
+            .chain(target.reflected_radiance.as_ref())
+            .map(|buffer| {
+                let original = buffer.clone();
                 if start == 0 {
                     // New buffers and a successful target reset define the empty sums.
                     return (original, None);

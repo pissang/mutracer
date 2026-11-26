@@ -256,7 +256,7 @@ export function sceneTargetParameters(bytes: Uint8Array, token: number): Uint8Ar
     const configuration = decodeSceneConfiguration(bytes.subarray(0, settingsBytes));
     const u = new Uint32Array(bytes.buffer, bytes.byteOffset + settingsBytes, 8);
     const [width, height, qualityFlags, shaderId] = [u[0], u[1], u[2], u[3]];
-    if (!width || !height || u[5] > 1 || u[6] || u[7] || (shaderId !== RESOURCE.SOFTWARE_SHADER && shaderId !== RESOURCE.HWRT_SHADER)) throw new Error('Invalid target request');
+    if (!width || !height || u[5] > 1 || u[6] > 1 || u[7] || (shaderId !== RESOURCE.SOFTWARE_SHADER && shaderId !== RESOURCE.HWRT_SHADER)) throw new Error('Invalid target request');
     const camera = sceneCameraParameters(bytes.subarray(settingsBytes + 8 * WORD_BYTES), width, height);
     const rt = makeRayTraceUniform();
     new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
@@ -266,8 +266,10 @@ export function sceneTargetParameters(bytes: Uint8Array, token: number): Uint8Ar
     // with blend coverage. The shared scene retains the stochastic base shader.
     const hasAlpha = u[5] === 1 && Boolean(constants.HAS_ALPHA_BLEND);
     const frameInputs=(configuration.variants & 16)!==0;
+    const radianceOutputs = u[6] === 1;
     const frameFeatures = nativeGraphFeatures({...state.shader.features, hasAlpha,
       shareSpectralPrefix: Boolean(constants.SPECTRAL) && !!(qualityFlags & 2)}, state.shader.graphs);
+    if (radianceOutputs) frameFeatures.radianceOutputs = true;
     const targetConstants: Record<string,boolean|number>={...constants, SAMPLING_PATTERN:configuration.sampling.code,BEVEL_SAMPLES:configuration.bevelSamples};
     const nativeHits=shaderId===RESOURCE.HWRT_SHADER?nativeIntersections({...frameFeatures, materialHooks: {}},state.shader.isEmpty,false,false,true,state.shader.opaqueClosest):'';
     // Independently traced frame guides use the original PT scene bindings.
@@ -286,7 +288,7 @@ export function sceneTargetParameters(bytes: Uint8Array, token: number): Uint8Ar
       frameFeatures.photonDirectSubset=frameFeatures.photonMapping&&!frameFeatures.lightTracing;
       rt.views.lightSamplingTextureWidth[0]=caustics.metadata.lightWidth;
     }
-    const variant=!!caustics||frameFeatures.shareSpectralPrefix!==state.shader.features.shareSpectralPrefix||constants.SAMPLING_PATTERN!==configuration.sampling.code||constants.BEVEL_SAMPLES!==configuration.bevelSamples||hasAlpha!==state.shader.features.hasAlpha;
+    const variant=radianceOutputs||!!caustics||frameFeatures.shareSpectralPrefix!==state.shader.features.shareSpectralPrefix||constants.SAMPLING_PATTERN!==configuration.sampling.code||constants.BEVEL_SAMPLES!==configuration.bevelSamples||hasAlpha!==state.shader.features.hasAlpha;
     const frameShader=()=>nativeShaderVariant(shaderId===RESOURCE.HWRT_SHADER?RESOURCE.HWRT_FRAME_SHADER:RESOURCE.SOFTWARE_FRAME_SHADER,targetConstants,frameFeatures,configuration.variants,()=>
       (shaderId===RESOURCE.HWRT_SHADER?'enable wgpu_ray_query;\n':'')+wgpuShaderSource(targetConstants,frameFeatures,true,
         shaderId===RESOURCE.HWRT_SHADER?nativeIntersections(frameFeatures,state.shader.isEmpty,false,false,true,state.shader.opaqueClosest):'',false,nativeFrameInputHooks()),state.shader.graphs?.key??'');

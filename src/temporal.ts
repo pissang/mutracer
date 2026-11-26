@@ -13,7 +13,7 @@ import {createSparklePost} from './renderer/WGPUTemporalSparkle.js';
 import {createOIDNFilter, type OIDNFilter} from './oidn.js';
 import {hasTemporalFrameGap, historyNeighbors, isTemporalCameraCut, readyThrough, temporalLatency} from './temporal/schedule.js';
 import {normalizeTemporalOptions, type NormalizedTemporalOptions} from './temporal/options.js';
-import {nextTemporalMemoryPlan, planTemporalMemory, temporalGuideSlots, temporalHistorySlots, usesTemporalGuideWindow, TEMPORAL_MAX_FINISHED, type TemporalMemoryPlan} from './temporal/memoryPlan.js';
+import {nextTemporalMemoryPlan, planTemporalMemory, temporalGuideSlots, temporalHistorySlots, usesTemporalGuideWindow, usesTemporalReflectionWindow, TEMPORAL_MAX_FINISHED, type TemporalMemoryPlan} from './temporal/memoryPlan.js';
 export type {TemporalDenoiserOptions, TemporalHistoryRadius, TemporalMode, TemporalSpatialDenoiser} from './temporal/options.js';
 
 const CAPTURE_AOVS = ['centerPosition', 'centerDepth', 'centerNormal', 'roughness', 'motion', 'id'] as const;
@@ -177,7 +177,7 @@ export class TemporalDenoiser {
     if (this.attached === render) throw new Error('This render is already attached.');
     if (render.denoiser) console.warn('The attached render has its own denoiser; temporal capture ignores that result.');
     const custom = this.activeOptions.denoiser?.type === 'custom' ? this.activeOptions.denoiser.aovs ?? [] : [];
-    const detach = render._attachTemporal([...new Set([...CAPTURE_AOVS, ...custom])] as any);
+    const detach = render._attachTemporal([...new Set([...CAPTURE_AOVS, ...custom])] as any, usesTemporalReflectionWindow(this.activeOptions));
     this.attached = render;
     this.detachRender = () => {
       if (this.attached !== render) return;
@@ -246,7 +246,7 @@ export class TemporalDenoiser {
           viewProjection, projection, apertureRadius: direct.apertureRadius ?? cameraApertureRadius(targetCamera),
           focusDistance: direct.focusDistance ?? targetCamera.focusDistance
         }, {color: input.color, albedo: input.albedo, normal: input.normal, centerDepth: aovs.centerDepth!,
-          centerNormal: aovs.centerNormal!, roughness: aovs.roughness!, motion: aovs.motion!, id: aovs.id!}, revisionEntries);
+          centerNormal: aovs.centerNormal!, roughness: aovs.roughness!, motion: aovs.motion!, id: aovs.id!}, revisionEntries, input.reflection);
         if (this.activeOptions.historyInvalidation === 'auto' && aovs.centerPosition && frame > 0 && this.activeOptions.historyRadius.max > 0 &&
             this.previousFrameSequence === metadata.frameSequence - 1 && this.previousSceneRevision === metadata.sceneRevision &&
             this.previousScene === metadata.scene && this.previousCameraSource === metadata.cameraSource &&
@@ -382,8 +382,9 @@ export class TemporalDenoiser {
     const device = this.engine.device!;
     const {historyRadius, denoiser} = this.activeOptions;
     const accumulateGuides = usesTemporalGuideWindow(this.activeOptions);
+    const reflections = usesTemporalReflectionWindow(this.activeOptions);
     this.history = await TemporalHistoryGPU.create(device, width, height, temporalHistorySlots(this.activeOptions),
-      temporalGuideSlots(this.activeOptions), denoiser?.type === 'custom');
+      temporalGuideSlots(this.activeOptions), denoiser?.type === 'custom', reflections);
     // The selected mixed window stays enabled when the post sparkle pass is disabled.
     this.window = await DirectWindowGPU.create(this.history, historyRadius.min !== historyRadius.max, accumulateGuides);
     if (this.activeOptions.postRadius > 0) {

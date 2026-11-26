@@ -1,6 +1,8 @@
+import {captureReflectionsWGSL} from './temporalReflectionShader.js';
+import type {TemporalCaptureInput} from './accumulationTarget.js';
 import {captureWGSL} from './temporalCaptureShader.js';
 import {TemporalRevisionTable} from './temporalRevisionTable.js';
-import {idSnapshot, snapshot, temporalOverflowBuckets, temporalOverflowEntryBytes} from './temporalKernels.js';
+import {idSnapshot, snapshot, temporalMaterialBytes, temporalMaterialFormat, temporalOverflowBuckets, temporalOverflowEntryBytes} from './temporalKernels.js';
 
 interface CaptureMetadata {
   viewProjection: ArrayLike<number>;
@@ -18,9 +20,12 @@ export class TemporalHistoryGPU {
   private capturePipeline!: GPUComputePipeline;
   private guidePipeline!: GPUComputePipeline;
   private idPipeline!: GPUComputePipeline;
+  private reflectionPipeline?: GPUComputePipeline;
+  reflections?: {radiance: GPUTexture; endpoint: GPUTexture};
   private params!: GPUBuffer;
   surface!: GPUTexture;
   motion!: GPUTexture;
+  material!: GPUTexture;
   id!: GPUTexture;
   raw!: GPUTexture;
   guides!: GPUTexture;
@@ -29,9 +34,9 @@ export class TemporalHistoryGPU {
   private customGuides?: {albedo: GPUBuffer; normal: GPUBuffer}[];
 
   static async create(device: GPUDevice, width: number, height: number, capacity: number,
-    guideCapacity: number, custom: boolean) {
+    guideCapacity: number, custom: boolean, reflections = false) {
     const history = new TemporalHistoryGPU(device, width, height, capacity, guideCapacity);
-    try { await history.init(custom); return history; }
+    try { await history.init(custom, reflections); return history; }
     catch (error) { history.dispose(); throw error; }
   }
 
@@ -43,7 +48,8 @@ export class TemporalHistoryGPU {
   private texture(label: string, layers: number, format: GPUTextureFormat = 'rgba16float') {
     const texture = this.device.createTexture({label, size: [this.width, this.height, layers], format,
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC});
-    this.resources.set(texture, this.width * this.height * layers * (format === 'rgba16float' ? 8 : 16));
+    const bytesPerPixel = format === temporalMaterialFormat ? temporalMaterialBytes : format === 'rgba16float' ? 8 : 16;
+    this.resources.set(texture, this.width * this.height * layers * bytesPerPixel);
     return texture;
   }
 
@@ -54,10 +60,11 @@ export class TemporalHistoryGPU {
     return buffer;
   }
 
-  private async init(custom: boolean) {
+  private async init(custom: boolean, reflections: boolean) {
     const d = this.device;
     this.surface = this.texture('Temporal surface history', this.capacity * 2);
     this.motion = this.texture('Temporal motion and surface flags', this.capacity, 'rgba32float');
+    this.material = this.texture('Temporal surface materials', this.capacity, temporalMaterialFormat);
     this.id = this.texture('Temporal IDs and material revisions', this.capacity, 'rgba32uint');
     this.raw = this.texture('Temporal HDR history', this.capacity);
     this.guides = this.texture('Temporal spatial guides', this.guideCapacity * 2);
@@ -78,14 +85,22 @@ export class TemporalHistoryGPU {
     this.capturePipeline = await createPipeline('Temporal history capture', captureWGSL);
     this.guidePipeline = await createPipeline('Temporal guide capture', snapshot);
     this.idPipeline = await createPipeline('Temporal ID capture', idSnapshot);
+    if (reflections) {
+      this.reflections = {
+        radiance: this.texture('Temporal reflected radiance', this.capacity),
+        endpoint: this.texture('Temporal reflection endpoints and motion', this.capacity, 'rgba32uint')
+      };
+      this.reflectionPipeline = await createPipeline('Temporal reflection capture', captureReflectionsWGSL);
+    }
   }
 
   slot(frame: number) { return frame % this.capacity; }
   guideSlot(frame: number) { return frame % this.guideCapacity; }
 
   async capture(frame: number, meta: CaptureMetadata, buffers: Record<string, GPUBuffer>,
-    revisionEntries: readonly (readonly [number, number])[] = []) {
+    revisionEntries: readonly (readonly [number, number])[] = [], reflection?: TemporalCaptureInput['reflection']) {
     const d = this.device;
+    if (this.reflections && !reflection) throw new Error('Temporal capture is missing reflection inputs.');
     const slot = this.slot(frame), guideSlot = this.guideSlot(frame);
     const encoder = d.createCommandEncoder({label: 'Clear temporal overflow and copy custom guides'});
     const overflowBytes = temporalOverflowBuckets * temporalOverflowEntryBytes;
@@ -99,7 +114,12 @@ export class TemporalHistoryGPU {
 
     this.dispatch(this.capturePipeline, [slot, 0],
       [buffers.centerDepth, buffers.centerNormal, buffers.roughness, buffers.albedo, buffers.color,
-        buffers.motion, this.surface, this.raw, this.motion, this.overflow]);
+        buffers.motion, this.surface, this.raw, this.motion, this.overflow, this.material]);
+    if (this.reflections && reflection) {
+      this.dispatch(this.reflectionPipeline!, [slot, reflection.samples],
+        [reflection.radiance, reflection.albedo, reflection.records, buffers.color,
+          this.reflections.radiance, this.reflections.endpoint]);
+    }
     const revisionTable = await this.revisions.write(revisionEntries);
     this.dispatch(this.idPipeline, [slot, 0, 0, 0, 0, revisionEntries.length], [buffers.id, revisionTable, this.id]);
     this.dispatch(this.guidePipeline, [guideSlot * 2, 0, 0, 0], [buffers.albedo, this.guides]);

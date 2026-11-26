@@ -8,6 +8,8 @@ export class DirectWindowGPU {
   readonly guides?: {albedo: GPUBuffer; normal: GPUBuffer};
   private readonly params: GPUBuffer;
   private pipeline!: GPUComputePipeline;
+  private cameraCutPipeline?: GPUComputePipeline;
+  private readonly reflectionSum?: GPUBuffer;
 
   private constructor(private readonly history: TemporalHistoryGPU, private readonly adaptiveRadius: boolean, accumulateGuides: boolean) {
     const d = history.device;
@@ -20,6 +22,7 @@ export class DirectWindowGPU {
         normal: d.createBuffer({label: 'Direct window normal', size: history.bytes, usage}),
       };
     }
+    if (history.reflections) this.reflectionSum = d.createBuffer({label: 'Reflected radiance weighted sum', size: history.bytes, usage});
     this.rejects = d.createBuffer({label: 'Direct window validation counts', size: 64, usage});
     this.params = d.createBuffer({label: 'Direct window parameters', size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST});
   }
@@ -28,8 +31,12 @@ export class DirectWindowGPU {
     const window = new DirectWindowGPU(history, adaptiveRadius, accumulateGuides);
     const device = history.device;
     try {
-      const module = device.createShaderModule({label: 'Direct temporal window', code: createMixedWindowWGSL(accumulateGuides)});
-      window.pipeline = await device.createComputePipelineAsync({layout: 'auto', compute: {module, entryPoint: 'main'}});
+      const createPipeline = (code: string) => {
+        const module = device.createShaderModule({label: 'Direct temporal window', code});
+        return device.createComputePipelineAsync({layout: 'auto', compute: {module, entryPoint: 'main'}});
+      };
+      window.pipeline = await createPipeline(createMixedWindowWGSL(accumulateGuides, !!history.reflections));
+      if (history.reflections) window.cameraCutPipeline = await createPipeline(createMixedWindowWGSL(accumulateGuides));
       return window;
     } catch (error) { window.dispose(); throw error; }
   }
@@ -44,14 +51,18 @@ export class DirectWindowGPU {
       (Number(!!this.guides && includeMaterialRevisions) << 3);
     d.queue.writeBuffer(this.params, 0, new Uint32Array([h.width, h.height, h.slot(current), h.slot(source),
       source - current, Number(symmetric), stage, mode, radiusMin, radiusMax]));
-    const resources = [this.params, h.surface, h.id, h.raw, h.meta, this.total, this.output, h.overflow, this.rejects, h.motion];
+    const resources = [this.params, h.surface, h.id, h.raw, h.meta, this.total, this.output, h.overflow, this.rejects, h.motion, h.material];
     if (this.guides) resources.push(h.guides, this.guides.albedo, this.guides.normal);
-    const group = d.createBindGroup({layout: this.pipeline.getBindGroupLayout(0), entries: resources.map((resource, binding) => ({
+    if (h.reflections && includeMaterialRevisions) {
+      resources.push(h.reflections.radiance, h.reflections.endpoint, this.reflectionSum!);
+    }
+    const pipeline = includeMaterialRevisions ? this.pipeline : this.cameraCutPipeline ?? this.pipeline;
+    const group = d.createBindGroup({layout: pipeline.getBindGroupLayout(0), entries: resources.map((resource, binding) => ({
       binding, resource: resource instanceof GPUBuffer ? {buffer: resource} : resource.createView({dimension: '2d-array'}),
     }))});
     const encoder = d.createCommandEncoder();
     const pass = encoder.beginComputePass();
-    pass.setPipeline(this.pipeline);
+    pass.setPipeline(pipeline);
     pass.setBindGroup(0, group);
     pass.dispatchWorkgroups(Math.ceil(h.width / 8), Math.ceil(h.height / 8));
     pass.end();
@@ -85,10 +96,11 @@ export class DirectWindowGPU {
   }
 
   memory() {
-    return {total: this.total.size + this.output.size + this.rejects.size + this.params.size + (this.guides ? this.guides.albedo.size + this.guides.normal.size : 0)};
+    return {total: this.total.size + this.output.size + this.rejects.size + this.params.size + (this.reflectionSum?.size ?? 0) + (this.guides ? this.guides.albedo.size + this.guides.normal.size : 0)};
   }
 
   dispose() {
+    this.reflectionSum?.destroy();
     this.guides?.albedo.destroy();
     this.guides?.normal.destroy();
     this.total.destroy();

@@ -11,6 +11,7 @@
         "postRadius": 3,
         "stabilizeSparkle": true,
         "accumulateGuides": false,
+        "reflectionMotion": false,
         "denoiser": {
           "type": "oidn",
           "model": "cleanAuxLarge"
@@ -36,6 +37,7 @@
         "postRadius": 0,
         "stabilizeSparkle": false,
         "accumulateGuides": false,
+        "reflectionMotion": false,
         "denoiser": null,
         "historyInvalidation": "manual"
       }
@@ -47,6 +49,7 @@
           "max": 7
         },
         "accumulateGuides": true,
+        "reflectionMotion": true,
         "memoryBudget": 4000000
       },
       "expected": {
@@ -58,6 +61,7 @@
         "postRadius": 3,
         "stabilizeSparkle": true,
         "accumulateGuides": true,
+        "reflectionMotion": true,
         "denoiser": {
           "type": "oidn",
           "model": "cleanAuxLarge"
@@ -85,6 +89,9 @@
     },
     {
       "accumulateGuides": null
+    },
+    {
+      "reflectionMotion": null
     }
   ],
   "schedule": [
@@ -140,7 +147,7 @@
           "max": 16
         },
         "postRadius": 3,
-        "bytes": 2739147592
+        "bytes": 2860798792
       }
     },
     {
@@ -155,7 +162,7 @@
           "max": 16
         },
         "postRadius": 3,
-        "bytes": 6157664536
+        "bytes": 6431379736
       }
     },
     {
@@ -172,7 +179,7 @@
           "max": 2
         },
         "postRadius": 1,
-        "bytes": 1169616
+        "bytes": 1180156
       }
     },
     {
@@ -191,7 +198,7 @@
           "max": 2
         },
         "postRadius": 1,
-        "bytes": 1203344
+        "bytes": 1213884
       }
     },
     {
@@ -211,7 +218,7 @@
           "max": 0
         },
         "postRadius": 0,
-        "bytes": 131780
+        "bytes": 131784
       }
     }
   ]

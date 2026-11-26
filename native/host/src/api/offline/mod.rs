@@ -76,6 +76,7 @@ impl OfflineFrame {
 }
 pub(super) struct Capture {
     pub raw: bool,
+    pub reflections: Option<(wgpu::Buffer, wgpu::Buffer)>,
     pub check_camera: bool,
     pub size: [u32; 2],
     pub samples: u32,
@@ -209,6 +210,7 @@ impl TemporalDenoiser {
                     materials,
                     self.options.stabilize_sparkle,
                     self.options.guide_window(cost, plan.max),
+                    self.options.reflection_motion,
                 )?;
                 let spatial = match &self.spatial {
                     TemporalSpatial::Oidn(weights) => Some((
@@ -249,6 +251,7 @@ impl TemporalDenoiser {
             render.offline_capture(
                 &self.engine,
                 self.options.history_invalidation == HistoryInvalidation::Auto,
+                self.options.reflection_motion,
             )
         })?;
         self.push_capture(index, capture)
@@ -286,6 +289,8 @@ impl TemporalDenoiser {
         let p = self.passes.as_ref().unwrap();
         let i = self.count;
         let mut guides = capture.guides.map(Resource::Buffer);
+        let raw_albedo = (self.options.reflection_motion && capture.raw)
+            .then(|| Resource::Buffer(guides[3].buffer().clone()));
         if capture.raw {
             let [hdr, albedo, normal] = ["Color", "Albedo", "Normal"].map(|s| p.alloc(s, p.bytes));
             p.image_pass(
@@ -300,6 +305,21 @@ impl TemporalDenoiser {
         let auto = self.options.history_invalidation == HistoryInvalidation::Auto;
         let revisions = if auto { capture.revisions } else { Vec::new() };
         p.capture(i, &guides, &capture.camera, &revisions);
+        if self.options.reflection_motion {
+            let (radiance, records) = capture
+                .reflections
+                .ok_or("Missing offline reflection capture")?;
+            p.capture_reflections(
+                i,
+                capture.samples,
+                radiance,
+                records,
+                raw_albedo
+                    .as_ref()
+                    .ok_or("Reflection capture requires raw guides")?,
+                &guides[4],
+            );
+        }
         if let Some((previous, scene, epoch)) = self.previous {
             if previous.checked_add(1) != Some(index)
                 || auto
@@ -355,11 +375,25 @@ impl TemporalDenoiser {
             let neighbors = self.neighbors(i, self.count, plan.max);
             let p = self.passes.as_ref().unwrap();
             p.clear("rejects", 0, 64);
+            let profile = std::env::var_os("MUTRACER_TEMPORAL_WINDOW_TIMING").is_some();
+            if profile {
+                GpuDevice::wait(&p.gpu.device)?;
+            }
+            let start = std::time::Instant::now();
             p.window(i, i, 0, true);
             for j in neighbors {
                 p.window(i, j, 1, true);
             }
             p.window(i, i, 2, true);
+            if profile {
+                GpuDevice::wait(&p.gpu.device)?;
+                eprintln!(
+                    "temporal window frame {} ms {:.3}",
+                    self.frames[&i].frame,
+                    start.elapsed().as_secs_f64() * 1000.
+                );
+            }
+            p.dump_window(self.frames[&i].frame)?;
             let f = self.frames.get_mut(&i).unwrap();
             let acc = p.alloc("Accumulated temporal frame", p.bytes);
             p.copy(&p["window"], &acc);

@@ -1,7 +1,7 @@
 // Spectral checkpoint source shared by browser and native generation.
 // Structured-sample caches are pure dimension lookups; only PCG, hashed draws
 // and the two current-bounce indices need restoring.
-export function spectralPrefixWgsl(shareSecondary = true) { return /* wgsl */ `
+export function spectralPrefixWgsl(shareSecondary = true, radianceOutputs = false) { return /* wgsl */ `
 struct SpectralCompleted {
   ready: bool,
   result: vec4f,
@@ -31,11 +31,14 @@ fn spDisperses(ma: OpenPbrResolvedMaterial) -> bool {
 fn spFork(path: ptr<function, Path>, si: ptr<function, SurfaceInteraction>) {
   spActive = false;
   (*path).li = sampling_spectral_rgb_filter((*path).li, spChannel);
+${radianceOutputs ? `  primarySpecularDirect = sampling_spectral_rgb_filter(primarySpecularDirect, spChannel);
+  primaryContinuationStart = sampling_spectral_rgb_filter(primaryContinuationStart, spChannel);` : ''}
   (*si).spectralChannel = spChannel; (*si).wavelength = spWavelength;
 }
 fn spReplay(slot: i32, aux: ptr<function, RayTraceAuxiliary>) -> vec4f {
   let saved = spCompleted[slot];
   *aux = saved.aux;
+${radianceOutputs ? `  (*aux).specularRadiance = sampling_spectral_rgb_filter(saved.aux.specularRadiance, spChannel);` : ''}
   s0 = saved.rng; hashedCounter = saved.counter;
   samplingBounce = saved.bounce; bounceIndex = saved.vertex;
   return vec4f(sampling_spectral_rgb_filter(saved.result.rgb, spChannel), saved.result.a);

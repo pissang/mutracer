@@ -159,6 +159,7 @@ pub(crate) struct Layout {
     /// 24 B/px storage without center outputs; display only.
     pub compact: bool,
     pub primary: bool,
+    pub reflections: bool,
 }
 pub(crate) struct Query {
     pipelines: PipelineCache,
@@ -357,7 +358,7 @@ impl Output {
         let center_bytes = if layout.compact {
             32
         } else {
-            pixels * 32 * u64::from(1 + u8::from(layout.primary))
+            pixels * 32 * (1 + u64::from(layout.primary) + u64::from(layout.reflections))
         };
         let buffer = |label, size| {
             device.create_buffer(&wgpu::BufferDescriptor {
@@ -406,6 +407,10 @@ impl Output {
             borrowed: HashMap::new(),
             borrow_pipelines: HashMap::new(),
         })
+    }
+    pub(crate) fn reflection_records(&self) -> &wgpu::Buffer {
+        debug_assert!(self.layout.reflections);
+        &self.center
     }
     /// Shared AOV_COMPACT override of the resolve and display shaders.
     fn constants(&self) -> [(&'static str, f64); 1] {

@@ -1585,6 +1585,7 @@ fn aov_targets_use_the_requested_sampling_variant_and_reuse_it() {
                 display: false,
                 compact: false,
                 primary: false,
+                reflections: false,
             };
             let mut output = crate::aov::Output::new(&query, 1, &words, None, layout).unwrap();
             output.render(&query, 4, 1).unwrap();
@@ -1936,4 +1937,89 @@ fn primary_surface_semantics_web_fixture() {
         })
         .unwrap();
     assert_eq!(base, capture("dof"));
+}
+
+#[test]
+#[ignore = "requires real GPU"]
+fn offline_reflection_motion_follows_the_mirror_image_and_moving_endpoint() {
+    use crate::scene_api::{Geometry, Mesh, OpenPbrMaterial};
+
+    let _guard = crate::abi_test_lock();
+    let engine = aov_engine(aov_test_backend());
+    engine.display().set_size(16, 16).unwrap();
+    let (mut scene, _, mirror) = full_plane_scene();
+    let mut material = OpenPbrMaterial::default();
+    material.values.metalness = 1.;
+    material.values.roughness = 0.;
+    *scene.material_mut(mirror).unwrap() = material;
+    let receiver = scene.add_material(OpenPbrMaterial::default()).unwrap();
+    let geometry = scene
+        .add_geometry(Geometry::new(
+            vec![-10., 10., 6., 10., 10., 6., -10., -10., 6., 10., -10., 6.],
+            vec![0, 1, 2, 2, 1, 3],
+        ))
+        .unwrap();
+    let reflected = scene.add_mesh(Mesh::new(geometry, receiver)).unwrap();
+    let mut camera = Camera {
+        projection: 1,
+        ..Default::default()
+    };
+    camera.world_matrix[14] = 4.;
+    scene.set_default_camera(Some(camera));
+    engine.set_scene_object(&scene).unwrap();
+    engine.update().unwrap();
+    let render = Render::new(
+        &engine,
+        RenderSettings {
+            max_samples: 1,
+            bounces: 2,
+            aovs: TemporalDenoiser::AOVS,
+            capture_reflections: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    for expected_displacement in [None, Some(2.), Some(-1.)] {
+        match expected_displacement {
+            Some(2.) => {
+                camera.world_matrix[12] = 0.25;
+                engine.set_camera(Some(camera)).unwrap();
+            }
+            Some(-1.) => {
+                scene.mesh_mut(reflected).unwrap().transform =
+                    glam::Mat4::from_translation(glam::Vec3::new(0.125, 0., 0.));
+                engine.set_scene_object(&scene).unwrap();
+            }
+            _ => (),
+        }
+        engine.update().unwrap();
+        render.converge(ConvergeOptions::new(1)).unwrap();
+        let capture = render.offline_capture(&engine, false, true).unwrap();
+        let (_, records) = capture.reflections.unwrap();
+        let bytes = crate::hit_diagnostics::read_raw(&engine.inner.gpu, &records).unwrap();
+        let words: Vec<u32> = bytemuck::pod_collect_to_vec(&bytes);
+        let mut valid = 0;
+        for record in words[2 * 16 * 16 * 8..].chunks_exact(8) {
+            let hit_distance = f32::from_bits(record[2]);
+            let [x, y] = [f32::from_bits(record[4]), f32::from_bits(record[5])];
+            if x.abs() > 16. || y.abs() > 16. {
+                continue;
+            }
+            valid += 1;
+            assert!((hit_distance - 6.).abs() < 1e-3, "{hit_distance}");
+            assert!(
+                (x - expected_displacement.unwrap()).hypot(y) < 0.02,
+                "{x} {y}"
+            );
+        }
+        assert!(
+            if expected_displacement.is_some() {
+                valid >= 192
+            } else {
+                valid == 0
+            },
+            "{valid}"
+        );
+    }
 }

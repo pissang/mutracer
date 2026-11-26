@@ -2,7 +2,7 @@ import {queryState, pendingSceneQueryRef} from './queryPoints.wgsl.js';
 // Next-event estimation with resampled importance sampling over the light
 // candidates, followed by BSDF (or phase function) sampling, as described in
 // http://www.pbr-book.org/3ed-2018/Light_Transport_I_Surface_Reflection/Direct_Lighting.html#EstimatingtheDirectLightingIntegral
-export function createSampleMaterialWgsl(hasAnisotropyDirections = true, hasCoatNormals = false, caustics = false, researchContribution = '',photonMapping=false, channelIndependentRis=false, sharedGraphEmission=false, queryPoints=false, earlyScattering=false) {
+export function createSampleMaterialWgsl(hasAnisotropyDirections = true, hasCoatNormals = false, caustics = false, researchContribution = '',photonMapping=false, channelIndependentRis=false, sharedGraphEmission=false, queryPoints=false, earlyScattering=false, radianceOutputs=false) {
   earlyScattering &&= queryPoints;
   const pendingQuery = pendingSceneQueryRef(earlyScattering);
   const continuation: Record<string, string> = {originalFace: 'vec3f', ndv1: 'f32', ffnormal: 'vec3f', mediumSampled: 'bool'};
@@ -22,7 +22,8 @@ struct ShadowRayWork {
   maxDistance: f32,
   triangleIndex: i32,
   contribution: vec3f,
-  // RIS target of the candidate. The discrete light-selection PMF is excluded
+${radianceOutputs ? `  radianceSpecular: vec3f,
+` : ''}  // RIS target of the candidate. The discrete light-selection PMF is excluded
   // and represented by the candidate's unbiased contribution weight instead.
   risTarget: f32,
   lightSelectionPmf: f32,
@@ -37,7 +38,8 @@ fn finishDirectLight(
   isSurface: bool,
   lightSample: LightSampleRec,
   f: vec3f,
-  scatteringPdf: f32,
+${radianceOutputs ? `  fSpecular: vec3f,
+` : ''}  scatteringPdf: f32,
   shadowWork: ptr<function, ShadowRayWork>
 ) -> bool {
   (*shadowWork).valid = false;
@@ -146,7 +148,13 @@ ${hasCoatNormals ? /* wgsl */ `    if (ma.coatNormalEnabled) { normalLight = dot
     if (SPECTRAL && rtUniform.dispersionWavelengths != 1) {
       (*shadowWork).contribution = sampling_spectral_rgb_filter((*shadowWork).contribution, (*si).spectralChannel);
     }` : ''}
-    (*shadowWork).lightSelectionPmf = lightSelectionPmf;
+${radianceOutputs ? `    if (isSurface && (*path).fromEye) {
+      (*shadowWork).radianceSpecular = misWeight * (Li * fSpecular / lightPdf * (*path).beta);
+      if (SPECTRAL) {
+        (*shadowWork).radianceSpecular = sampling_spectral_rgb_filter((*shadowWork).radianceSpecular, (*si).spectralChannel);
+      }
+    }
+` : ''}    (*shadowWork).lightSelectionPmf = lightSelectionPmf;
     (*shadowWork).valid = true;
     return true;
   }
@@ -158,7 +166,8 @@ struct ScatteringWork {
   response: vec3f,
   pdf: f32,
   transmission: bool,
-}
+${radianceOutputs ? `  specularFraction: vec3f,
+` : ''}}
 
 fn sampleScattering(
   si: ptr<function, SurfaceInteraction>,
@@ -186,7 +195,8 @@ fn sampleScattering(
     var lightDir: vec3f;
     var scatteringPdf = 0.0;
     var response = vec3f(0.0);
-    var discrete = false;
+${radianceOutputs ? `    var responseSpecular = vec3f(0.0);
+` : ''}    var discrete = false;
     if (continuation) {
       var candidateUCW = 1.0;
       var valid = selected.valid;
@@ -201,15 +211,19 @@ ${queryPoints ? /* wgsl */ `      if (valid && !resume) {
         ${pendingQuery}.contribution = selected.contribution;
         ${pendingQuery}.weight = candidateUCW;
         requestSceneVisibility(selected.ray, selected.maxDistance, selected.triangleIndex, (*si).instanceIndex, 1);
-${earlyScattering ? '' : '        return result;'}
+${radianceOutputs ? `        ${pendingQuery}.radianceSpecular = selected.radianceSpecular;
+` : ''}${earlyScattering ? '' : '        return result;'}
       }
-${earlyScattering ? '' : `      if (resume && !${pendingQuery}.occluded) { (*path).li += ${pendingQuery}.contribution * ${pendingQuery}.weight; }`}
+${earlyScattering ? '' : `      if (resume && !${pendingQuery}.occluded) { (*path).li += ${pendingQuery}.contribution * ${pendingQuery}.weight;${radianceOutputs ? `
+        if ((*path).fromEye) { primarySpecularDirect += ${pendingQuery}.radianceSpecular * ${pendingQuery}.weight; }
+      ` : ''} }`}
 ` : /* wgsl */ `      if (valid && !intersectSceneShadow(selected.ray, selected.maxDistance, selected.triangleIndex, (*si).instanceIndex)) {
 ${caustics?`        var connection=*path;
         if(isSurface&&isCausticSpecular(ma)){causticAdvance(&connection,ma,dot(ffnormal,selected.ray.d)<0.0,true);}
         connection.beta=vec3f(1.0);causticHotRecord(connection,selected.contribution*candidateUCW,0u);
 `:''}        (*path).li += selected.contribution * candidateUCW;
-      }
+${radianceOutputs ? `        if ((*path).fromEye) { primarySpecularDirect += selected.radianceSpecular * candidateUCW; }
+` : ''}      }
 `}      if (!isSurface) {
         result.direction = sampling_henyey_greenstein(-(*path).ray.d,
           (*si).mediumAnisotropy, sample2D(bounceDim(PHASE_DIRECTION)));
@@ -249,7 +263,10 @@ ${caustics?`        var connection=*path;
     if (!discrete) {
       if (isSurface) {
         response = openpbr_eval_prepared(prepared, lightDir, &scatteringPdf);
-      } else {
+${radianceOutputs ? `        if ((*path).fromEye) {
+          responseSpecular = openpbr_eval_prepared_specular(prepared, lightDir);
+        }
+` : ''}      } else {
         scatteringPdf = sampling_henyey_greenstein_phase(
           dot(-(*path).ray.d, lightDir), (*si).mediumAnisotropy);
         response = vec3f(scatteringPdf);
@@ -257,11 +274,12 @@ ${caustics?`        var connection=*path;
     }
     if (continuation) {
       result.direction = lightDir; result.response = response; result.pdf = scatteringPdf;
-      return result;
+${radianceOutputs ? `      result.specularFraction = clamp(responseSpecular / max(response, vec3f(1e-20)), vec3f(0.0), vec3f(1.0));
+` : ''}      return result;
     }
     var candidate: ShadowRayWork;
     let candidateValid = finishDirectLight(si, ma, path, ffnormal, isSurface,
-      lightSample, response, scatteringPdf, &candidate);
+      lightSample, response, ${radianceOutputs ? `responseSpecular, ` : ''}scatteringPdf, &candidate);
     if (!candidateValid) { continue; }
     if (candidateCount == 1u) {
       selected = candidate;
@@ -442,14 +460,20 @@ ${hasAnisotropyDirections ? /* wgsl */ `
 ${earlyScattering ? `  ${state.refs.scattering} = ${scatter};
   ${state.refs.discrete} = ${discrete};
 ` : ''}${queryPoints ? `  }${earlyScattering ? ` else {
-    if (!${pendingQuery}.occluded) { (*path).li += ${pendingQuery}.contribution * ${pendingQuery}.weight; }
+    if (!${pendingQuery}.occluded) { (*path).li += ${pendingQuery}.contribution * ${pendingQuery}.weight;${radianceOutputs ? `
+      if ((*path).fromEye) { primarySpecularDirect += ${pendingQuery}.radianceSpecular * ${pendingQuery}.weight; }
+    ` : ''} }
   }` : ''}
   var scatteringPdf: f32;
   var scatterDir: vec3f;\n` : ''}${researchContribution}${photonMapping?/* wgsl */ `  if(!${mediumSampled}){let value=(*path).beta*photonContribution(*si,${prepared},(*path).fromEye,!(*path).causticHasReceiver);causticEstimateRecord(value,1u);(*path).li+=value;}
 ` : ''}  let scattered = ${earlyScattering ? state.refs.scattering : scatter};
 ${queryPoints ? `  if (${pendingQuery}.pending) { return; }\n` : ''}  scatterDir = scattered.direction;
   scatteringPdf = scattered.pdf;
-  if (!${mediumSampled}) {
+${radianceOutputs ? `  if ((*path).fromEye) {
+    primarySpecularFraction = scattered.specularFraction;
+    primaryContinuationStart = (*path).li;
+  }
+` : ''}  if (!${mediumSampled}) {
     let f = scattered.response;
     let isNextRefraction = scattered.transmission;
     // A rejected microfacet proposal (including failed refraction), or a

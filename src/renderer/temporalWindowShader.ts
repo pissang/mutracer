@@ -1,4 +1,5 @@
-import {temporalMetadataWGSL, temporalOverflowWGSL, temporalRadianceWGSL} from './temporalKernels.js';
+import {reflectionWindowWGSL} from './temporalReflectionShader.js';
+import {temporalMaterialWGSL, temporalMetadataWGSL, temporalOverflowWGSL, temporalRadianceWGSL} from './temporalKernels.js';
 
 export const directGeometryWGSL = /* wgsl */ `
 fn surface(x: vec2i, frame: u32, field: u32) -> vec4f {
@@ -6,8 +7,7 @@ fn surface(x: vec2i, frame: u32, field: u32) -> vec4f {
   let flags = frameFlags(x, frame);
   let hit = (flags & CENTER_HIT) != 0u;
   if (field == 0u) { return vec4f(0, 0, 0, select(0., data.w, hit)); }
-  let cap = select(255., 1., (flags & SURFACE_CAPPED) != 0u);
-  return vec4f(data.xyz, select(0., cap, hit));
+  return vec4f(data.xyz, f32(hit));
 }
 fn ident(x: vec2i, frame: u32) -> vec3u {
   return textureLoad(ids, x, i32(frame), 0).xyz;
@@ -133,6 +133,16 @@ ${temporalOverflowWGSL}
 @group(0) @binding(6) var<storage, read_write> output: array<vec4f>;
 @group(0) @binding(7) var<storage, read_write> overflow: array<Overflow>;
 @group(0) @binding(8) var<storage, read_write> rejects: array<atomic<u32>>;
+@group(0) @binding(10) var materials: texture_2d_array<u32>;
+
+${temporalMaterialWGSL}
+fn surfaceMaterial(at: vec2i) -> vec2f {
+  return unpackSurfaceMaterial(textureLoad(materials, at, i32(p.current), 0).x);
+}
+fn surfaceRadius(radius: f32, material: vec2f) -> f32 {
+  if (material.y <= METALLIC_THRESHOLD || material.x >= .24) { return radius; }
+  return (radius + 1.) * smoothstep(.05, .24, material.x) - 1.;
+}
 
 ${directGeometryWGSL}
 ${temporalRadianceWGSL}
@@ -151,7 +161,6 @@ fn tapRejection(at:vec2i, targetDepth:f32, targetNormal:vec3f, id:vec3u, revisio
   let oldPos=surface(at,p.source,0u);
   let oldNormal=surface(at,p.source,1u);
   if (!(oldPos.w>0.0001 && oldNormal.w>0.0)) { return 5u; }
-  if (!(oldNormal.w>1.0)) { return 6u; }
   if (!sameMaterial(at,p.source,id,revision)) { return 7u; }
   if (abs(oldPos.w-targetDepth)>0.015*targetDepth) { return 8u; }
   if (dot(oldNormal.xyz,targetNormal)<0.95) { return 9u; }
@@ -159,9 +168,7 @@ fn tapRejection(at:vec2i, targetDepth:f32, targetNormal:vec3f, id:vec3u, revisio
 }
 fn rejection(x:vec2i, q:vec3f, nearest:vec2i, partial:bool)->u32 {
   let pos=surface(x,p.current,0u);
-  let normal=surface(x,p.current,1u);
-  if (!(pos.w>0.0001 && normal.w>0.0)) { return 1u; }
-  if (!(normal.w>=f32(1+abs(p.delta)*select(1,2,p.symmetric==1u)))) { return 2u; }
+  if (!(pos.w>0.0001)) { return 1u; }
   if (!(all(q.xy>=vec2f(0)) && all(q.xy<=vec2f(p.size)-1.0) && q.z>0.0)) { return 3u; }
   if (!(abs(coc(pos.w,p.current)-coc(q.z,p.source))<=0.5)) { return 4u; }
   let id=ident(x,p.current);
@@ -285,29 +292,39 @@ fn recoverTap(x: vec2i, pos: vec4f, q: vec3f, original: HistoryTap) -> HistoryTa
 }
 `;
 
-const startWindowWGSL = (guides = false) => /* wgsl */ `
+const startWindowWGSL = (guides = false, reflections = false) => /* wgsl */ `
 @compute @workgroup_size(8,8) fn main(@builtin(global_invocation_id) g:vec3u) {
   if(any(g.xy>=p.size)){return;}
   let x=vec2i(g.xy); let index=g.y*p.size.x+g.x;
   if(p.stage==0u){
-    total[index]=vec4f(radiance(x,p.current),1.0);${guides ? `
+    total[index]=vec4f(radiance(x,p.current),1.0);${reflections ? `
+    let reflected = reflection(x,p.current);
+    total[index] = vec4f(total[index].rgb-reflected,1.0);
+    reflectedTotal[index] = vec4f(reflected,1.0);
+    if ((p.mode&32u)!=0u) { reflectedTotal[index+p.size.x*p.size.y]=vec4f(0); reflectedTotal[index+2u*p.size.x*p.size.y]=vec4f(0); }` : ''}${guides ? `
     albedoSum[index]=vec4f(loadAlbedo(x,p.current),0.);
     normalSum[index]=vec4f(loadNormal(x,p.current),0.);` : ''}
     return;
   }
-  if(p.stage==2u){ output[index]=vec4f(total[index].rgb/total[index].a,loadRadiance(x,p.current,p.size.x).a);${guides ? `
+  if(p.stage==2u){ output[index]=vec4f(total[index].rgb/total[index].a,loadRadiance(x,p.current,p.size.x).a);${reflections ? `
+    output[index] += vec4f(reflectedTotal[index].rgb/reflectedTotal[index].a,0.0);` : ''}${guides ? `
     albedoSum[index]/=total[index].a;
     normalSum[index]/=total[index].a;` : ''} return; }
   if(overflowMissing(x,p.current)){return;}
   let pos=surface(x,p.current,0u);
   if(pos.w<=0.0001){return;}
-  let path=traceMotion(vec2f(x),ident(x,p.current));
-  let q=path.xyz;
-  if(path.w<=.5){return;}
-  let nearest=clamp(vec2i(floor(q.xy+0.5)),vec2i(0),vec2i(p.size)-1);
   var radius=f32(p.radiusMax);
   if((p.mode & 1u)!=0u){radius=clamp(f32(p.radiusMin)+f32(p.radiusMax-p.radiusMin)*max(coc(pos.w,p.current)-2.0,0.0),f32(p.radiusMin),f32(p.radiusMax));}
-  if(abs(f32(p.delta))>radius){return;}
+  let distance = abs(f32(p.delta));
+  if (distance > radius) { return; }
+  let material = surfaceMaterial(x);
+  // A camera cut is a correspondence check, independent of radiance weights.
+  let surfaceWindow = select(radius, surfaceRadius(radius, material), (p.mode & 4u) != 0u);
+  ${reflections ? '' : 'if (distance > surfaceWindow) { return; }'}
+  let path=traceMotion(vec2f(x),ident(x,p.current));
+  let q=path.xyz;
+  if(path.w<=.5){${reflections ? ' countReflectionTap(index,1u);' : ''}return;}
+  let nearest=clamp(vec2i(floor(q.xy+0.5)),vec2i(0),vec2i(p.size)-1);
   let partial=(p.mode & 2u)!=0u;
   let reason=rejection(x,q,nearest,partial);
 `;
@@ -316,16 +333,16 @@ const startWindowWGSL = (guides = false) => /* wgsl */ `
 export const directWindowWGSL = /* wgsl */ `${windowBindingsAndGeometry}
 ${startWindowWGSL()}  if(reason!=0u || overflowMissing(nearest,p.source)){atomicAdd(&rejects[reason],1u);return;}
   atomicAdd(&rejects[0],1u);
-  var weight=(radius+1.0-abs(f32(p.delta)))/(radius+1.0);
+  var weight=(surfaceWindow+1.0-distance)/(surfaceWindow+1.0);
   if(partial){weight*=footprintWeight(x,q.xy,nearest,q.z);}
   total[index]+=vec4f(radiance(nearest,p.source)*weight,weight);
 }
 `;
 
 const windowGuidesWGSL = /* wgsl */ `
-@group(0) @binding(10) var guides: texture_2d_array<f32>;
-@group(0) @binding(11) var<storage, read_write> albedoSum: array<vec4f>;
-@group(0) @binding(12) var<storage, read_write> normalSum: array<vec4f>;
+@group(0) @binding(11) var guides: texture_2d_array<f32>;
+@group(0) @binding(12) var<storage, read_write> albedoSum: array<vec4f>;
+@group(0) @binding(13) var<storage, read_write> normalSum: array<vec4f>;
 fn loadAlbedo(at: vec2i, slot: u32) -> vec3f {
   // Captured albedo already includes the neutral white contribution of glass hits.
   return textureLoad(guides,at,i32(slot*2u),0).rgb;
@@ -338,21 +355,27 @@ fn loadNormal(at: vec2i, slot: u32) -> vec3f {
 }
 `;
 
-export const createMixedWindowWGSL = (guides: boolean) => /* wgsl */ `${windowBindingsAndGeometry}
+export const createMixedWindowWGSL = (guides: boolean, reflections = false) => /* wgsl */ `${windowBindingsAndGeometry}
 ${guides ? windowGuidesWGSL : ''}${recoverHistoryWGSL}
-${startWindowWGSL(guides)}  var tap=HistoryTap(nearest,0.);
+${reflections ? reflectionWindowWGSL(guides ? 14 : 11) : ''}${startWindowWGSL(guides, reflections)}  var tap=HistoryTap(nearest,0.);
   if(reason==0u){
     tap.support=1.;
     if(partial){tap.support=footprintWeight(x,q.xy,nearest,q.z);}
   }
-  if(partial && abs(p.delta)<=3 && (reason>=5u || (reason==0u && tap.support<1.))){
+  if(distance <= surfaceWindow && partial && abs(p.delta)<=3 && (reason>=5u || (reason==0u && tap.support<1.))){
     tap=recoverTap(x,pos,q,tap);
   }
-  if(tap.support<=0. || overflowMissing(tap.at,p.source)){atomicAdd(&rejects[reason],1u);return;}
+${reflections ? `  let accepted = distance <= surfaceWindow && tap.support>0. && !overflowMissing(tap.at,p.source);
+  if (distance <= surfaceWindow) { atomicAdd(&rejects[select(reason,0u,accepted)],1u); }
+  let tent = (radius+1.-distance)/(radius+1.);
+  var weight = 0.;
+  if (accepted) { weight = ((surfaceWindow+1.-distance)/(surfaceWindow+1.))*tap.support; }
+  let rgb = select(vec3f(0),skyCorrection(x,tap.at,pos,radiance(tap.at,p.source)),accepted);
+  accumulateReflection(x,index,tap,q,weight,rgb,tent,material.y);` : `  if(tap.support<=0. || overflowMissing(tap.at,p.source)){atomicAdd(&rejects[reason],1u);return;}
   atomicAdd(&rejects[0],1u);
-  let weight=(radius+1.-abs(f32(p.delta)))/(radius+1.)*tap.support;
+  let weight=(surfaceWindow+1.-distance)/(surfaceWindow+1.)*tap.support;
   let rgb=skyCorrection(x,tap.at,pos,radiance(tap.at,p.source));
-  total[index]+=vec4f(rgb*weight,weight);${guides ? `
+  total[index]+=vec4f(rgb*weight,weight);` }${guides ? `
   if ((p.mode & 8u)!=0u) {
     albedoSum[index]+=vec4f(loadAlbedo(tap.at,p.source)*weight,0.);
     normalSum[index]+=vec4f(loadNormal(tap.at,p.source)*weight,0.);

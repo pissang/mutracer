@@ -84,6 +84,16 @@ fn shared_postprocess_sources_validate_and_match_js() {
         .validate(&module)
         .unwrap();
     }
+    for source in sources.temporal.values() {
+        let module = naga::front::wgsl::parse_str(source)
+            .unwrap_or_else(|error| panic!("{}", error.emit_to_string(source)));
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap_or_else(|error| panic!("{}", error.emit_to_string(source)));
+    }
     let defaults = crate::api::EasuOptions::default();
     assert_eq!(
         sources.easu_detail[..4],

@@ -693,6 +693,7 @@ impl Session {
                     self.renderer = Some((settings, Renderer::new(settings)?));
                 }
                 let renderer = &mut self.renderer.as_mut().unwrap().1;
+                config.configure_capture(&renderer.render, settings.denoise)?;
                 reply(
                     writer,
                     json!({"type":"progress","id":id,"frame":frame,"samples":0,"targetSamples":settings.spp}),

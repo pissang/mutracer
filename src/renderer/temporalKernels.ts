@@ -4,9 +4,27 @@ export const temporalOverflowEntryBytes = 32;
 export const temporalFlagsWGSL = /* wgsl */ `
 const GUIDE_MASK = 65535u;
 const CENTER_HIT = 1u << 18u;
-const SURFACE_CAPPED = 1u << 19u;
 const HDR_OVERFLOW = 1u << 20u;
 const HDR_MISSING = 1u << 21u;
+`;
+
+// The material history texel contains two unsigned normalized 16-bit fields.
+export const temporalMaterialFormat = 'r32uint';
+export const temporalMaterialBytes = 4;
+export const temporalMaterialWGSL = /* wgsl */ `
+const METALLIC_THRESHOLD = 0.10;
+fn packSurfaceMaterial(roughness: vec2f) -> u32 {
+  let r = select(0., roughness.x, abs(roughness.x) <= 3.402823e38);
+  // The scale gives .10 an exact code. Preserve the threshold classification
+  // when a metallic value slightly above it rounds down to the same code.
+  let encodedMetallic = u32(round(clamp(roughness.y, 0., 1.) * 65530.));
+  let metallic = select(min(encodedMetallic, 6553u), max(encodedMetallic, 6554u),
+    roughness.y > METALLIC_THRESHOLD);
+  return u32(round(clamp(r, 0., 1.) * 65535.)) | (metallic << 16u);
+}
+fn unpackSurfaceMaterial(record: u32) -> vec2f {
+  return vec2f(f32(record & 65535u) / 65535., f32(record >> 16u) / 65530.);
+}
 `;
 
 export const temporalMetadataWGSL = /* wgsl */ `${temporalFlagsWGSL}

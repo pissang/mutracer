@@ -142,6 +142,7 @@ function makeWGPUAccumulationTarget(
 
   const targetKey = {};
   let execution: TraceSettings | undefined;
+  let temporalReflections = false;
 
   let resolvedSamples = 0;
   let resolvedHasShadowCatcher = false;
@@ -972,7 +973,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
 
   function _applyRenderResolution() {
     if (!screenWidth || !screenHeight) return;
-    rayTracePass.useTarget(targetKey);
+    rayTracePass.useTarget(targetKey, temporalReflections);
     const scale = 1;
     const nextRenderWidth = roundUp(
       Math.max(1, Math.round(screenWidth * scale)),
@@ -1231,7 +1232,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
 
   async function captureTemporalInput(
     requestedAovs: readonly import('./aov.js').AovKind[],
-    capture: (input: import('../Render.js').DenoiseInput) => Promise<void>
+    capture: (input: import('./accumulationTarget.js').TemporalCaptureInput) => Promise<void>
   ) {
     if (disposed || !presentationTexture) throw new Error('Temporal capture requires a complete render.');
     if (requestedAovs.length && (aov.width !== renderWidth || aov.height !== renderHeight)) {
@@ -1243,7 +1244,14 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     const output = scratch.get('Temporal capture output', () => new WGPUScratchBuffer(device)).get(renderWidth * renderHeight * 16, true);
     const aovs = requestedAovs.length ? aov.snapshot(requestedAovs) : undefined;
     try {
-      await capture({device, width: renderWidth, height: renderHeight, color, albedo, normal, output, aovs});
+      const buffers = rayTracePass.getOutputBuffer();
+      if (temporalReflections && (!buffers.reflectedRadiance || !aov.center || !aov.reflections)) {
+        throw new Error('Temporal capture requires converged reflected radiance and center-ray records.');
+      }
+      const reflection = temporalReflections ? {
+        radiance: buffers.reflectedRadiance!, albedo: buffers.albedo, records: aov.center!, samples: sampleCount
+      } : undefined;
+      await capture({device, width: renderWidth, height: renderHeight, color, albedo, normal, output, aovs, reflection});
     } finally {
       if (aovs) void device.queue.onSubmittedWorkDone().catch(() => undefined).then(() => aov.releaseSnapshot(aovs));
     }
@@ -1617,7 +1625,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
   }
 
   function activate() {
-    rayTracePass.useTarget(targetKey);
+    rayTracePass.useTarget(targetKey, temporalReflections);
     if (renderWidth && renderHeight) rayTracePass.setSize(renderWidth, renderHeight, screenWidth / screenHeight);
     if (execution) {
       rayTracePass.setClamping(execution.clamping);
@@ -1628,7 +1636,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
   function prepareParityInput(width: number, height: number) {
     cancelDenoise(); clearDenoisedOutput();
     setSize(width, height);
-    rayTracePass.useTarget(targetKey);
+    rayTracePass.useTarget(targetKey, temporalReflections);
     rayTracePass.setSize(renderWidth, renderHeight, screenWidth / screenHeight);
     return sampledOutput = rayTracePass.getOutputBuffer();
   }
@@ -1644,6 +1652,10 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
   }
 
   return {
+    setTemporalReflections(enabled) {
+      if (temporalReflections !== enabled) { aov.reset(); invalidateTilePrediction(); }
+      temporalReflections = enabled;
+    },
     captureTemporalInput,
     composeExternalDenoiseInput,
     setExternalDenoisedOutput,

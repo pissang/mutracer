@@ -20,7 +20,7 @@ import { OPENPBR_METAL_ENERGY_LUT_ROW, OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW, OPE
 import type {MaterialShaderHooks} from '../materialShaderHooks.js';
 const LOBE_INDICES = [0, 1, 2, 3, 4, 5, 6];
 
-export function createOpenPbrBsdfWgsl(hasAnisotropyDirections = true, hasCoatNormals = false, materialHooks: MaterialShaderHooks = {}) {
+export function createOpenPbrBsdfWgsl(hasAnisotropyDirections = true, hasCoatNormals = false, materialHooks: MaterialShaderHooks = {}, radianceOutputs = false) {
   // Preserve the existing member position: bit 0 is texture/rotation; bit 1 is MaterialX.
   const directionFlags = !!(materialHooks.graph || materialHooks.materialXNormals);
   return /* wgsl */ `
@@ -1121,11 +1121,11 @@ ${hasCoatNormals ? /* wgsl */ `
     var response = vec3f(0.0);
     *pdf = 0.0;
     var lobePdf = 0.0;
-    let allowAll = allowedLobe < 0;
-    let allowFuzz = allowAll | (allowedLobe == OPENPBR_LOBE_FUZZ);
-    let allowCoat = allowAll | (allowedLobe == OPENPBR_LOBE_COAT);
-    let allowMetal = allowAll | (allowedLobe == OPENPBR_LOBE_METAL);
-    let allowSpecular = allowAll | (allowedLobe == OPENPBR_LOBE_SPECULAR);
+    let allowAll = ${radianceOutputs ? 'allowedLobe == -1' : 'allowedLobe < 0'};
+    let allowFuzz = allowAll${radianceOutputs ? ' | (allowedLobe == -2)' : ''} | (allowedLobe == OPENPBR_LOBE_FUZZ);
+    let allowCoat = allowAll${radianceOutputs ? ' | (allowedLobe == -2)' : ''} | (allowedLobe == OPENPBR_LOBE_COAT);
+    let allowMetal = allowAll${radianceOutputs ? ' | (allowedLobe == -2)' : ''} | (allowedLobe == OPENPBR_LOBE_METAL);
+    let allowSpecular = allowAll${radianceOutputs ? ' | (allowedLobe == -2)' : ''} | (allowedLobe == OPENPBR_LOBE_SPECULAR);
     let allowTransmission = allowAll | (allowedLobe == OPENPBR_LOBE_TRANSMISSION);
     let allowDiffuse = allowAll | (allowedLobe == OPENPBR_LOBE_DIFFUSE);
     let allowSubsurface = allowAll | (allowedLobe == OPENPBR_LOBE_SUBSURFACE);
@@ -1453,7 +1453,15 @@ fn openpbr_eval_prepared_area(
 
 
 
-fn openpbr_eval(
+${radianceOutputs ? `fn openpbr_eval_prepared_specular(
+    prepared: OpenPbrPreparedBsdf,
+    lightDirection: vec3f,
+) -> vec3f {
+    var ignoredPdf = 0.0;
+    return openpbr_eval_prepared_lobe(prepared, lightDirection, -2, &ignoredPdf);
+}
+
+` : ''}fn openpbr_eval(
     tangent: vec3f,
     material: OpenPbrResolvedMaterial,
     viewDirection: vec3f,

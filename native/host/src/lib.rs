@@ -780,7 +780,10 @@ fn build_pipeline(
 /// One render's view of a shared scene (S2): its camera and trace uniforms,
 /// accumulation outputs 10..13, the FRAME/OUTPUT groups binding them, and the
 /// pipeline of its pattern/bevel-sample variant when it differs from the scene's.
+const REFLECTED_RADIANCE_BINDING: u32 = 14;
+
 struct Target {
+    reflected_radiance: Option<wgpu::Buffer>,
     query_guard: Option<query_guard::Guard>,
     workgroup_size: u32,
     caustic_sequence_offset: u32,
@@ -1307,6 +1310,7 @@ impl GpuScene {
                 frames: runtime::frames(options.bounces, options.seed)?,
                 sampling_batch: sampling_batch::for_target(&gpu, use_hwrt, &display_trace, false),
                 frame_inputs: None,
+                reflected_radiance: None,
                 #[cfg(test)]
                 dispatch_audit: (std::env::var_os("MUTRACER_NATIVE_DISPATCH_AUDIT").as_deref()
                     == Some(std::ffi::OsStr::new("1")))
@@ -1503,6 +1507,20 @@ impl GpuScene {
                     false,
                 ));
         }
+        if packet.capture_reflections {
+            target_scene.bind_groups[layout::group::OUTPUT].layout.push(
+                wgpu::BindGroupLayoutEntry {
+                    binding: REFLECTED_RADIANCE_BINDING,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            );
+        }
         let (pipeline, layouts, aov_shader, aov_pipelines, query_guard) = match packet.shader {
             Some(source) => {
                 let (compiled, _) = compile_pipeline(
@@ -1612,6 +1630,16 @@ impl GpuScene {
                 .finish()
                 .verify_stage(&self.gpu, "caustic target initialization")?;
         }
+        let reflected_radiance = packet.capture_reflections.then(|| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Reflected radiance accumulation"),
+                size: pixels * 16,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        });
         let group = |index: usize, entries: &[(usize, &wgpu::Buffer)]| {
             let mut entries: Vec<_> = entries
                 .iter()
@@ -1621,6 +1649,12 @@ impl GpuScene {
                 })
                 .collect();
             if index == layout::group::OUTPUT {
+                if let Some(buffer) = &reflected_radiance {
+                    entries.push(wgpu::BindGroupEntry {
+                        binding: REFLECTED_RADIANCE_BINDING,
+                        resource: buffer.as_entire_binding(),
+                    });
+                }
                 if let Some(check) = caustics.as_ref().and_then(|c| c.query_check.as_ref()) {
                     entries.extend(check.entries());
                 } else if let Some(guard) = &query_guard {
@@ -1675,6 +1709,7 @@ impl GpuScene {
             caustics.is_some(),
         );
         Ok(Target {
+            reflected_radiance,
             query_guard,
             workgroup_size,
             caustic_sequence_offset,
@@ -1920,6 +1955,9 @@ impl GpuScene {
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
         for id in layout::resource::COLOR..=layout::resource::SHADOW_CATCHER {
             encoder.clear_buffer(&target.buffers[&id], 0, None);
+        }
+        if let Some(buffer) = &target.reflected_radiance {
+            encoder.clear_buffer(buffer, 0, None);
         }
         #[cfg(test)]
         if let Some(audit) = &target.dispatch_audit {

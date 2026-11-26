@@ -72,6 +72,15 @@ impl Config {
             Cut::Time { time } => previous_time < *time && *time <= current_time,
         })
     }
+    pub fn configure_capture(&self, render: &api::Render, denoise: Denoise) -> Result<()> {
+        let mut settings = render.settings().map_err(gpu)?;
+        let enabled = denoise == Denoise::Temporal && self.options.reflection_motion;
+        if settings.capture_reflections != enabled {
+            settings.capture_reflections = enabled;
+            render.set_settings(settings).map_err(gpu)?;
+        }
+        Ok(())
+    }
     pub fn start(&self, engine: &api::Engine) -> Result<api::TemporalDenoiser> {
         let library = render_settings::denoiser_library(Denoise::Temporal, "/output/denoise")?;
         api::TemporalDenoiser::new(engine, self.options, api::TemporalSpatial::Oidn(library))
@@ -189,6 +198,15 @@ mod tests {
         let settings: Config = serde_json::from_str(r#"{"accumulateGuides":true}"#).unwrap();
         assert!(settings.options.accumulate_guides);
         assert!(serde_json::from_str::<Config>(r#"{"accumulateGuides":null}"#).is_err());
+    }
+
+    #[test]
+    fn parses_reflection_motion_in_temporal_settings() {
+        let defaults: Config = serde_json::from_str("{}").unwrap();
+        let enabled: Config = serde_json::from_str(r#"{"reflectionMotion":true}"#).unwrap();
+        assert!(!defaults.options.reflection_motion);
+        assert!(enabled.options.reflection_motion);
+        assert!(serde_json::from_str::<Config>(r#"{"reflectionMotion":null}"#).is_err());
     }
 
     #[test]
