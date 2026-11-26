@@ -23,7 +23,11 @@ export interface TemporalDenoiserOptions {
    * and reduce sliding reflection trails on smooth, opaque nonmetals. Default `false`.
    */
   reflectionMotion?: boolean;
-  /** History invalidation policy. Default `'auto'`. */
+  /**
+   * Default `'auto'`. Offline light edits can reduce history locally, while
+   * interactive mode splits history on light edits. `'manual'` uses explicit
+   * cuts and frame gaps in place of automatic invalidation.
+   */
   historyInvalidation?: 'auto' | 'manual';
   /** GPU-byte budget for temporal history and scratch. Default `undefined` (full plan). */
   memoryBudget?: number;

@@ -84,11 +84,13 @@ pub(super) struct Capture {
     pub display: DisplaySettings,
     pub revisions: Vec<[u32; 2]>,
     pub scene_key: u64,
+    pub lighting_key: u64,
     pub guides: [wgpu::Buffer; 9],
 }
 struct State {
     frame: u32,
     epoch: u64,
+    lighting_revision: u64,
     samples: u32,
     display: DisplaySettings,
     revisions: Vec<[u32; 2]>,
@@ -112,6 +114,8 @@ pub struct TemporalDenoiser {
     output: u32,
     epoch: u64,
     previous: Option<(u32, u64, u64)>,
+    previous_lighting: Option<u64>,
+    lighting_revision: u64,
     flushing: bool,
     failed: bool,
 }
@@ -139,6 +143,8 @@ impl TemporalDenoiser {
             output: 0,
             epoch: 0,
             previous: None,
+            previous_lighting: None,
+            lighting_revision: 0,
             flushing: false,
             failed: false,
         })
@@ -339,6 +345,10 @@ impl TemporalDenoiser {
             }
         }
         self.previous = Some((index, capture.scene_key, self.epoch));
+        if auto && self.previous_lighting != Some(capture.lighting_key) {
+            self.lighting_revision += 1;
+            self.previous_lighting = Some(capture.lighting_key);
+        }
         let custom = matches!(self.spatial, TemporalSpatial::Custom(_))
             .then(|| [3, 7].map(|k| Resource::Buffer(guides[k].buffer().clone())));
         self.frames.insert(
@@ -346,6 +356,7 @@ impl TemporalDenoiser {
             State {
                 frame: index,
                 epoch: self.epoch,
+                lighting_revision: self.lighting_revision,
                 samples: capture.samples,
                 display: capture.display,
                 revisions,
@@ -386,11 +397,17 @@ impl TemporalDenoiser {
                 GpuDevice::wait(&p.gpu.device)?;
             }
             let start = std::time::Instant::now();
-            p.window(i, i, 0, true);
+            p.window(i, i, 0, true, false);
             for j in neighbors {
-                p.window(i, j, 1, true);
+                p.window(
+                    i,
+                    j,
+                    1,
+                    true,
+                    self.frames[&i].lighting_revision != self.frames[&j].lighting_revision,
+                );
             }
-            p.window(i, i, 2, true);
+            p.window(i, i, 2, true, false);
             if profile {
                 GpuDevice::wait(&p.gpu.device)?;
                 eprintln!(
@@ -465,9 +482,13 @@ impl TemporalDenoiser {
                 self.frames.get_mut(&i).unwrap().spatial.take().unwrap()
             } else {
                 let current = &self.frames[&i].revisions;
+                // The display-space passes do not have a radiance confidence test.
                 let neighbors = self
                     .neighbors(i, self.window, p.plan.post_radius)
                     .into_iter()
+                    .filter(|j| {
+                        self.frames[&i].lighting_revision == self.frames[j].lighting_revision
+                    })
                     .map(|j| {
                         let old = &self.frames[&j].revisions;
                         let changed = current
@@ -529,6 +550,8 @@ impl TemporalDenoiser {
         self.output = 0;
         self.frames.clear();
         self.previous = None;
+        self.previous_lighting = None;
+        self.lighting_revision = 0;
         self.flushing = false;
         self.epoch = 0;
         self.passes = None;
@@ -538,7 +561,7 @@ impl TemporalDenoiser {
     }
 }
 
-pub(super) fn scene_revisions(scene: &[u8]) -> (u64, Vec<[u32; 2]>) {
+pub(super) fn scene_revisions(scene: &[u8]) -> (u64, u64, Vec<[u32; 2]>) {
     use crate::layout::{header as h, light, material as m, mesh};
     use std::hash::{DefaultHasher, Hash, Hasher};
     // Inspect only the identity, lighting and material tables of a committed descriptor.
@@ -585,15 +608,20 @@ pub(super) fn scene_revisions(scene: &[u8]) -> (u64, Vec<[u32; 2]>) {
     (word(h::QUALITY_FLAGS) & 4).hash(&mut global);
     table(h::BACKGROUND_COLOR, 6).hash(&mut global);
     let lights = word(h::LIGHT_COUNT);
-    table(word(h::LIGHT_OFFSET), lights * light::WORDS).hash(&mut global);
+    let mut lighting = DefaultHasher::new();
+    table(word(h::LIGHT_OFFSET), lights * light::WORDS).hash(&mut lighting);
     for light_index in 0..lights {
         let at = word(h::LIGHT_OFFSET) + light_index * light::WORDS;
         word(at + light::TEXTURE)
             .checked_sub(1)
             .and_then(|i| textures.get(i))
-            .hash(&mut global);
+            .hash(&mut lighting);
     }
-    for i in 0..word(h::MESH_COUNT) {
+    let meshes = word(h::MESH_COUNT);
+    if word(h::MESH_AOV_IDS) != 0 {
+        table(word(h::MESH_AOV_IDS), meshes).hash(&mut global);
+    }
+    for i in 0..meshes {
         let offset = word(h::MESH_OFFSET) + i * mesh::WORDS;
         word(offset + mesh::FLAGS).hash(&mut global);
     }
@@ -644,7 +672,7 @@ pub(super) fn scene_revisions(scene: &[u8]) -> (u64, Vec<[u32; 2]>) {
         ]);
     }
     revisions.sort_unstable();
-    (global.finish(), revisions)
+    (global.finish(), lighting.finish(), revisions)
 }
 
 #[cfg(test)]

@@ -182,9 +182,13 @@ returns `None`. Each `OfflineFrame` keeps its original index. Read the
 denoised image with `read_pixels(false)` or pre-spatial HDR with
 `read_pixels(true)`.
 
-Call `cut()` before the first input of a new segment. A full output queue
-holds four frames. The effective `plan()` and `latency()` are available after
-the first push. Wider windows delay output and use more GPU memory. Smooth
+Call `cut()` before the first input of a new segment or at a known lighting
+jump that must share no history. With automatic history invalidation, light
+edits can reduce history locally.
+
+A full output queue holds four frames. The effective `plan()` and `latency()`
+are available after the first push. Wider windows delay output and use more
+GPU memory. Smooth
 metals blend in more surface history as roughness increases. Near mirrors
 still use mostly the current frame. Moving reflections and shadows can leave
 trails, and newly visible surfaces have less history. The

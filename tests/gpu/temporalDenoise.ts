@@ -194,6 +194,7 @@ async function run() {
     const floatingPostResult = await exerciseFloatingPostCodes(device);
     const materialAcceptanceResult = await exerciseMaterialAcceptance(device);
     const glossyAcceptance = await exerciseGlossyAcceptance(device);
+    await exerciseLightingConfidence(device);
     const offlineCounts = await exerciseOfflineSampleWeights(device);
     const retainedBaseSamples = await exerciseRetainedBaseSamples(engine);
     const forwardSeed = await exerciseForwardMotionSeed(device);
@@ -464,6 +465,55 @@ async function exerciseMaterialAcceptance(device: GPUDevice) {
     check(tapered === pixels, 'A rougher metal lost its short surface window');
     check(rough === pixels, 'A rough metal lost its full surface window');
     return {materialId: 212, diffuse, nearMirror, tapered, rough};
+  } finally { window.dispose(); }
+}
+
+async function exerciseLightingConfidence(device: GPUDevice) {
+  const width = 32, height = 16;
+  const projection = new Camera({projection: 'perspective', fov: 45}).getProjectionMatrix(width / height);
+  const meta = {viewProjection: projection, projection, apertureRadius: 0, focusDistance: 1};
+  const window = await createTestWindow(device, width, height, 2);
+  const fill = (value: number[]) => {
+    const data = new Float32Array(width * height * 4);
+    for (let i = 0; i < data.length; i += 4) data.set(value, i);
+    return data;
+  };
+  try {
+    for (const frame of [0, 1]) {
+      const hdr = fill([1, 1, 1, 1]);
+      const id = new Uint32Array(width * height * 4);
+      for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+        const i = (y * width + x) * 4;
+        id.set([1, 2, x < 27 ? 3 : 4, 0], i);
+        if (x < 10) {
+          // Opposing sample fluctuations cancel in the patch mean.
+          const radiance = (y % 4 < 2) === (frame === 0) ? 1.125 : .875;
+          hdr.set([radiance, radiance, radiance, 1], i);
+        } else if (x < 20) {
+          const step = frame === 0 ? 4 : 1;
+          hdr.set([step, step, step, 1], i);
+        } else if (x < 27 && frame === 0) {
+          // Preserve luminance while changing chromaticity.
+          hdr.set([2, 1 - .2126 / .7152, 1, 1], i);
+        }
+      }
+      await window.upload(frame, meta, {hdr, id, centerDepth: fill([1, 0, 0, 1]),
+        centerNormal: fill([0, 0, 1, 1]), roughness: fill([.5, 0, 0, 1]),
+        motion: fill([0, 0, 1, 3]), albedo: fill([.5, .5, .5, 1])});
+    }
+    for (const frame of [0, 1]) {
+      const neighbor = [1 - frame];
+      const resolve = async (revisions: number[]) =>
+        new Float32Array(await window.read(await window.filter(frame, neighbor, true, 1, 1, revisions)));
+      const unchecked = await resolve([0, 0]);
+      const checked = await resolve([0, 1]);
+      const red = (x: number) => (8 * width + x) * 4;
+      check(checked[red(5)] === unchecked[red(5)], 'Noise reduced unchanged lighting history');
+      check(checked[red(15)] === (frame === 0 ? 4 : 1), 'An intensity step retained stale history');
+      check(checked[red(23)] === (frame === 0 ? 2 : 1), 'A chromatic step retained stale history');
+      check(checked[red(28)] === 1, 'A step reached across a material boundary');
+      check(unchecked[red(15)] !== checked[red(15)], 'Matching light revisions did not bypass the lighting check');
+    }
   } finally { window.dispose(); }
 }
 

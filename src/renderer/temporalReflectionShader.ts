@@ -298,8 +298,10 @@ fn accumulateReflection(
   let fade = mix(1.,smoothstep(.05,.20,roughness),smoothstep(.25,2.,select(slip,length(parallax),glossyDielectric)));
   let fallback = select(1.,fade,isMetal || glossyDielectric);
   let geometricFallback = mix(1.,(1.-amount)*(1.-mismatch)*fallback,trust);
-  let surfaceWeight = select(weight*min(surfaceConfidence,geometricFallback),0.,validation.y==OPTICAL_SILHOUETTE);
-  let virtualW = tent*amount*trust;
+  var surfaceWeight = select(weight*min(surfaceConfidence,geometricFallback),0.,validation.y==OPTICAL_SILHOUETTE);
+  if (surfaceWeight > 0.) { surfaceWeight *= lightingConfidence(x,tap.at,true); }
+  var virtualW = tent*amount*trust;
+  if (virtualW > 0.) { virtualW *= lightingConfidence(x,virtualTap,true); }
   total[index] += vec4f((surfaceRgb-reflectedSurface)*weight,weight);
   reflectedTotal[index] += vec4f(reflectedSurface*surfaceWeight +
     reflection(virtualTap,p.source)*virtualW,surfaceWeight+virtualW);

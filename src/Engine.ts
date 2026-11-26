@@ -171,6 +171,7 @@ export default class Engine {
   private _cameraFields: unknown[] = [];
   private _sceneRevision = 0;
   private _temporalGlobalRevision = 0;
+  private _temporalLightRevision = 0;
   private _temporalMaterialRevisionVersion = 0;
   private _temporalMaterialRevisions = new Map<number, number>();
   private _temporalMembershipScene?: Scene;
@@ -259,7 +260,8 @@ export default class Engine {
       const changes = this._sceneChangeDetector.detect(this.scene);
       const membershipChanged=this._temporalMembershipScene!==this.scene || this._temporalMeshOrder.length!==this.scene.meshes.length ||
         this._temporalMeshOrder.some((mesh,index)=>mesh!==this.scene!.meshes[index]);
-      if (changes.lights || changes.background || changes.visibility.length || membershipChanged) this._temporalGlobalRevision++;
+      if (changes.lights) this._temporalLightRevision++;
+      if (changes.background || changes.visibility.length || membershipChanged) this._temporalGlobalRevision++;
       if (changes.materials.length) {
         this._temporalMaterialRevisionVersion++;
         for (const material of changes.materials) {
@@ -675,6 +677,7 @@ export default class Engine {
   /** @internal */ get _initializationError() { return this._pipelineInitError; }
   /** @internal */ get _ready() { return !!this._pipeline && this._uploadedRevision === this._sceneRevision && !!this._committedScene && !!this._committedCamera && !this._disposed; }
   /** @internal */ get _temporalRevision() { return this._temporalGlobalRevision; }
+  /** @internal */ get _temporalLightingRevision() { return this._temporalLightRevision; }
   /** @internal */ get _temporalMaterialRevisionVersionValue() { return this._temporalMaterialRevisionVersion; }
   /** @internal */ get _temporalMaterialRevisionEntries(): readonly (readonly [number, number])[] {
     const entries = new Map<number, number>();

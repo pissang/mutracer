@@ -38,7 +38,8 @@ pub struct TemporalOptions {
     /// reflection trails on smooth, opaque nonmetals. Default false.
     /// Enable [crate::api::RenderSettings::capture_reflections] on input renders.
     pub reflection_motion: bool,
-    /// Default Auto. Manual uses explicit cuts and frame gaps only.
+    /// Default Auto. Light edits can reduce history locally.
+    /// Manual uses explicit cuts and frame gaps only.
     pub history_invalidation: HistoryInvalidation,
     /// Maximum temporal GPU bytes. Default None selects the full plan.
     pub memory_budget: Option<u64>,

@@ -235,6 +235,55 @@ fn footprintWeight(x:vec2i,q:vec2f,nearest:vec2i,targetDepth:f32)->f32 {
 }
 `;
 
+const lightingConfidenceWGSL = (reflections: boolean) => /* wgsl */ `
+fn lightingPatchMatches(at: vec2i, frame: u32, id: vec3u, revision: u32, center: vec4f) -> bool {
+  if (any(at < vec2i(0)) || any(at >= vec2i(p.size))) { return false; }
+  let flags = frameFlags(at,frame);
+  if ((flags & (CENTER_HIT | HDR_MISSING)) != CENTER_HIT || ((flags >> 2u) & 255u) < 250u) { return false; }
+  let key = textureLoad(ids,at,i32(frame),0);
+  if (any(key.xyz != id) || key.w != revision) { return false; }
+  let guide = textureLoad(surfaces,at,i32(frame*2u),0);
+  return dot(guide.xyz,center.xyz) >= .97 && abs(guide.w-center.w) < .025*center.w;
+}
+
+fn lightingSignal(at: vec2i, frame: u32, reflectedSignal: bool) -> vec3f {
+  ${reflections ? 'if (reflectedSignal) { return reflection(at,frame); }' : ''}
+  return radiance(at,frame);
+}
+
+fn lightingConfidence(x: vec2i, y: vec2i, reflectedSignal: bool) -> f32 {
+  if ((p.mode & 16u) == 0u) { return 1.; }
+  let id = ident(x,p.current);
+  let revision = revisionAt(x,p.current);
+  let current = vec4f(surface(x,p.current,1u).xyz,surface(x,p.current,0u).w);
+  let source = vec4f(surface(y,p.source,1u).xyz,surface(y,p.source,0u).w);
+  let luma = vec3f(.2126,.7152,.0722);
+  var sum = vec3f(0);
+  var squares = vec3f(0);
+  var count = 0.;
+  // Paired differences cancel static texture structure. Normalize each pair
+  // by its joint luminance to bound outliers without discarding chromatic changes.
+  for (var dy = -4; dy <= 4; dy += 2) { for (var dx = -4; dx <= 4; dx += 2) {
+    let offset = vec2i(dx,dy);
+    let a = x+offset;
+    let b = y+offset;
+    if (!lightingPatchMatches(a,p.current,id,revision,current) ||
+        !lightingPatchMatches(b,p.source,id,revision,source)) { continue; }
+    let ca = lightingSignal(a,p.current,reflectedSignal);
+    let cb = lightingSignal(b,p.source,reflectedSignal);
+    let difference = clamp((cb-ca)/max(.02,dot(ca+cb,luma)),vec3f(-1),vec3f(1));
+    sum += difference;
+    squares += difference*difference;
+    count += 1.;
+  }}
+  if (count < 4.) { return 0.; }
+  let mean = sum/count;
+  let sigma = sqrt(max(vec3f(0),squares/count-mean*mean)/(count-1.));
+  let evidence = abs(mean)-.75*sigma;
+  return 1.-smoothstep(.015,.055,max(evidence.x,max(evidence.y,evidence.z)));
+}
+`;
+
 const recoverHistoryWGSL = /* wgsl */ `
 // Jittered hit coverage and square-root albedo share the motion flag lane.
 // The center-ray identity remains the only authority for accepting a surface.
@@ -404,7 +453,7 @@ fn neighborSampleWeight(x: vec2i, tap: HistoryTap) -> f32 {
   return select(1., sampleWeight(tap.at,p.source),
     hitCoverage(x,p.current)>=1. && hitCoverage(tap.at,p.source)>=1. && tap.support>=1.);
 }
-` : ''}${reflections ? reflectionWindowWGSL(guides ? 14 : 11) : ''}${startWindowWGSL(guides, reflections, sampleTileSize)}  var tap=HistoryTap(nearest,0.);
+` : ''}${reflections ? reflectionWindowWGSL(guides ? 14 : 11) : ''}${lightingConfidenceWGSL(reflections)}${startWindowWGSL(guides, reflections, sampleTileSize)}  var tap=HistoryTap(nearest,0.);
   if(reason==0u){
     tap.support=1.;
     if(partial){tap.support=footprintWeight(x,q.xy,nearest,q.z);}
@@ -416,13 +465,13 @@ ${reflections ? `  let accepted = distance <= surfaceWindow && tap.support>0. &&
   if (distance <= surfaceWindow) { atomicAdd(&rejects[select(reason,0u,accepted)],1u); }
   let tent = (radius+1.-distance)/(radius+1.);
   var weight = 0.;
-  if (accepted) { weight = ((surfaceWindow+1.-distance)/(surfaceWindow+1.))*tap.support${sampleTileSize ? "*neighborSampleWeight(x,tap)" : ""}; }
+  if (accepted) { weight = ((surfaceWindow+1.-distance)/(surfaceWindow+1.))*tap.support${sampleTileSize ? "*neighborSampleWeight(x,tap)" : ""}*lightingConfidence(x,tap.at,false); }
   let rgb = select(vec3f(0),skyCorrection(x,tap.at,pos,radiance(tap.at,p.source)),accepted);
   var surfaceConfidence = 1.;
   if (accepted) { surfaceConfidence = dielectricSurfaceConfidence(x,q.xy,material); }
   accumulateReflection(x,index,tap,q,weight,rgb,tent,material.y,surfaceConfidence,hasGlossyDielectric(material));` : `  if(tap.support<=0. || overflowMissing(tap.at,p.source)){atomicAdd(&rejects[reason],1u);return;}
   atomicAdd(&rejects[0],1u);
-  let weight=(surfaceWindow+1.-distance)/(surfaceWindow+1.)*tap.support${sampleTileSize ? '*neighborSampleWeight(x,tap)' : ''};
+  let weight=(surfaceWindow+1.-distance)/(surfaceWindow+1.)*tap.support${sampleTileSize ? '*neighborSampleWeight(x,tap)' : ''}*lightingConfidence(x,tap.at,false);
   let rgb=skyCorrection(x,tap.at,pos,radiance(tap.at,p.source));
   total[index]+=vec4f(rgb*weight,weight);` }${guides ? `
   if ((p.mode & 8u)!=0u) {

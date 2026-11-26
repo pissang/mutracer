@@ -57,7 +57,7 @@ independent noise. The example advances by its samples-per-frame count.
 | `denoiser` | OIDN `cleanAuxLarge` | Spatial filter applied to the accumulated frame. Accepts OIDN options, a custom denoiser, or `null`. |
 | `reflectionMotion` | `false` | Follows virtual-image motion on flat reflectors and reduces sliding reflection trails on smooth, opaque nonmetals in the offline window. |
 | `accumulateGuides` | `false` | Averages OIDN albedo and normal guides across the offline window when the history radius is positive to reduce flicker. |
-| `historyInvalidation` | `'auto'` | Splits history on detected cuts and lighting or visibility changes. Material edits invalidate history on the affected surfaces. Use `'manual'` to control cuts in scenes with continuously changing light. |
+| `historyInvalidation` | `'auto'` | Splits history on detected cuts, background, visibility and scene membership changes. Material edits invalidate history on affected surfaces. Light edits can reduce offline history locally and split interactive history. `'manual'` uses explicit cuts and frame gaps. |
 | `memoryBudget` | Full plan | GPU bytes for temporal history and scratch. A smaller budget can reduce the effective radii in `plan`. |
 
 Smooth metals blend in more surface history as roughness increases. Near
@@ -89,12 +89,7 @@ Other renderer and OIDN allocations are additional.
   returns the windowed linear HDR before the spatial filter.
 - History needs valid correspondence across the frames it traverses. Surfaces
   that become hidden can have fewer usable samples and retain more noise.
-- The history window averages changes in lighting on surfaces that stay
-  visible. Moving shadows, including shadows cast by a deforming object onto
-  itself, can have softer edges and leave faint trails. Changing reflections
-  and refraction can also leave trails. Use per-frame OIDN on
-  `Render` for the sharpest edges in these shots. For temporal denoising,
-  `historyRadius: 2` reduces trails, with edges still softer than per-frame
-  OIDN. For abrupt lighting changes, call `cut()` at the boundary or use
-  `historyInvalidation: 'auto'` for detected changes. Continuous lighting
-  animation can trigger frequent cuts in auto mode.
+- Moving shadows, reflections and refraction can leave trails. Use per-frame
+  OIDN on `Render` for the sharpest edges, or reduce `historyRadius` to limit
+  trails. For a known abrupt lighting change, call `cut()` at the boundary
+  to prevent any reuse across it.
