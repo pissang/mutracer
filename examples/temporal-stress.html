@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="A deterministic noisy indoor shot for testing temporal denoising at low sample counts." />
+    <title>MuTracer · Temporal stress shot</title>
+    <link rel="stylesheet" href="./shared/style.css" />
+    <style>
+      canvas { object-fit: contain; }
+      #frame { width: 260px; }
+    </style>
+  </head>
+  <body>
+    <canvas id="main" aria-label="Rendered scene"></canvas>
+    <div class="panel">
+      <label>Samples
+        <select id="spp">
+          <option>1</option>
+          <option>2</option>
+          <option selected>3</option>
+        </select>
+      </label>
+      <label>Temporal
+        <select id="mode">
+          <option value="offline">Offline</option>
+          <option value="interactive">Interactive</option>
+          <option value="off">Off</option>
+        </select>
+      </label>
+      <label><input id="reflection-motion" type="checkbox" /> Reflection motion</label>
+      <label><input id="accumulate-guides" type="checkbox" /> Accumulate guides</label>
+      <label><input id="dof" type="checkbox" checked /> Depth of field</label>
+      <label><button id="play" type="button">Play</button><input id="frame" type="range" min="0" value="0" aria-label="Frame" /></label>
+      <span id="status" role="status"></span>
+    </div>
+    <script type="module" src="./temporal-stress.ts"></script>
+  </body>
+</html>
