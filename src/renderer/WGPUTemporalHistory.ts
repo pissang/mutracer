@@ -115,18 +115,18 @@ export class TemporalHistoryGPU {
     this.dispatch(this.capturePipeline, [slot, Number(!!centerRecords)],
       [centerRecords ?? buffers.centerDepth, buffers.centerNormal, buffers.roughness, buffers.albedo, buffers.color,
         buffers.motion, this.surface, this.raw, this.motion, this.overflow, this.material]);
+    d.queue.writeBuffer(this.meta, slot * 80, new Float32Array([
+      ...Array.from(meta.viewProjection), this.height * meta.projection[5] * 0.5, meta.apertureRadius, meta.focusDistance, 0,
+    ]));
     if (this.reflections && reflection) {
       this.dispatch(this.reflectionPipeline!, [slot, reflection.samples],
         [reflection.radiance, reflection.albedo, reflection.records, buffers.color,
-          this.reflections.radiance, this.reflections.endpoint]);
+          this.reflections.radiance, this.reflections.endpoint, this.meta]);
     }
     const revisionTable = await this.revisions.write(revisionEntries);
     this.dispatch(this.idPipeline, [slot, 0, 0, 0, 0, revisionEntries.length], [buffers.id, revisionTable, this.id]);
     this.dispatch(this.guidePipeline, [guideSlot * 2, 0, 0, 0], [buffers.albedo, this.guides]);
     this.dispatch(this.guidePipeline, [guideSlot * 2 + 1, 0, 0, 0], [buffers.normal, this.guides]);
-    d.queue.writeBuffer(this.meta, slot * 80, new Float32Array([
-      ...Array.from(meta.viewProjection), this.height * meta.projection[5] * 0.5, meta.apertureRadius, meta.focusDistance, 0,
-    ]));
     this.frames.set(slot, frame);
     this.guideFrames.set(guideSlot, frame);
   }

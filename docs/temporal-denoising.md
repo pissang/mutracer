@@ -55,15 +55,16 @@ independent noise. The example advances by its samples-per-frame count.
 | `postRadius` | `3` | Radius of post stabilization, from 0 to 3. Set to 0 with `stabilizeSparkle: false` to disable post stabilization. |
 | `stabilizeSparkle` | `true` | Suppresses one-frame bright impulses while preserving persistent highlights. |
 | `denoiser` | OIDN `cleanAuxLarge` | Spatial filter applied to the accumulated frame. Accepts OIDN options, a custom denoiser, or `null`. |
-| `reflectionMotion` | `false` | Follows virtual-image motion on flat reflectors and reduces sliding reflection trails on smooth, opaque nonmetals in the offline window. |
+| `reflectionMotion` | `false` | Follows apparent reflection motion in the offline window, with curvature correction in perspective views. |
 | `accumulateGuides` | `false` | Averages OIDN albedo and normal guides across the offline window when the history radius is positive to reduce flicker. |
 | `historyInvalidation` | `'auto'` | Splits history on detected cuts, background, visibility and scene membership changes. Material edits invalidate history on affected surfaces. Light edits can reduce offline history locally and split interactive history. `'manual'` uses explicit cuts and frame gaps. |
 | `memoryBudget` | Full plan | GPU bytes for temporal history and scratch. A smaller budget can reduce the effective radii in `plan`. |
 
 Smooth metals blend in more surface history as roughness increases. Near
-mirrors use mostly the current frame. With `reflectionMotion` enabled, moving
-highlights on smooth, opaque nonmetals may retain more noise as trails are
-suppressed.
+mirrors use mostly the current frame where reflection history is unavailable.
+With `reflectionMotion` enabled, moving highlights may retain more noise where
+the reflection changes or motion is uncertain. The option adds capture and
+window processing. [Reflection motion design](technical/temporal-reflection-motion.md)
 
 The default offline latency is 19 frames. Inspect `latency` and, after the
 first `push`, `plan` for the effective radii and GPU byte estimate.

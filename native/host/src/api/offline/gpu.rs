@@ -378,6 +378,7 @@ impl Passes {
                 hdr,
                 &self["reflected"],
                 &self["endpoints"],
+                &self["meta"],
             ],
         );
     }

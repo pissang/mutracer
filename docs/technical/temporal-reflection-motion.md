@@ -5,8 +5,8 @@
 The combined-color window tracks the visible surface. A highlight or reflected
 object can move independently of that surface. The default surface window
 shrinks with roughness on smooth metals to limit trails. Virtual-image motion
-can accumulate reflections in flat reflectors even when their surface
-window is short.
+can accumulate reflections on flat and curved reflectors even when their
+surface window is short.
 
 ## Signal boundary
 
@@ -34,11 +34,11 @@ The reflector and endpoint use their own previous rigid transforms before
 projection, so a moving reflected object can have motion with a static
 camera. A cut or deformation invalidates the corresponding rigid motion.
 
-Planar capture returns before the optional curvature estimate, including its
-neighbor ray. An internal shader specialization enables the directional
-normal derivative for a curvature comparison. Each capture provides one
-motion hypothesis to the window. The window decides from local curvature
-whether to trust it, as described in [Curved reflectors](#curved-reflectors).
+The capture also projects the corresponding surface point. The difference
+between that motion and the tangent-plane image motion is optical
+parallax. The curvature pass adjusts this parallax, then adds it back to
+surface motion. Each capture stores one virtual displacement and its
+confidence in the existing history textures.
 
 ## Visibility and weights
 
@@ -76,59 +76,48 @@ The roughness-dependent weight follows the approach described in
 
 ## Curved reflectors
 
-The tangent-plane image is exact only for a flat reflector. On a mirror with
-normal curvature `k` along the direction of image motion, a feature at
-reflected distance `d` forms its image at a different depth. With view depth
-`D` and reflection cosine `c`, the thin-mirror relation gives
+The curvature pass estimates signed normal derivatives from the center
+positions and shading normals of neighbors on the same reflector. It projects
+the normal onto the screen to find the plane of incidence, then resolves
+the two screen-axis derivatives along and across that plane.
+
+For reflection cosine `c`, eye-to-surface range `D` and endpoint distance `d`,
+the two powers and denominators are
 
 ```text
-u = 2 k c d D / (D + d)
-planar landing error ≈ (parallax + aperture) · |u / (1 + u)|
-aperture = f · r · (1/D − 1/(D + d))
+reach = d D / (D + d)
+u_in  = 2 reach k_in / c
+u_out = 2 reach k_out c
+corrected_parallax = (parallax_in / (1 + u_in), parallax_out / (1 + u_out))
 ```
 
-The parallax is the distance between the planar and the surface-motion
-landing. The aperture term is the defocus parallax of the image across a lens
-of radius `r` with focal length `f` in pixels. A wrong image depth also
-misplaces the reflection's defocus blur. Convex surfaces have `u > 0` and
-bring the image toward the surface. On a concave surface `1 + u` approaches
-zero near a focal point, where the image depth and the error grow without
-bound. An environment endpoint uses `d·D / (D + d) = D`. The same relation
-underlies the thin-lens treatment of curved specular motion in
-[NRD](https://github.com/NVIDIA-RTX/NRD) (`Common.hlsli`).
+An environment endpoint uses `reach = D`. Convex curvature reduces parallax.
+Concave curvature can bring `1 + u` close to zero and invalidate the local
+estimate. Insufficient same-surface support and a denominator below 0.25
+reject the correction. Flat and orthographic surfaces retain the
+tangent-plane candidate and its curvature-based validation.
 
-The window measures `k` from the stored center normals and depths of the
-current frame. It takes central differences along both screen axes on the
-same surface, falling back to one side at a boundary. The camera term uses
-the curvature along the parallax direction and the aperture term the larger
-axis curvature. View-space positions follow from depth and the focal length
-in pixels, so the estimate needs no extra rays or memory. The normals are
-shading normals, so a normal map also counts as curvature. The reflected
-image follows the same perturbed normal. Flat geometry stores exactly
-constant normals and has an estimate of zero.
+The residual estimate combines normal rotation over the corrected displacement,
+differences between one-sided derivatives, and aperture parallax. Confidence
+falls from full weight at 0.10 pixels of estimated residual to zero at
+0.45 pixels, with additional attenuation at grazing angles. The window
+propagates confidence through the chain and checks it at the radiance tap.
+Endpoint identity and all visibility checks still apply.
 
-A predicted error up to 0.1 px keeps full trust. Trust falls to zero at
-0.5 px or when `1 + u < 0.25`. Trust scales the virtual weight. It also blends
-the reflected surface fallback toward the default surface window, without the
-mismatch and metal fade terms. With zero trust the reflected and residual
-signals use the same surface weight, so the sum equals the default window.
-
-Against an analytic reflection solve on a convex mirror, the predicted error
-agrees within a few percent. Without the gate, the earlier checks accept many
-of those taps. Reflector and endpoint identity, endpoint distance, depth and
-footprint all hold on a smooth convex surface. The normal check allows about
-one lobe width of rotation. On a reflector about a hundred pixels across,
-that corresponds to several pixels of landing error. A forward–backward
-residual cannot detect the error, because both directions use the same
-tangent-plane motion field.
-
-The optional neighbor ray in the capture measures the same directional
-derivative. It costs an extra ray per pixel and gave the same gate decisions.
+Nearest-texel sampling contributes a half-pixel rounding allowance to the
+residual used for sample-count adaptation. The allowance and optical residual
+are compared with the projected lobe width. As the pixel sample count rises
+above three, the expected reduction in current-frame noise decreases with
+the inverse square root of the sample count. The filter reduces confidence
+in the curvature candidate and can return to the tangent-plane candidate
+when the estimated alignment cost dominates. This comparison approximates
+sampling noise using the sample count already stored with the render.
 
 ## Allocation and diagnosis
 
 Each extra history slot uses 24 bytes per pixel. Reflected RGB is stored in
-`rgba16float`. The `rgba32uint` record holds two full endpoint identity words,
+`rgba16float`, with the motion model and confidence in alpha. The
+`rgba32uint` record holds two full endpoint identity words,
 two binary16 displacements, a 16-bit logarithmic distance code, and 8 bits
 each for roughness and cosine. The distance code reserves distinct values for
 invalid paths and environment endpoints.

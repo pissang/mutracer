@@ -73,7 +73,7 @@ ${hasCoatNormals ? `  if (material.coatNormalEnabled) { n = normalize(mix(n, coa
   let projected = reflectionProjection(previous, size);
   let planar = projected-center;
   if (!all(abs(planar) < vec2f(size))) { return record; }
-  record.motion = vec4f(planar, vec2f(1e20));
+  record.motion = vec4f(planar, reflectionProjection(surface,size)-center);
   return record;
 }
 `;

@@ -196,6 +196,7 @@ async function run() {
     const glossyAcceptance = await exerciseGlossyAcceptance(device);
     await exerciseLightingConfidence(device);
     await exerciseFocusPull(device);
+    await exerciseCurvedCapture(device);
     const offlineCounts = await exerciseOfflineSampleWeights(device);
     const retainedBaseSamples = await exerciseRetainedBaseSamples(engine);
     const forwardSeed = await exerciseForwardMotionSeed(device);
@@ -492,6 +493,54 @@ async function exerciseFocusPull(device: GPUDevice) {
     const accepted = new Uint32Array(await window.read(window.rejects, 4))[0];
     check(accepted === size * size, 'A focus pull invalidated camera correspondence');
   } finally { window.dispose(); }
+}
+
+async function exerciseCurvedCapture(device: GPUDevice) {
+  const width = 16, height = 8, pixels = width * height;
+  const projection = new Camera({projection: 'perspective', fov: 45}).getProjectionMatrix(width / height);
+  const history = await createTestWindow(device, width, height, 2, false, undefined, true);
+  const readback = device.createBuffer({size: pixels * 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ});
+  const id = new Uint32Array(pixels * 4).fill(1);
+  const centerRecords = new Float32Array(pixels * 24);
+  const records = new Uint32Array(centerRecords.buffer);
+  const guide = new Float32Array(pixels * 4);
+  const hdr = new Float32Array(pixels * 4).fill(1);
+  const motion = new Float32Array(pixels * 4);
+  for (let i = 0; i < pixels; i++) {
+    const x = (i % width - 8) * .05;
+    records.set([1, 1, 1, 0], i * 8);
+    const angle = 2*x;
+    centerRecords.set([Math.sin(angle), 0, Math.cos(angle), 2, x, 0, -2, 1], (pixels + i) * 8);
+    const endpoint = (2*pixels + i) * 8;
+    centerRecords.set([0, 0, 6, 0, 4, 0, 1, 0], endpoint);
+    records[endpoint + 3] = 0x3c000000;
+    guide.set([0, 0, 1, 1], i * 4);
+    motion.set([0, 0, 2, 3], i * 4);
+  }
+  try {
+    for (const [frame, samples] of [[0, 3], [1, 16]]) {
+      const albedo = hdr.slice();
+      for (let i = 3; i < albedo.length; i += 4) albedo[i] = samples;
+      await history.upload(frame, {viewProjection: projection, projection, apertureRadius: 0, focusDistance: 2},
+        {hdr, id, centerNormal: guide, roughness: guide, motion, albedo, centerRecords, reflected: hdr});
+    }
+    const packedMotion = async (frame: number) => {
+      const encoder = device.createCommandEncoder();
+      encoder.copyTextureToBuffer({texture: history.history.reflections!.endpoint, origin: [0, 0, frame]},
+        {buffer: readback, bytesPerRow: width * 16}, [width, height, 1]);
+      device.queue.submit([encoder.finish()]);
+      await readback.mapAsync(GPUMapMode.READ);
+      const displacement = new Uint32Array(readback.getMappedRange())[(4*width + 8)*4 + 2];
+      readback.unmap();
+      return displacement & 0xffff;
+    };
+    const curved = await packedMotion(0);
+    const planar = await packedMotion(1);
+    // Half-float codes for one and four pixels. Convex curvature reduces
+    // the virtual displacement toward the one-pixel surface displacement.
+    check(curved > 0x3c00 && curved < 0x4400, 'Curved motion did not reduce convex image parallax');
+    check(planar === 0x4400, 'Sharp high-sample reflections did not retain the planar fallback');
+  } finally { readback.destroy(); history.dispose(); }
 }
 
 async function exerciseLightingConfidence(device: GPUDevice) {

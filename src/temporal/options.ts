@@ -19,8 +19,9 @@ export interface TemporalDenoiserOptions {
   /** Accumulate albedo and normal for offline OIDN when the history radius is positive. Default `false`. */
   accumulateGuides?: boolean;
   /**
-   * In the offline WebGPU window, follow virtual-image motion on flat reflectors
-   * and reduce sliding reflection trails on smooth, opaque nonmetals. Default `false`.
+   * In the offline WebGPU window, follow apparent reflection motion. Curvature
+   * correction is available in perspective views. Changing reflections and
+   * uncertain motion can leave more noise. Default `false`.
    */
   reflectionMotion?: boolean;
   /**
