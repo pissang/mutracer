@@ -285,7 +285,7 @@ fn lightingConfidence(x: vec2i, y: vec2i, reflectedSignal: bool) -> f32 {
 }
 `;
 
-const recoverHistoryWGSL = /* wgsl */ `
+const recoverHistoryWGSL = (sampleTiles: boolean) => /* wgsl */ `
 // Jittered hit coverage and square-root albedo share the motion flag lane.
 // The center-ray identity remains the only authority for accepting a surface.
 fn packedGuide(x: vec2i, frame: u32) -> u32 {
@@ -327,7 +327,7 @@ fn skyCorrection(x: vec2i, tap: vec2i, pos: vec4f, rgb: vec3f) -> vec3f {
   return mix(rgb,prediction,.75);
 }
 
-struct HistoryTap { at: vec2i, support: f32 }
+struct HistoryTap { at: vec2i, support: f32${sampleTiles ? ', recovered: bool' : ''} }
 fn recoverTap(x: vec2i, pos: vec4f, q: vec3f, original: HistoryTap) -> HistoryTap {
   let nearestDepth=surface(original.at,p.source,0u).w;
   if(nearestDepth>.0001 && nearestDepth<q.z*.985){return original;}
@@ -368,7 +368,7 @@ fn recoverTap(x: vec2i, pos: vec4f, q: vec3f, original: HistoryTap) -> HistoryTa
   let historyY=max(.005,dot(radiance(at,p.source),luma));
   let change=log(historyY/currentY);
   let support=confidence*exp(-mixed*(1.6*pow(max(change,0.),2.)+.2*pow(min(change,0.),2.)));
-  if(support>original.support){return HistoryTap(at,support);}
+  if(support>original.support){return HistoryTap(at,support${sampleTiles ? ',true' : ''});}
   return original;
 }
 `;
@@ -432,8 +432,8 @@ const startWindowWGSL = (guides = false, reflections = false, sampleTileSize?: n
     total[index] = vec4f(total[index].rgb-reflected,1.0);
     reflectedTotal[index] = vec4f(reflected,1.0);${sampleTileSize ? '\n    reflectedTotal[index] *= centerSampleWeight(x);' : ''}
     if ((p.mode&32u)!=0u) { reflectedTotal[index+p.size.x*p.size.y]=vec4f(0); reflectedTotal[index+2u*p.size.x*p.size.y]=vec4f(0); }` : ''}${sampleTileSize ? '\n    total[index] *= centerSampleWeight(x);' : ''}${guides ? `
-    albedoSum[index]=vec4f(loadAlbedo(x,p.current),0.);
-    normalSum[index]=vec4f(loadNormal(x,p.current),0.);` : ''}
+    albedoSum[index]=vec4f(loadAlbedo(x,p.current)${sampleTileSize ? '*centerSampleWeight(x)' : ''},0.);
+    normalSum[index]=vec4f(loadNormal(x,p.current)${sampleTileSize ? '*centerSampleWeight(x)' : ''},0.);` : ''}
     return;
   }
   if(p.stage==2u){ output[index]=vec4f(total[index].rgb/total[index].a,loadRadiance(x,p.current,p.size.x).a);${reflections ? `
@@ -486,24 +486,34 @@ fn loadNormal(at: vec2i, slot: u32) -> vec3f {
 `;
 
 export const createMixedWindowWGSL = (guides: boolean, reflections = false, sampleTileSize?: number) => /* wgsl */ `${windowBindingsAndGeometry}
-${guides ? windowGuidesWGSL : ''}${recoverHistoryWGSL}${silhouetteConfidenceWGSL}
+${guides ? windowGuidesWGSL : ''}${recoverHistoryWGSL(!!sampleTileSize)}${silhouetteConfidenceWGSL}
 ${sampleTileSize ? /* wgsl */ `
 @group(0) @binding(${11 + (guides ? 3 : 0) + (reflections ? 3 : 0)}) var<storage, read> sampleTiles: array<u32>;
-fn sampleWeight(at: vec2i, slot: u32) -> f32 {
-  let step = ${sampleTileSize}u;
-  let grid = (p.size+step-1u)/step;
-  let tile = vec2u(at)/step;
-  return f32(sampleTiles[(slot*grid.y+tile.y)*grid.x+tile.x])/3.;
+const SAMPLE_TILE_SIZE = ${sampleTileSize}u;
+fn sampleTileGrid() -> vec2u {
+  return (p.size+SAMPLE_TILE_SIZE-1u)/SAMPLE_TILE_SIZE;
 }
-// Do not give coverage-dependent or recovered taps an extra vote.
+fn sampleTileOffset(slot: u32) -> u32 {
+  let grid = sampleTileGrid();
+  return slot*(grid.x*grid.y+1u);
+}
+fn sampleWeight(at: vec2i, slot: u32, fullMatch: bool) -> f32 {
+  let tile = vec2u(at)/SAMPLE_TILE_SIZE;
+  let offset = sampleTileOffset(slot);
+  let count = select(sampleTiles[offset], sampleTiles[offset+1u+tile.y*sampleTileGrid().x+tile.x], fullMatch);
+  return f32(count)/f32(sampleTiles[sampleTileOffset(p.current)]);
+}
+// Coverage-dependent and recovered taps keep their base vote.
 fn centerSampleWeight(at: vec2i) -> f32 {
-  return select(1., sampleWeight(at,p.current), hitCoverage(at,p.current)>=1.);
+  return sampleWeight(at,p.current,hitCoverage(at,p.current)>=1.);
+}
+fn fullCoverage(x: vec2i, at: vec2i) -> bool {
+  return hitCoverage(x,p.current)>=1. && hitCoverage(at,p.source)>=1.;
 }
 fn neighborSampleWeight(x: vec2i, tap: HistoryTap) -> f32 {
-  return select(1., sampleWeight(tap.at,p.source),
-    hitCoverage(x,p.current)>=1. && hitCoverage(tap.at,p.source)>=1. && tap.support>=1.);
+  return sampleWeight(tap.at,p.source,fullCoverage(x,tap.at) && tap.support>=1. && !tap.recovered);
 }
-` : ''}${reflections ? reflectionWindowWGSL(guides ? 14 : 11) : ''}${lightingConfidenceWGSL(reflections)}${startWindowWGSL(guides, reflections, sampleTileSize)}  var tap=HistoryTap(nearest,0.);
+` : ''}${reflections ? reflectionWindowWGSL(guides ? 14 : 11, !!sampleTileSize) : ''}${lightingConfidenceWGSL(reflections)}${startWindowWGSL(guides, reflections, sampleTileSize)}  var tap=HistoryTap(nearest,0.${sampleTileSize ? ',false' : ''});
   if(reason==0u){
     tap.support=1.;
     if(partial){tap.support=footprintWeight(x,q.xy,nearest,q.z);}

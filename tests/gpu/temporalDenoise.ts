@@ -652,7 +652,7 @@ async function exerciseOfflineSampleWeights(device: GPUDevice) {
     await window.upload(frame, meta, {centerDepth: buffer([1, 0, 0, 1]), centerNormal: buffer([0, 0, 1, 1]),
       roughness: buffer([.5, 0, 0, 1]), motion: buffer([0, 0, 1, 3]), albedo: buffer([.5, .5, .5, 1]),
       hdr: buffer([radiance, radiance, radiance, 1]), id});
-    window.setSampleTiles(frame, {width: size, height: size, tileSize: size, targets: new Uint32Array([samples])});
+    window.setSampleTiles(frame, {width: size, height: size, tileSize: size, baseSamples: 3, targets: new Uint32Array([samples])});
   }
   try {
     await upload(0, 1, 3);
@@ -676,7 +676,7 @@ async function exerciseRetainedBaseSamples(engine: Engine) {
     const targets = Uint32Array.from({length: columns ** 2}, (_, i) => i % columns < columns / 2 ? base : 5);
     render.maxSamples = 5;
     const plan = await render._convergeWithSampleTiles({samples: 5, sampleSequenceOffset: offset},
-      {width: size, height: size, tileSize, targets});
+      {width: size, height: size, tileSize, baseSamples: base, targets});
     check(plan.averageSamplesPerPixel === 4, 'The adaptive pass did not spend its additional sample budget');
     const adaptive = (await render.readPixels('hdr')).data;
     let maxDelta = 0;

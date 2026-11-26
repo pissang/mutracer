@@ -601,6 +601,12 @@ pub struct ConvergeResult {
     pub samples: u32,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct OfflineSampleTiles {
+    pub base: u32,
+    pub counts: Arc<[u32]>,
+}
+
 /// What a render's L0 context must hold to be current.
 #[derive(Clone, PartialEq)]
 pub(super) struct TargetKey {
@@ -612,7 +618,7 @@ pub(super) struct TargetKey {
     alpha_blend_strategy: AlphaBlendStrategy,
     camera_override: Option<[u8; 128]>,
     capture_reflections: bool,
-    sample_tiles: Option<Arc<[u32]>>,
+    sample_tiles: Option<OfflineSampleTiles>,
     center_material: bool,
 }
 /// Full preparation of the shared scene on a library thread.
@@ -1483,7 +1489,7 @@ fn target_step(
         &camera,
         key.capture_reflections,
         context::OfflineTarget {
-            sample_tiles: key.sample_tiles.as_deref(),
+            sample_tiles: key.sample_tiles.as_ref().map(|plan| plan.counts.as_ref()),
             center_material: key.center_material,
         },
     ));
@@ -2993,14 +2999,18 @@ impl Render {
         mut options: ConvergeOptions,
         tiles: Vec<u32>,
     ) -> Result<ConvergeResult> {
-        options.samples = tiles.iter().copied().max().unwrap_or(0);
-        self.converge_inner(options, Some(tiles.into()))
+        let plan = OfflineSampleTiles {
+            base: options.samples,
+            counts: tiles.into(),
+        };
+        options.samples = plan.counts.iter().copied().max().unwrap_or(0);
+        self.converge_inner(options, Some(plan))
     }
 
     fn converge_inner(
         &self,
         mut options: ConvergeOptions,
-        sample_tiles: Option<Arc<[u32]>>,
+        sample_tiles: Option<OfflineSampleTiles>,
     ) -> Result<ConvergeResult> {
         self.engine.poll_device();
         if !(1..=MAX_TOTAL_SAMPLES).contains(&options.samples) {
@@ -3032,10 +3042,11 @@ impl Render {
                 )
             })?;
             let render = state.renders.get_mut(&id).unwrap();
-            if let Some(tiles) = &sample_tiles {
+            if let Some(plan) = &sample_tiles {
                 let [columns, rows] = key.size.map(|edge| edge.div_ceil(4));
-                if tiles.len() != (columns * rows) as usize
-                    || tiles.iter().any(|n| !(3..=8).contains(n))
+                if plan.base == 0
+                    || plan.counts.len() != (columns * rows) as usize
+                    || plan.counts.iter().any(|n| !(plan.base..=plan.base.max(8)).contains(n))
                     || render.denoise.options.is_some()
                     || render.settings.caustics != CausticSettings::default()
                 {

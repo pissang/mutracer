@@ -55,9 +55,21 @@ The WebGPU stress capture and the native Node capture command share
 traces one center ray per 4×4 output tile. Surface motion and optional
 virtual reflection matches predict how much history each 4×4 tile can use.
 The planner keeps the base beauty samples everywhere and assigns extra
-samples to tiles with weak support. The shared window weights fully covered
-matches by their sample counts. Recovered and partially covered taps retain
-the regular weight.
+samples to tiles with weak support. For each signal, the window estimates radiance as
+`Σ(aⱼ nⱼ X̄ⱼ) / Σ(aⱼ nⱼ)`. Here `aⱼ` is the existing temporal and confidence
+weight, `X̄ⱼ` is the mean radiance of a tap, and `nⱼ` is its effective count
+for weighting. Fully covered surface and virtual taps use the actual
+sample count. A recovered or partially covered tap uses its frame's base
+count because its coverage and correspondence make extra samples an
+unreliable measure of confidence. Both sums use the same count. Scaling
+all counts by the current base count leaves the ratio unchanged. When
+all taps have the same base count and no extra samples, the usual window
+weights are recovered. A constant signal is also preserved when coverage
+changes the effective count.
+
+This normalization preserves a common mean for fixed, signal-independent
+weights and counts. Reprojection, confidence tests, and allocation based
+on observations can change the estimate when tap means differ.
 
 [The Node capture driver](../../cli/src/offline-sampling.mjs) runs the native
 pilot over the shot context, then replays it for beauty. `setup()` and
@@ -68,8 +80,9 @@ sample-count texture. [The native window](../../native/host/src/api/offline/gpu.
 keeps the tile counts with their history slots.
 
 The experiment defaults to uniform sampling. The native capture uses hardware
-traversal, a base of 3 spp, a cap of 8 spp per tile, and current-frame OIDN
-guides with caustic estimators disabled. Tune supplemental sampling and
+traversal, current-frame OIDN guides and caustic estimators disabled. The
+supplemental ceiling is 8 spp per tile. A base at or above that ceiling
+uses its requested count everywhere. Tune supplemental sampling and
 offline temporal quality on native before synchronizing stable results to
 WebGPU.
 

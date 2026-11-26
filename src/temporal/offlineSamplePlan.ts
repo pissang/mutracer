@@ -178,7 +178,7 @@ export class OfflineGeometryHistory {
       for (let i = 0; i < targets.length; i++) {
         if (support[i] * targets[i] < minEffectiveSamples) belowMinimum += area[i];
       }
-      return {width, height, tileSize: step, targets, average: base + extra / count, belowMinimum: belowMinimum / count} satisfies
+      return {width, height, tileSize: step, baseSamples: base, targets, average: base + extra / count, belowMinimum: belowMinimum / count} satisfies
         OfflineSampleTiles & {average: number; belowMinimum: number};
     });
   }

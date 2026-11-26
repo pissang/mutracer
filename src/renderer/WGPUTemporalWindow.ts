@@ -30,7 +30,7 @@ export class DirectWindowGPU {
     this.tilesPerFrame = sampleTileSize
       ? Math.ceil(history.width / sampleTileSize) * Math.ceil(history.height / sampleTileSize) : 0;
     if (sampleTileSize) this.experimentBuffer = d.createBuffer({label: 'Offline temporal sampling',
-      size: history.capacity * this.tilesPerFrame * 4, usage});
+      size: history.capacity * (this.tilesPerFrame + 1) * 4, usage});
     this.rejects = d.createBuffer({label: 'Direct window validation counts', size: 64, usage});
     this.params = d.createBuffer({label: 'Direct window parameters', size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST});
   }
@@ -55,8 +55,10 @@ export class DirectWindowGPU {
   setSampleTiles(frame: number, plan: OfflineSampleTiles) {
     const h = this.history;
     if (!this.experimentBuffer || plan.tileSize !== this.sampleTileSize || plan.width !== h.width || plan.height !== h.height ||
-      plan.targets.length !== this.tilesPerFrame) throw new Error('Temporal sample tiles do not match the window.');
-    h.device.queue.writeBuffer(this.experimentBuffer, h.slot(frame) * this.tilesPerFrame * 4, plan.targets);
+      plan.targets.length !== this.tilesPerFrame || !Number.isInteger(plan.baseSamples) || plan.baseSamples < 1) throw new Error('Temporal sample tiles do not match the window.');
+    const offset = h.slot(frame) * (this.tilesPerFrame + 1) * 4;
+    h.device.queue.writeBuffer(this.experimentBuffer, offset, new Uint32Array([plan.baseSamples]));
+    h.device.queue.writeBuffer(this.experimentBuffer, offset + 4, plan.targets);
   }
 
   async dispatch(current: number, source: number, symmetric: boolean, stage: number,

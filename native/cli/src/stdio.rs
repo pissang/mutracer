@@ -697,12 +697,11 @@ impl Session {
                         || settings.denoise != Denoise::Temporal
                         || settings.tracer != Tracer::Hardware
                         || config.options.accumulate_guides
-                        || settings.spp != 3
-                        || settings.sequence_stride.unwrap_or(settings.spp) < 8)
+                        || settings.sequence_stride.unwrap_or(settings.spp) < settings.spp.max(8))
                 {
                     return Err(invalid(
                         "/bytes",
-                        "Sample tiles require experimental offline capture, 3 spp, current-frame guides and a stride of at least 8",
+                        "Sample tiles require experimental offline capture, current-frame guides and a stride covering every tile sample",
                     ));
                 }
                 let tiles = if sample_tiles {
@@ -717,8 +716,14 @@ impl Session {
                         .chunks_exact(4)
                         .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
                         .collect::<Vec<_>>();
-                    if tiles.iter().any(|n| !(3..=8).contains(n)) {
-                        return Err(invalid("/bytes", "Sample tile counts must be in 3..=8"));
+                    if tiles
+                        .iter()
+                        .any(|n| !(settings.spp..=settings.spp.max(8)).contains(n))
+                    {
+                        return Err(invalid(
+                            "/bytes",
+                            "Sample tile counts must be between base spp and max(base spp, 8)",
+                        ));
                     }
                     Some(tiles)
                 } else {

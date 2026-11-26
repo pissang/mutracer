@@ -81,7 +81,7 @@ pub(super) struct Capture {
     pub check_camera: bool,
     pub size: [u32; 2],
     pub samples: u32,
-    pub sample_tiles: Option<Arc<[u32]>>,
+    pub sample_tiles: Option<super::render::OfflineSampleTiles>,
     pub camera: [f32; 20],
     pub display: DisplaySettings,
     pub revisions: Vec<[u32; 2]>,
@@ -194,7 +194,7 @@ impl TemporalDenoiser {
                 let tiles = u64::from(size[0].div_ceil(4)) * u64::from(size[1].div_ceil(4));
                 let slots = 2 * u64::from(self.latency()) + 1;
                 *budget = budget
-                    .checked_sub(tiles * slots * 4)
+                    .checked_sub((tiles + 1) * slots * 4)
                     .ok_or("Tile counts exceed the temporal memory budget")?;
             }
         }
@@ -327,8 +327,8 @@ impl TemporalDenoiser {
         self.failed = true;
         let p = self.passes.as_ref().unwrap();
         let i = self.count;
-        if let Some(tiles) = capture.sample_tiles {
-            p.store_sample_tiles(i, &tiles);
+        if let Some(plan) = capture.sample_tiles {
+            p.store_sample_tiles(i, plan.base, &plan.counts);
         }
         let mut guides = capture.guides.map(Resource::Buffer);
         let raw_albedo = (self.options.reflection_motion && capture.raw)

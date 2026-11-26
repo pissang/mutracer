@@ -14,6 +14,7 @@ export interface OfflineSampleTiles {
   width: number;
   height: number;
   tileSize: number;
+  baseSamples: number;
   targets: Uint32Array;
 }
 
