@@ -10,8 +10,8 @@ window is short.
 
 ## Signal boundary
 
-The window uses first-surface reflected radiance from the same invocations as
-beauty. The reflection component includes dielectric, conductor, coat and fuzz
+When reflection motion is enabled, the window captures first-surface reflected
+radiance from the same invocations as beauty. The reflection component includes dielectric, conductor, coat and fuzz
 lobes. For next-event estimation it shares beauty's light selection, shadow
 test and MIS. For continuation it uses the reflected fraction of the full BSDF
 response at the sampled direction. Keeping this fraction preserves the split
@@ -62,11 +62,15 @@ the default filter. Virtual taps use the full temporal radius and get the
 most weight at low roughness and high confidence. Displacement and endpoint
 checks reduce the weight of a mismatched surface fallback. For metals, the
 reflected fallback fades in between roughness 0.05 and 0.20 as the image
-parallax grows from 0.25 to 2 pixels. A smooth, opaque dielectric also uses
-reflected-ray agreement to limit the fallback. Its virtual tap inherits that
-confidence at small parallax and requires consistent reflector and endpoint IDs
-near an optical silhouette. Transmissive surfaces retain their original
-fallback. The diffuse and transmitted residual keep their surface weights.
+parallax grows from 0.25 to 2 pixels. For smooth, opaque dielectrics, the center
+ray records the roughness and Fresnel strength of the narrower contributing
+base or coat lobe. The window compares the reflected world-space directions
+at corresponding surface points. Divergence reduces the reflected
+surface-motion weight. The virtual tap uses the same confidence at small
+parallax and requires consistent reflector and endpoint IDs near an optical
+silhouette. The diffuse and transmitted residual and auxiliary guides keep
+their surface weights. With reflection motion disabled the window captures
+combined color and uses the surface weights.
 The roughness-dependent weight follows the approach described in
 [Fast Denoising with Self-Stabilizing Recurrent Blurs, slide 58](https://developer.download.nvidia.com/video/gputechconf/gtc/2020/presentations/s22699-fast-denoising-with-self-stabilizing-recurrent-blurs.pdf).
 

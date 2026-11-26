@@ -55,16 +55,15 @@ independent noise. The example advances by its samples-per-frame count.
 | `postRadius` | `3` | Radius of post stabilization, from 0 to 3. Set to 0 with `stabilizeSparkle: false` to disable post stabilization. |
 | `stabilizeSparkle` | `true` | Suppresses one-frame bright impulses while preserving persistent highlights. |
 | `denoiser` | OIDN `cleanAuxLarge` | Spatial filter applied to the accumulated frame. Accepts OIDN options, a custom denoiser, or `null`. |
-| `reflectionMotion` | `false` | Uses virtual-image motion to accumulate reflections on flat reflectors in the offline window. |
+| `reflectionMotion` | `false` | Follows virtual-image motion on flat reflectors and reduces sliding reflection trails on smooth, opaque nonmetals in the offline window. |
 | `accumulateGuides` | `false` | Averages OIDN albedo and normal guides across the offline window when the history radius is positive to reduce flicker. |
 | `historyInvalidation` | `'auto'` | Splits history on detected cuts and lighting or visibility changes. Material edits invalidate history on the affected surfaces. Use `'manual'` to control cuts in scenes with continuously changing light. |
 | `memoryBudget` | Full plan | GPU bytes for temporal history and scratch. A smaller budget can reduce the effective radii in `plan`. |
 
 Smooth metals blend in more surface history as roughness increases. Near
-mirrors use mostly the current frame. The offline window reduces reflected
-history on smooth, opaque nonmetals when the reflected view changes. This can
-leave more noise in moving highlights. Enable `reflectionMotion` to accumulate
-moving reflections on flat reflectors where virtual reprojection can find a match.
+mirrors use mostly the current frame. With `reflectionMotion` enabled, moving
+highlights on smooth, opaque nonmetals may retain more noise as trails are
+suppressed.
 
 The default offline latency is 19 frames. Inspect `latency` and, after the
 first `push`, `plan` for the effective radii and GPU byte estimate.
@@ -82,8 +81,8 @@ Other renderer and OIDN allocations are additional.
 - `push()` requires a converged attached render with surface outputs at
   render resolution. Keep draining its finished frames. After device loss,
   create a new temporal denoiser.
-- Offline reflection capture requires 10 storage buffers per shader stage, or
-  11 with bindless textures. Glass reflections can fall back to surface motion.
+- `reflectionMotion` requires 10 storage buffers per shader stage, or 11 with
+  bindless textures. Glass reflections can fall back to surface motion.
   Transmission uses surface motion.
 - `frame.readPixels('denoised')` returns final RGBA float32 pixels in the
   spatial denoiser's color representation. `frame.readPixels('accumulated')`

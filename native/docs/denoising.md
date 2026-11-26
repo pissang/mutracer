@@ -200,11 +200,11 @@ To accumulate reflections along their apparent motion, set
 `TemporalOptions::reflection_motion` and
 `RenderSettings::capture_reflections` before rendering the first frame. Both
 default to `false`. At 720p with a radius of 16, the temporal plan reserves
-about 804 MB more GPU memory. The option helps flat reflectors. On curved
-reflectors, where a flat-mirror image would land in the wrong place, pixels
-keep the default surface history. Near-mirror metals use less history where
-correspondence fails. Glass reflections can fall back to surface motion.
-Transmission uses surface motion.
+about 804 MB more GPU memory. This also reduces sliding reflection trails on
+smooth, opaque nonmetals, which can leave more noise in those highlights.
+Virtual-image motion helps flat reflectors. Near-mirror metals use less
+history where correspondence fails. Glass reflections can fall back to
+surface motion. Transmission uses surface motion.
 
 At 720p and below, offline OIDN may process the whole image on a supported GPU.
 This is faster and can use more temporary GPU memory. Set `memoryBudget` to

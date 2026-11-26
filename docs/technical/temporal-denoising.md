@@ -32,13 +32,17 @@ window applies. The material history stores roughness and metalness in a
 separate four-byte texel per pixel per slot. Virtual-image taps use the
 original radius when reflection motion is enabled.
 
-For opaque, smooth dielectrics, the center-ray material supplies the roughness
-and Fresnel reflectance of the narrower contributing base or coat lobe. The
-offline window compares reflected world-space rays at corresponding surface
-points. As their directions diverge, the weight decreases only for captured
-first-surface reflected radiance. The residual and auxiliary guides keep their
-ordinary surface weights. Glass and other transmissive materials keep their
-existing history acceptance.
+## Experimental geometry-guided sampling
+
+The WebGPU stress capture can opt into a geometry prepass and supplemental
+beauty samples. A lower-resolution center-ray pass predicts weak temporal
+support from geometry and motion. The plan allocates extra samples to tiles
+while retaining the base beauty samples everywhere. For fully covered matches,
+the window weights each frame by its actual sample count. Recovered and
+partially covered taps keep the regular weight.
+
+The experiment defaults to uniform sampling. Its controls are internal and
+currently support a 3 spp base with the offline surface window.
 
 ## Why this design
 
