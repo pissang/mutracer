@@ -148,14 +148,17 @@
         },
         "postRadius": 3,
         "bytes": 2860798792
-      }
+      },
+      "webBytes": 3649688392
     },
     {
       "width": 1920,
       "height": 1080,
       "materials": 5,
       "input": {},
-      "overrides": {},
+      "overrides": {
+        "maxStorageBufferBindingSize": 268435456
+      },
       "expected": {
         "historyRadius": {
           "min": 8,
@@ -163,7 +166,8 @@
         },
         "postRadius": 3,
         "bytes": 6431379736
-      }
+      },
+      "webBytes": 8206381336
     },
     {
       "width": 31,
@@ -180,7 +184,8 @@
         },
         "postRadius": 1,
         "bytes": 1180156
-      }
+      },
+      "webBytes": 1277124
     },
     {
       "width": 31,
@@ -199,7 +204,8 @@
         },
         "postRadius": 1,
         "bytes": 1213884
-      }
+      },
+      "webBytes": 1310852
     },
     {
       "width": 1,

@@ -93,7 +93,8 @@ pub struct RenderSettings {
     /// AOV dimensions. Default [`AovResolution::Render`].
     pub aov_resolution: AovResolution,
     /// Capture reflected radiance and center-ray reflection motion for offline temporal denoising.
-    /// Default false. Enable before rendering when using [super::TemporalOptions::reflection_motion].
+    /// Default false. Enable before rendering inputs for glossy highlight rejection
+    /// or [super::TemporalOptions::reflection_motion].
     pub capture_reflections: bool,
     /// Maximum complete samples, 1–16384. Default 2048. Raising it continues the
     /// accumulation; with [`SamplingPattern::ZSobol`] a change restarts it.
@@ -3380,7 +3381,7 @@ impl Render {
             } else {
                 Default::default()
             };
-            let reflections = if reflections {
+            let reflections = if reflections || r.settings.capture_reflections {
                 let radiance = context_result(context::reflected_radiance(r.context))?;
                 Some((radiance, aov.reflection_records().clone()))
             } else {

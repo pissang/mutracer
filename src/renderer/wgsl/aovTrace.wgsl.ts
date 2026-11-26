@@ -72,7 +72,9 @@ fn aovSurface(rayInput: Ray, si: ptr<function, SurfaceInteraction>, material: pt
 // A narrow lobe can carry a bright highlight even if it reflects little light
 // on average. Keep the narrower of the base and coat lobes that can contribute.
 fn aovDielectricGloss(ray: Ray, si: SurfaceInteraction, material: OpenPbrResolvedMaterial) -> f32 {
-  if (material.materialType != STANDARD || material.baseMetalness > 0.10) { return 1.; }
+  if (material.materialType != STANDARD || material.baseMetalness > 0.10 ||
+      material.transmissionWeight > 0. || material.subsurfaceWeight > 0. ||
+      material.alpha < 1.) { return 1.; }
   if (material.specularRoughness >= .2 && (material.coatWeight <= .005 || material.coatRoughness >= .2)) { return 1.; }
   let cosine = clamp(abs(dot(ray.d, si.normal)), 0., 1.);
   let grazing = pow(1. - cosine, 5.);

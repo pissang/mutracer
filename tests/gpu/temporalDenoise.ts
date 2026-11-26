@@ -92,7 +92,8 @@ async function run() {
     const reducedInternal = reduced as any;
     const liveBase = reducedInternal.history.memory().total + reducedInternal.window.memory().total + reducedInternal.post.memory().total +
       reducedInternal.motionCoverageCounts.size + reducedInternal.composeParams.size;
-    const exactReducedPeak = liveBase + 64 * 64 * (4 * 80 + 3 * 64 + 32);
+    // The plan also charges the attached render's center records and reflected beauty sum.
+    const exactReducedPeak = liveBase + 64 * 64 * (4 * 80 + 3 * 64 + 32 + 48);
     check(reduced.plan!.bytes === exactReducedPeak, `Temporal plan did not match live allocations and bounded queue: ${reduced.plan!.bytes} vs ${exactReducedPeak} (base ${liveBase}, pre ${reducedInternal.history.memory().total}, window ${reducedInternal.window.memory().total}, post ${reducedInternal.post.memory().total}, expected ${estimateTemporalMemory(64, 64, {...budgetBase, ...reduced.plan}, materialCount)})`);
     for await (const frame of reduced.flush()) { check(frame.index === reducedOutputs, 'Reduced history flush changed output order'); reducedOutputs++; }
     check(reducedOutputs === 12, `Reduced ring overwrote or lost frames after exceeding capacity: ${reducedOutputs}`);
@@ -329,9 +330,9 @@ async function exercisePaddedPresentation(engine: Engine) {
   } finally { temporal.dispose(); render.dispose(); }
 }
 
-async function createTestWindow(device: GPUDevice, width: number, height: number, capacity: number, accumulateGuides = false, experiment?: number) {
-  const history = await TemporalHistoryGPU.create(device, width, height, capacity, accumulateGuides ? capacity : 1, false);
-  const window = await DirectWindowGPU.create(history, false, accumulateGuides, experiment);
+async function createTestWindow(device: GPUDevice, width: number, height: number, capacity: number, accumulateGuides = false, experiment?: number, reflectedRadiance = false) {
+  const history = await TemporalHistoryGPU.create(device, width, height, capacity, accumulateGuides ? capacity : 1, false, reflectedRadiance);
+  const window = await DirectWindowGPU.create(history, false, accumulateGuides, experiment, false);
   return {
     history,
     guides: window.guides,
@@ -348,7 +349,9 @@ async function createTestWindow(device: GPUDevice, width: number, height: number
           device.queue.writeBuffer(buffer, 0, data);
           buffers[key === 'hdr' ? 'color' : key] = buffer;
         }
-        await history.capture(frame, metadata, buffers, [], undefined, buffers.centerRecords);
+        const reflection = buffers.reflected && {radiance: buffers.reflected, albedo: buffers.albedo,
+          records: buffers.centerRecords, samples: 1};
+        await history.capture(frame, metadata, buffers, [], reflection, buffers.centerRecords);
       } finally { for (const buffer of Object.values(buffers)) buffer.destroy(); }
     },
     dispose() { window.dispose(); history.dispose(); },
@@ -475,22 +478,24 @@ async function exerciseGlossyAcceptance(device: GPUDevice) {
     albedo.set([.5, .5, .5, 1], i * 4);
     id.set([1, 2, 3, 0], i * 4);
   }
-  const window = await createTestWindow(device, size, size, 2);
+  const window = await createTestWindow(device, size, size, 2, false, undefined, true);
   async function upload(frame: number, slide: number, gloss: number) {
-    const centerRecords = new Float32Array(pixels * 16);
+    const centerRecords = new Float32Array(pixels * 24);
     const hdr = new Float32Array(pixels * 4), motion = new Float32Array(pixels * 4);
+    const reflected = new Float32Array(pixels * 4);
     for (let i = 0; i < pixels; i++) {
       centerRecords.set([0, 0, 1, 1, 0, 0, 0, 1 + gloss], (pixels + i) * 8);
-      hdr.set([frame === 0 ? 9 : 1, 0, 0, 1], i * 4);
+      hdr.set(frame === 0 ? [9, 7, 0, 1] : [1, 1, 0, 1], i * 4);
+      reflected.set(frame === 0 ? [8, 0, 0, 0] : [0, 0, 0, 0], i * 4);
       motion.set([slide, 0, 1, 3], i * 4);
     }
     await window.upload(frame, {viewProjection: projection, projection, apertureRadius: 0, focusDistance: 1},
-      {centerRecords, centerNormal, roughness, albedo, hdr, motion, id});
+      {centerRecords, centerNormal, roughness, albedo, hdr, motion, id, reflected});
   }
   async function resolve(slide: number, gloss: number) {
     await upload(1, slide, gloss);
     const color = new Float32Array(await window.read(await window.filter(1, [0], true)));
-    return color[4 * (size * 4 + 4)];
+    return color.slice(4 * (size * 4 + 4), 4 * (size * 4 + 4) + 2);
   }
   try {
     const narrowCoat = (16 << 8) | 10;
@@ -498,10 +503,11 @@ async function exerciseGlossyAcceptance(device: GPUDevice) {
     const stationary = await resolve(0, narrowCoat);
     const glossy = await resolve(1, narrowCoat);
     const broad = await resolve(1, (16 << 8) | 115);
-    check(Math.abs(stationary - 81 / 17) < 1e-5, 'A stationary narrow coat lost its surface history');
-    check(glossy === 1, 'A sliding narrow coat accepted a stale highlight');
-    check(broad === stationary, 'A broad lobe lost its surface history');
-    return {stationary, glossy, broad};
+    check(Math.abs(stationary[0] - 81 / 17) < 1e-5, 'A stationary narrow coat lost its surface history');
+    check(glossy[0] === 1, 'A sliding narrow coat accepted a stale highlight');
+    check(Math.abs(glossy[1] - 65 / 17) < 1e-5, 'Reflected motion reduced diffuse history');
+    check(broad[0] === stationary[0], 'A broad lobe lost its surface history');
+    return {stationary: [...stationary], glossy: [...glossy], broad: [...broad]};
   } finally { window.dispose(); }
 }
 
@@ -599,7 +605,8 @@ async function exerciseForwardMotionSeed(device: GPUDevice) {
       'Packing changed the weighted normal or sample count');
     await upload(1, 7, 3, true, -2.6);
     const contour = new Float32Array(await window.read(await window.filter(0, [1], true)));
-    check(contour[pixel] === 1, 'A partial forward footprint crossed the silhouette');
+    check(contour[pixel] >= 1 && contour[pixel] < expected,
+      'A partial forward footprint carried as much history as a fully covered landing');
     await upload(1, 7, 3, false);
     await upload(2, 10, 9, true);
     const occluded = new Float32Array(await window.read(await window.filter(0, [2], true)));

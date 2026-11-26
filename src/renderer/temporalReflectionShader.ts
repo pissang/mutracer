@@ -43,8 +43,16 @@ export function reflectionWindowWGSL(binding: number) {
 @group(0) @binding(${binding + 2}) var<storage, read_write> reflectedTotal: array<vec4f>;
 const OPTICAL_SILHOUETTE = 14.;
 
+fn opticalReflectionMotion() -> bool { return (p.mode & 16u) == 0u; }
+
 fn reflection(at: vec2i, frame: u32) -> vec3f {
   return textureLoad(reflected,at,i32(frame),0).rgb;
+}
+
+fn reflectedSurfaceRgb(at: vec2i, surfaceRgb: vec3f) -> vec3f {
+  let srcHdr = radiance(at,p.source);
+  let positiveSurface = max(surfaceRgb,vec3f(0.));
+  return min(positiveSurface,reflection(at,p.source)*(positiveSurface/max(srcHdr,vec3f(1e-12))));
 }
 
 fn endpoint(at: vec2i, frame: u32) -> vec4u {
@@ -243,7 +251,7 @@ fn planarTrust(x: vec2i, id: vec3u, revision: u32, record: vec4u, parallax: vec2
 
 fn accumulateReflection(
   x: vec2i, index: u32, tap: HistoryTap, q: vec3f, weight: f32, surfaceRgb: vec3f, tent: f32,
-  metallic: f32, surfaceConfidence: f32
+  metallic: f32, surfaceConfidence: f32, glossyDielectric: bool
 ) {
   let record = endpoint(x,p.current);
   let lobes = roughnessCosine(record);
@@ -270,7 +278,7 @@ fn accumulateReflection(
   var validation = virtualWeight(x,land,q.z,record);
   let virtualTap = vec2i(floor(land.xy+0.5));
   let isMetal = metallic > METALLIC_THRESHOLD;
-  if (!isMetal && roughness < .15 && trust > 0. && validation.x > 0. &&
+  if (glossyDielectric && roughness < .15 && trust > 0. && validation.x > 0. &&
       (surfaceConfidence < .95 || length(parallax) > .15) &&
       (!endpointInterior(x,p.current,id,revision,record) ||
        !endpointInterior(virtualTap,p.source,id,revision,record))) {
@@ -280,19 +288,17 @@ fn accumulateReflection(
   // footprint. In that case a changing view still limits optical confidence.
   let footprint = max(.5,cameras[p.current].lens.x*roughness*roughness);
   let reliableParallax = smoothstep(footprint,2.*footprint,length(parallax));
-  let opticalConfidence = select(mix(surfaceConfidence,1.,reliableParallax),1.,isMetal || roughness >= .15);
+  let opticalConfidence = select(mix(surfaceConfidence,1.,reliableParallax),1.,!glossyDielectric || roughness >= .15);
   let amount = dominant*validation.x*opticalConfidence;
-  let srcHdr = radiance(tap.at,p.source);
-  let positiveSurface = max(surfaceRgb,vec3f(0));
-  let reflectedSurface = min(positiveSurface,reflection(tap.at,p.source) *
-    (positiveSurface/max(srcHdr,vec3f(1e-12))));
+  let reflectedSurface = reflectedSurfaceRgb(tap.at,surfaceRgb);
   let srcEndpoint = endpoint(tap.at,p.source);
   let slip = length(slipped);
   let matchSurface = select(0.,reflectionAgreement(record,srcEndpoint),all(srcEndpoint.xy==record.xy));
   let mismatch = select(0.,dominant*smoothstep(.25,2.,slip)*(1.-matchSurface),validDelta);
   // Optical parallax can invalidate a reflected surface sample even when
   // geometric reprojection succeeds. The unreflected residual keeps its weight.
-  let fallback = mix(1.,smoothstep(.05,.20,roughness),smoothstep(.25,2.,select(length(parallax),slip,isMetal)));
+  let fade = mix(1.,smoothstep(.05,.20,roughness),smoothstep(.25,2.,select(slip,length(parallax),glossyDielectric)));
+  let fallback = select(1.,fade,isMetal || glossyDielectric);
   let geometricFallback = mix(1.,(1.-amount)*(1.-mismatch)*fallback,trust);
   let surfaceWeight = select(weight*min(surfaceConfidence,geometricFallback),0.,validation.y==OPTICAL_SILHOUETTE);
   let virtualW = tent*amount*trust;

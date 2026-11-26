@@ -104,11 +104,13 @@ describe('temporal memory planner', () => {
     expect(next?.postRadius).toBe(3);
   });
 
-  it('accounts for reflection motion history, capture and scratch only offline', () => {
+  it('shares reflected-radiance allocations between the two offline windows', () => {
     const plain = normalizeTemporalOptions();
     const enabled = normalizeTemporalOptions({reflectionMotion: true});
-    expect(estimateTemporalMemory(1280, 720, enabled) - estimateTemporalMemory(1280, 720, plain))
-      .toBe(788_889_600);
+    expect(estimateTemporalMemory(1280, 720, enabled)).toBe(estimateTemporalMemory(1280, 720, plain));
+    const still = normalizeTemporalOptions({historyRadius: 0});
+    expect(estimateTemporalMemory(1280, 720, {...still, reflectionMotion: true}) - estimateTemporalMemory(1280, 720, still))
+      .toBe(213_811_200);
     const interactive = normalizeTemporalOptions({mode: 'interactive', reflectionMotion: true});
     expect(estimateTemporalMemory(1280, 720, interactive)).toBe(
       estimateTemporalMemory(1280, 720, {...interactive, reflectionMotion: false}));

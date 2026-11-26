@@ -13,7 +13,7 @@ import {createSparklePost} from './renderer/WGPUTemporalSparkle.js';
 import {createOIDNFilter, type OIDNFilter} from './oidn.js';
 import {hasTemporalFrameGap, historyNeighbors, isTemporalCameraCut, readyThrough, temporalLatency} from './temporal/schedule.js';
 import {normalizeTemporalOptions, type NormalizedTemporalOptions} from './temporal/options.js';
-import {nextTemporalMemoryPlan, planTemporalMemory, temporalGuideSlots, temporalHistorySlots, usesTemporalGuideWindow, usesTemporalReflectionWindow, TEMPORAL_MAX_FINISHED, type TemporalMemoryPlan} from './temporal/memoryPlan.js';
+import {nextTemporalMemoryPlan, planTemporalMemory, temporalGuideSlots, temporalHistorySlots, usesTemporalGuideWindow, usesTemporalReflectedRadiance, TEMPORAL_MAX_FINISHED, type TemporalMemoryPlan} from './temporal/memoryPlan.js';
 export type {TemporalDenoiserOptions, TemporalHistoryRadius, TemporalMode, TemporalSpatialDenoiser} from './temporal/options.js';
 
 const CAPTURE_AOVS = ['centerPosition', 'centerDepth', 'centerNormal', 'roughness', 'motion', 'id'] as const;
@@ -190,7 +190,7 @@ export class TemporalDenoiser {
     if (this.attached === render) throw new Error('This render is already attached.');
     if (render.denoiser) console.warn('The attached render has its own denoiser; temporal capture ignores that result.');
     const custom = this.activeOptions.denoiser?.type === 'custom' ? this.activeOptions.denoiser.aovs ?? [] : [];
-    const detach = render._attachTemporal([...new Set([...CAPTURE_AOVS, ...custom])] as any, usesTemporalReflectionWindow(this.activeOptions));
+    const detach = render._attachTemporal([...new Set([...CAPTURE_AOVS, ...custom])] as any, usesTemporalReflectedRadiance(this.activeOptions) && !this.samplingExperiment);
     this.attached = render;
     this.detachRender = () => {
       if (this.attached !== render) return;
@@ -399,12 +399,12 @@ export class TemporalDenoiser {
     const device = this.engine.device!;
     const {historyRadius, denoiser} = this.activeOptions;
     const accumulateGuides = usesTemporalGuideWindow(this.activeOptions);
-    const reflections = usesTemporalReflectionWindow(this.activeOptions);
+    const reflections = usesTemporalReflectedRadiance(this.activeOptions) && !this.samplingExperiment;
     this.history = await TemporalHistoryGPU.create(device, width, height, temporalHistorySlots(this.activeOptions),
       temporalGuideSlots(this.activeOptions), denoiser?.type === 'custom', reflections);
     // The selected mixed window stays enabled when the post sparkle pass is disabled.
     const experiment = this.samplingExperiment && ('tileSize' in this.samplingExperiment ? this.samplingExperiment.tileSize : 'pilot');
-    this.window = await DirectWindowGPU.create(this.history, historyRadius.min !== historyRadius.max, accumulateGuides, experiment);
+    this.window = await DirectWindowGPU.create(this.history, historyRadius.min !== historyRadius.max, accumulateGuides, experiment, this.activeOptions.reflectionMotion);
     if (this.activeOptions.postRadius > 0) {
       const postSlots = this.activeOptions.mode === 'offline' ? this.activeOptions.postRadius * 2 + 1 : this.activeOptions.postRadius + 1;
       this.post = await TemporalPostGPU.create(this.history, postSlots, materialCount);

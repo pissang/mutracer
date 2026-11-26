@@ -23,6 +23,6 @@ it('matches memory tiers and exact allocation sizes', () => {
   for (const row of fixture.memory) {
     const limits = {...fixture.limits, ...row.overrides};
     expect(planTemporalMemory(row.width, row.height, normalizeTemporalOptions(row.input), limits, row.materials))
-      .toEqual(row.expected);
+      .toEqual({...row.expected, bytes: row.webBytes ?? row.expected.bytes});
   }
 });

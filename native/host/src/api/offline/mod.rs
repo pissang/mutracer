@@ -164,7 +164,12 @@ impl TemporalDenoiser {
     pub fn cut(&mut self) {
         self.epoch += 1;
     }
-    fn prepare(&mut self, size: [u32; 2], materials: usize) -> Result<()> {
+    fn prepare(
+        &mut self,
+        size: [u32; 2],
+        materials: usize,
+        reflected_radiance: bool,
+    ) -> Result<()> {
         if let Some(p) = &mut self.passes {
             if p.size != size {
                 return Err("Flush before changing temporal dimensions".into());
@@ -175,9 +180,11 @@ impl TemporalDenoiser {
                     TemporalSpatial::Custom(_) => plan::SpatialCost::Custom,
                     _ => plan::SpatialCost::Oidn,
                 };
-                let plans = self
-                    .options
-                    .plans(size, materials, cost, &p.gpu.device.limits())?;
+                let plans = TemporalOptions {
+                    reflection_motion: p.reflected_radiance,
+                    ..self.options
+                }
+                .plans(size, materials, cost, &p.gpu.device.limits())?;
                 let updated = plans
                     .into_iter()
                     .find(|x| {
@@ -196,22 +203,26 @@ impl TemporalDenoiser {
             TemporalSpatial::Custom(_) => plan::SpatialCost::Custom,
             _ => plan::SpatialCost::Oidn,
         };
-        let plans = self
-            .options
-            .plans(size, materials, cost, &gpu.device.limits())?;
+        let reflected_radiance = reflected_radiance || self.options.reflection_motion;
+        let plans = TemporalOptions {
+            reflection_motion: reflected_radiance,
+            ..self.options
+        }
+        .plans(size, materials, cost, &gpu.device.limits())?;
         for plan in plans.into_iter().take(2) {
             let validation = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
             let oom = gpu.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
             let allocation = (|| -> Result<_> {
-                let passes = Passes::new(
+                let mut passes = Passes::new(
                     gpu.clone(),
                     size,
                     plan,
                     materials,
                     self.options.stabilize_sparkle,
                     self.options.guide_window(cost, plan.max),
-                    self.options.reflection_motion,
+                    reflected_radiance,
                 )?;
+                passes.set_optical_motion(self.options.reflection_motion);
                 let spatial = match &self.spatial {
                     TemporalSpatial::Oidn(weights) => Some((
                         crate::oidn_webgpu::Denoiser::new_offline(
@@ -284,12 +295,16 @@ impl TemporalDenoiser {
     }
 
     fn insert_capture(&mut self, index: u32, capture: Capture) -> Result<()> {
-        self.prepare(capture.size, capture.revisions.len())?;
+        self.prepare(
+            capture.size,
+            capture.revisions.len(),
+            capture.reflections.is_some(),
+        )?;
         self.failed = true;
         let p = self.passes.as_ref().unwrap();
         let i = self.count;
         let mut guides = capture.guides.map(Resource::Buffer);
-        let raw_albedo = (self.options.reflection_motion && capture.raw)
+        let raw_albedo = (p.reflected_radiance && capture.raw)
             .then(|| Resource::Buffer(guides[3].buffer().clone()));
         if capture.raw {
             let [hdr, albedo, normal] = ["Color", "Albedo", "Normal"].map(|s| p.alloc(s, p.bytes));
@@ -305,7 +320,7 @@ impl TemporalDenoiser {
         let auto = self.options.history_invalidation == HistoryInvalidation::Auto;
         let revisions = if auto { capture.revisions } else { Vec::new() };
         p.capture(i, &guides, &capture.camera, &revisions, capture.raw);
-        if self.options.reflection_motion {
+        if p.reflected_radiance {
             let (radiance, records) = capture
                 .reflections
                 .ok_or("Missing offline reflection capture")?;
