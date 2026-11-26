@@ -7,7 +7,6 @@ import {DirectWindowGPU} from '../../src/renderer/WGPUTemporalWindow';
 import {createComposePackWGSL} from '../../src/renderer/temporalComposeShader';
 import {TemporalHistoryGPU} from '../../src/renderer/WGPUTemporalHistory';
 import {TemporalPostGPU} from '../../src/renderer/WGPUTemporalPost';
-import {TemporalReconstructionGPU} from '../../src/renderer/WGPUTemporalReconstruction';
 import {THREESync, fromTHREECamera} from '../../src/three';
 import * as THREE from 'three';
 
@@ -196,12 +195,11 @@ async function run() {
     const materialAcceptanceResult = await exerciseMaterialAcceptance(device);
     const glossyAcceptance = await exerciseGlossyAcceptance(device);
     const offlineCounts = await exerciseOfflineSampleWeights(device);
-    const reconstruction = await exerciseReconstruction(device);
     const forwardSeed = await exerciseForwardMotionSeed(device);
     const reflectionMotion = await exerciseReflectionMotion(engine, device);
     await device.queue.onSubmittedWorkDone();
     check(uncaptured.length === 0, `Uncaptured WebGPU errors: ${uncaptured.join(' | ')}`);
-    return {identity: true, max, sequence: true, oidnMax, presentationIdentity, vignetteChange, customAov: receivedRoughness, fullIdResult, overflowResult, floatingPostResult, materialAcceptanceResult, glossyAcceptance, offlineCounts, reconstruction, forwardSeed, reflectionMotion, uncapturedErrors: uncaptured.length, plan: temporal.plan};
+    return {identity: true, max, sequence: true, oidnMax, presentationIdentity, vignetteChange, customAov: receivedRoughness, fullIdResult, overflowResult, floatingPostResult, materialAcceptanceResult, glossyAcceptance, offlineCounts, forwardSeed, reflectionMotion, uncapturedErrors: uncaptured.length, plan: temporal.plan};
   } finally { temporal.dispose(); render.dispose(); sync.dispose(); engine.dispose(); device.destroy(); }
 }
 
@@ -534,55 +532,6 @@ async function exerciseOfflineSampleWeights(device: GPUDevice) {
     check(Math.abs(past - 4.2) < 1e-6, 'The center and past tap did not preserve their sample counts');
     return {future, past};
   } finally { window.dispose(); }
-}
-
-async function exerciseReconstruction(device: GPUDevice) {
-  const width = 16, height = 12, pixels = width * height;
-  const identity = new Float32Array(16);
-  identity[0] = identity[5] = identity[10] = identity[15] = 1;
-  const meta = {viewProjection: identity, projection: identity, apertureRadius: 0, focusDistance: 1};
-  const window = await createTestWindow(device, width, height, 1);
-  const reconstruction = await TemporalReconstructionGPU.create(window.history);
-  const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
-  const support = device.createBuffer({size:pixels * 4, usage});
-  const input = device.createBuffer({size:pixels * 16, usage});
-  const alternate = device.createBuffer({size:pixels * 16, usage});
-  const output = device.createBuffer({size:pixels * 16, usage});
-  const filled = (value: number[]) => {
-    const data = new Float32Array(pixels * 4);
-    for (let i = 0; i < pixels; i++) data.set(value, i * 4);
-    return data;
-  };
-  try {
-    const albedo = filled([.4, .4, .4, 1]);
-    for (let y = 0; y < height; y++) albedo.set([.2, .7, .3, 1], 4 * (y * width + 12));
-    await window.upload(0, meta, {centerDepth: filled([1, 0, 0, 1]), centerNormal: filled([0, 0, 1, 1]),
-      roughness: filled([.5, 0, 0, 1]), motion: filled([0, 0, 1, 3]), albedo,
-      hdr: filled([.2, .2, .2, 1]), id: new Uint32Array(pixels * 4).fill(1)});
-    const weights = new Float32Array(pixels).fill(1);
-    weights.fill(7, width * 6);
-    device.queue.writeBuffer(support, 0, weights);
-    const packed = filled([.2, .2, .2, 1]);
-    const low = 3 * width + 4, ample = 8 * width + 4, stripe = 3 * width + 12;
-    const bottom = (i: number) => 4 * ((height - 1 - Math.floor(i / width)) * width + i % width);
-    for (const i of [low, ample, stripe]) packed.set([2, 2, 2, .8], bottom(i));
-    device.queue.writeBuffer(input, 0, packed);
-    const {color, mask} = reconstruction.rebuild(0, support, input);
-    try {
-      const pre = new Float32Array(await window.read(color));
-      check(pre[bottom(low)] < 1 && pre[bottom(low) + 3] === packed[bottom(low) + 3], 'Low-support diffuse HDR was not reconstructed');
-      check(pre[bottom(ample)] === 2 && pre[bottom(stripe)] === 2, 'High support or the thin texture stripe was reconstructed');
-      device.queue.writeBuffer(alternate, 0, filled([.5, .5, .5, 1]));
-      device.queue.writeBuffer(output, 0, filled([1, 1, 1, 1]));
-      reconstruction.select(alternate, mask, output, false);
-      const image = new Float32Array(await window.read(output));
-      check(image[4 * low] < 1 && image[4 * ample] === 1 && image[4 * stripe] === 1,
-        'Reconstruction output was placed in the wrong rows or modified protected pixels');
-      return {reconstructed: image[4 * low], ample: image[4 * ample], stripe: image[4 * stripe]};
-    } finally { color.destroy(); mask.destroy(); }
-  } finally {
-    support.destroy(); input.destroy(); alternate.destroy(); output.destroy(); reconstruction.dispose(); window.dispose();
-  }
 }
 
 async function exerciseForwardMotionSeed(device: GPUDevice) {

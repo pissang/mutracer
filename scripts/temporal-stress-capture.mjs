@@ -3,7 +3,7 @@
 // Usage: node scripts/temporal-stress-capture.mjs OUT_DIR [--frames A-B] [--spp N]
 //   [--mode offline|interactive|off] [--reflection-motion] [--accumulate-guides]
 //   [--save-frames A-B,C-D] [--history-radius N] [--post-radius N] [--no-sparkle]
-//   [--temporal-sample-budget N] [--temporal-reconstruction] [--sample-stride N]
+//   [--temporal-sample-budget N] [--sample-stride N]
 //   [--no-dof] [--size WxH] [--webgl] [--no-video]
 import {createServer} from 'vite';
 import {mkdirSync, writeFileSync} from 'node:fs';
@@ -26,7 +26,6 @@ const settings = {
   postRadius: flag('--post-radius') ? Number(value('--post-radius')) : undefined,
   stabilizeSparkle: flag('--no-sparkle') ? false : undefined,
   temporalSampleBudget: flag('--temporal-sample-budget') ? Number(value('--temporal-sample-budget')) : undefined,
-  temporalReconstruction: flag('--temporal-reconstruction'),
   sampleStride: flag('--sample-stride') ? Number(value('--sample-stride')) : undefined
 };
 const size = value('--size', '1280x720');
