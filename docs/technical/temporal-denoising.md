@@ -34,15 +34,27 @@ original radius when reflection motion is enabled.
 
 ## Experimental geometry-guided sampling
 
-The WebGPU stress capture can opt into a geometry prepass and supplemental
-beauty samples. A lower-resolution center-ray pass predicts weak temporal
-support from geometry and motion. The plan allocates extra samples to tiles
-while retaining the base beauty samples everywhere. For fully covered matches,
-the window weights each frame by its actual sample count. Recovered and
-partially covered taps keep the regular weight.
+The WebGPU stress capture and the native Node capture command share
+[the TypeScript planner](../../src/temporal/offlineSamplePlan.ts). The pilot
+traces one center ray per 4×4 output tile. Surface motion and optional
+virtual reflection matches predict how much history each 4×4 tile can use.
+The planner keeps the base beauty samples everywhere and assigns extra
+samples to tiles with weak support. The shared window weights fully covered
+matches by their sample counts. Recovered and partially covered taps retain
+the regular weight.
 
-The experiment defaults to uniform sampling. Its controls are internal and
-currently support a 3 spp base with the offline surface window.
+[The Node capture driver](../../cli/src/offline-sampling.mjs) runs the native
+pilot over the shot context, then replays it for beauty. `setup()` and
+`frame({t, frame})` must produce the same descriptors for the same ordered
+sequence. Declare hard cuts in the shot so the pilot breaks correspondence
+at those boundaries. The native render target uses the existing adaptive
+sample-count texture. [The native window](../../native/host/src/api/offline/gpu.rs)
+keeps the tile counts with their history slots.
+
+The experiment defaults to uniform sampling. The native capture uses hardware
+traversal, a base of 3 spp, a cap of 8 spp per tile, and current-frame OIDN
+guides. Tune supplemental sampling and offline temporal quality on native
+before synchronizing stable results to WebGPU.
 
 ## Why this design
 
