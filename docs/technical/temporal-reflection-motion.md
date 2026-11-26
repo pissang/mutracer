@@ -62,12 +62,11 @@ the default filter. Virtual taps use the full temporal radius and get the
 most weight at low roughness and high confidence. Displacement and endpoint
 checks reduce the weight of a mismatched surface fallback. For metals, the
 reflected fallback fades in between roughness 0.05 and 0.20 as the image
-parallax grows from 0.25 to 2 pixels. Dielectrics also use the surface window's
-reflected-ray agreement to limit their fallback. For a narrow dielectric lobe,
-small optical parallax inherits that confidence until it exceeds the lobe's
-screen-space footprint. When reflection motion is significant, disagreement
-among neighboring reflector or endpoint IDs also rejects a tap near an optical
-silhouette. The diffuse and transmitted residual keep their surface weights.
+parallax grows from 0.25 to 2 pixels. A smooth, opaque dielectric also uses
+reflected-ray agreement to limit the fallback. Its virtual tap inherits that
+confidence at small parallax and requires consistent reflector and endpoint IDs
+near an optical silhouette. Transmissive surfaces retain their original
+fallback. The diffuse and transmitted residual keep their surface weights.
 The roughness-dependent weight follows the approach described in
 [Fast Denoising with Self-Stabilizing Recurrent Blurs, slide 58](https://developer.download.nvidia.com/video/gputechconf/gtc/2020/presentations/s22699-fast-denoising-with-self-stabilizing-recurrent-blurs.pdf).
 

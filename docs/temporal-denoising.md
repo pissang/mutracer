@@ -61,11 +61,10 @@ independent noise. The example advances by its samples-per-frame count.
 | `memoryBudget` | Full plan | GPU bytes for temporal history and scratch. A smaller budget can reduce the effective radii in `plan`. |
 
 Smooth metals blend in more surface history as roughness increases. Near
-mirrors use mostly the current frame. The offline window also uses less surface
-history on glossy dielectrics when the reflected view changes. Those areas
-can retain more noise. Enable `reflectionMotion` when a flat reflector needs
-to accumulate moving reflections. Curved reflectors such as spheres or turned
-metal use surface history where the flat-image prediction is unreliable.
+mirrors use mostly the current frame. The offline window reduces reflected
+history on smooth, opaque nonmetals when the reflected view changes. This can
+leave more noise in moving highlights. Enable `reflectionMotion` to accumulate
+moving reflections on flat reflectors where virtual reprojection can find a match.
 
 The default offline latency is 19 frames. Inspect `latency` and, after the
 first `push`, `plan` for the effective radii and GPU byte estimate.
@@ -83,10 +82,9 @@ Other renderer and OIDN allocations are additional.
 - `push()` requires a converged attached render with surface outputs at
   render resolution. Keep draining its finished frames. After device loss,
   create a new temporal denoiser.
-- Reflection motion requires 10 storage buffers per shader stage, or 11 with
-  bindless textures. It helps flat reflectors only. A near-mirror metal uses
-  less history where correspondence fails. Glass reflections can fall back to
-  surface motion where the reflected view agrees. Transmission uses surface motion.
+- Offline reflection capture requires 10 storage buffers per shader stage, or
+  11 with bindless textures. Glass reflections can fall back to surface motion.
+  Transmission uses surface motion.
 - `frame.readPixels('denoised')` returns final RGBA float32 pixels in the
   spatial denoiser's color representation. `frame.readPixels('accumulated')`
   returns the windowed linear HDR before the spatial filter.
