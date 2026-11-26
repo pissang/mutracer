@@ -97,6 +97,7 @@ fn frozen_offline_replay() {
                     reflections: None,
                     check_camera: j["frameSequence"].is_number(),
                     size,
+                    sample_tiles: None,
                     samples: j["samples"].as_u64().unwrap() as u32,
                     camera,
                     display,
@@ -477,7 +478,7 @@ fn window_guides_match_web_packed_guides() {
         ..Default::default()
     };
     let plan = options.plan(size, 0, &gpu.device.limits()).unwrap();
-    let passes = Passes::new(gpu.clone(), size, plan, 0, false, true, false, false).unwrap();
+    let passes = Passes::new(gpu.clone(), size, plan, 0, false, true, false, false, false).unwrap();
     let mut camera = [0.; 20];
     for i in [0, 5, 10, 15, 18] {
         camera[i] = 1.;
@@ -557,7 +558,7 @@ fn reflection_window_accumulates_a_translating_highlight_in_both_directions() {
         ..Default::default()
     };
     let plan = options.plan(size, 0, &gpu.device.limits()).unwrap();
-    let passes = Passes::new(gpu.clone(), size, plan, 0, false, false, true, false).unwrap();
+    let passes = Passes::new(gpu.clone(), size, plan, 0, false, false, true, false, false).unwrap();
     let mut camera = [0.; 20];
     for i in [0, 5, 10, 15, 18] {
         camera[i] = 1.;
@@ -685,6 +686,7 @@ fn curved_mirror_window(
         false,
         false,
         reflection_motion,
+        false,
         false,
     )
     .unwrap();
@@ -827,4 +829,52 @@ fn reflection_window_ignores_unwritten_history() {
             );
         }
     }
+}
+
+#[test]
+#[ignore = "requires a real hardware ray-query GPU"]
+fn offline_sample_tiles_count_each_pixel_and_reset_for_uniform_convergence() {
+    use crate::api::{Backend, ConvergeOptions, RenderSettings, RenderSize};
+
+    let engine = super::super::aov_tests::aov_engine(Backend::Hardware);
+    engine.set_scene(&super::super::tests::lit_scene()).unwrap();
+    engine.update().unwrap();
+    let (width, height) = (10, 6);
+    let render = Render::new(
+        &engine,
+        RenderSettings {
+            size: RenderSize::Fixed { width, height },
+            max_samples: 3,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let counts = || {
+        let ([_, _, normal], _, _) =
+            crate::context::denoise_buffers(render.audit_context_id().unwrap()).unwrap();
+        let gpu = &engine.inner.gpu;
+        let bytes = gpu
+            .queue
+            .read_buffer(&gpu.device, normal.slice(..))
+            .unwrap();
+        bytemuck::pod_collect_to_vec::<u8, f32>(&bytes)
+            .chunks_exact(4)
+            .map(|value| value[3] as u32)
+            .collect::<Vec<_>>()
+    };
+    let tiles = [3, 4, 5, 6, 7, 8];
+    let mut options = ConvergeOptions::new(3);
+    options.sample_sequence_offset = 32;
+    render
+        .experimental_converge_tiles(options, tiles.to_vec())
+        .unwrap();
+    assert_eq!(render.backend().unwrap().0, Backend::Hardware);
+    let expected = (0..height)
+        .rev()
+        .flat_map(|y| (0..width).map(move |x| tiles[(y / 4 * width.div_ceil(4) + x / 4) as usize]))
+        .collect::<Vec<_>>();
+    assert_eq!(counts(), expected);
+
+    render.converge(ConvergeOptions::new(3)).unwrap();
+    assert_eq!(counts(), vec![3; (width * height) as usize]);
 }

@@ -517,6 +517,14 @@ impl Renderer {
         }
     }
     pub fn converge(&self, settings: Settings, frame: u32) -> Result<()> {
+        self.converge_with_tiles(settings, frame, None)
+    }
+    pub fn converge_with_tiles(
+        &self,
+        settings: Settings,
+        frame: u32,
+        tiles: Option<Vec<u32>>,
+    ) -> Result<()> {
         let mut options = self
             .render
             .settings()
@@ -530,9 +538,12 @@ impl Renderer {
         }
         let mut converge = api::ConvergeOptions::new(settings.spp);
         converge.sample_sequence_offset = settings.offset(frame, "/output")?;
-        self.render
-            .converge(converge)
-            .map_err(|e| Error::gpu(e.to_string()))?;
+        if let Some(tiles) = tiles {
+            self.render.experimental_converge_tiles(converge, tiles)
+        } else {
+            self.render.converge(converge)
+        }
+        .map_err(|e| Error::gpu(e.to_string()))?;
         if matches!(settings.denoise, Denoise::Oidn | Denoise::CleanAuxLarge) {
             match self.render.denoise_report() {
                 Some(report) if report.samples == settings.spp && report.error.is_none() => {}

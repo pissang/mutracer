@@ -612,6 +612,7 @@ pub(super) struct TargetKey {
     alpha_blend_strategy: AlphaBlendStrategy,
     camera_override: Option<[u8; 128]>,
     capture_reflections: bool,
+    sample_tiles: Option<Arc<[u32]>>,
 }
 /// Full preparation of the shared scene on a library thread.
 struct Pending {
@@ -1085,6 +1086,7 @@ fn desired(state: &State, render: &RenderState) -> Option<TargetKey> {
         settings: render.target_settings(render.settings.max_samples, 0),
         camera_override: None,
         capture_reflections: render.settings.capture_reflections,
+        sample_tiles: None,
     })
 }
 
@@ -1478,6 +1480,7 @@ fn target_step(
         key.alpha_blend_strategy as u32,
         &camera,
         key.capture_reflections,
+        key.sample_tiles.as_deref(),
     ));
     if result.is_err() {
         state
@@ -2974,7 +2977,26 @@ impl Render {
     /// Sampling recovery follows [`Render::refine`]. On an observed Metal queue,
     /// a failed surface AOV, display capture or GPU denoising submission returns
     /// [`Status::ContextFailed`].
-    pub fn converge(&self, mut options: ConvergeOptions) -> Result<ConvergeResult> {
+    pub fn converge(&self, options: ConvergeOptions) -> Result<ConvergeResult> {
+        self.converge_inner(options, None)
+    }
+
+    /// Converge using top-first 4×4 tile counts in 3..=8. The max is the dispatch count.
+    #[doc(hidden)]
+    pub fn experimental_converge_tiles(
+        &self,
+        mut options: ConvergeOptions,
+        tiles: Vec<u32>,
+    ) -> Result<ConvergeResult> {
+        options.samples = tiles.iter().copied().max().unwrap_or(0);
+        self.converge_inner(options, Some(tiles.into()))
+    }
+
+    fn converge_inner(
+        &self,
+        mut options: ConvergeOptions,
+        sample_tiles: Option<Arc<[u32]>>,
+    ) -> Result<ConvergeResult> {
         self.engine.poll_device();
         if !(1..=MAX_TOTAL_SAMPLES).contains(&options.samples) {
             return Err(error(Status::InvalidArgument, "samples must be 1..16384"));
@@ -3005,6 +3027,20 @@ impl Render {
                 )
             })?;
             let render = state.renders.get_mut(&id).unwrap();
+            if let Some(tiles) = &sample_tiles {
+                let [columns, rows] = key.size.map(|edge| edge.div_ceil(4));
+                if tiles.len() != (columns * rows) as usize
+                    || tiles.iter().any(|n| !(3..=8).contains(n))
+                    || render.denoise.options.is_some()
+                    || render.settings.caustics != CausticSettings::default()
+                {
+                    return Err(error(
+                        Status::InvalidArgument,
+                        "Experimental sampling needs valid 4×4 tiles and a render without a spatial denoiser or caustics",
+                    ));
+                }
+            }
+            key.sample_tiles = sample_tiles;
             render.busy = true;
             cancel_denoise(render);
             key.settings = render.target_settings(options.samples, options.sample_sequence_offset);
@@ -3302,6 +3338,71 @@ impl Render {
             }
         })
     }
+    /// Trace center records at this render's size without dispatching beauty samples.
+    #[doc(hidden)]
+    pub fn experimental_offline_geometry(&self) -> Result<super::OfflineGeometry> {
+        let gpu = &self.engine.inner.gpu;
+        super::checked_gpu(gpu, "offline geometry", || {
+            self.with(|state, id| {
+                let key = desired(state, &state.renders[&id]).ok_or_else(|| {
+                    error(
+                        Status::InvalidState,
+                        "Commit a scene before tracing geometry",
+                    )
+                })?;
+                let render = &state.renders[&id];
+                if render.busy
+                    || render.job.is_some()
+                    || render.settings.aov_resolution == AovResolution::Display
+                {
+                    return Err(error(
+                        Status::InvalidState,
+                        "Use a dedicated render at the geometry size",
+                    ));
+                }
+                if !commit(state, id, key.clone(), true)? {
+                    return Err(error(Status::Error, "Geometry target preparation failed"));
+                }
+                let scene_key = super::offline::scene_revisions(state.scene.as_ref().unwrap()).0;
+                let render = state.renders.get_mut(&id).unwrap();
+                let mask = PixelKind::Id.aov_mask()
+                    | PixelKind::Motion.aov_mask()
+                    | PixelKind::CenterPosition.aov_mask()
+                    | PixelKind::Roughness.aov_mask()
+                    | (1 << 31);
+                render_aovs(render, mask, 1)?;
+                let aov = render
+                    .aov
+                    .as_ref()
+                    .ok_or_else(|| error(Status::InvalidState, "Missing center records"))?;
+                let records = context_result(aov.read_center_records())?;
+                let material = context_result(aov.read(6))?.data;
+                let [width, height] = key.size;
+                let packed = context_result(crate::scene::prepare_camera(
+                    &render.aov_camera,
+                    width,
+                    height,
+                ))?;
+                let layout: &[f32] = bytemuck::cast_slice(&packed);
+                let world = glam::Mat4::from_cols_slice(&layout[16..32]);
+                let projection = glam::Mat4::from_cols_slice(&layout[..16]).inverse() * world;
+                let direction = (u32::from_le_bytes(render.aov_camera[..4].try_into().unwrap())
+                    == 1)
+                    .then(|| (-world.z_axis.truncate()).to_array());
+                Ok(super::OfflineGeometry {
+                    records,
+                    material,
+                    scene_key,
+                    size: key.size,
+                    eye: world.w_axis.truncate().to_array(),
+                    direction,
+                    focal_length: height as f32 * projection.y_axis.y * 0.5,
+                    aperture_radius: layout[32],
+                })
+            })
+        })
+    }
+
     pub(super) fn offline_capture(
         &self,
         engine: &Engine,
@@ -3392,6 +3493,10 @@ impl Render {
                 check_camera: true,
                 size,
                 samples: r.samples,
+                sample_tiles: r
+                    .published
+                    .as_ref()
+                    .and_then(|key| key.sample_tiles.clone()),
                 camera,
                 display: state.display.settings,
                 revisions,

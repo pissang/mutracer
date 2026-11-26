@@ -8,6 +8,7 @@ use crate::{GpuDevice, Result};
 use std::{
     collections::{BTreeMap, VecDeque},
     path::PathBuf,
+    sync::Arc,
 };
 
 /// Optional GPU spatial filter for the windowed scene-linear color and current-frame guides.
@@ -80,6 +81,7 @@ pub(super) struct Capture {
     pub check_camera: bool,
     pub size: [u32; 2],
     pub samples: u32,
+    pub sample_tiles: Option<Arc<[u32]>>,
     pub camera: [f32; 20],
     pub display: DisplaySettings,
     pub revisions: Vec<[u32; 2]>,
@@ -181,8 +183,26 @@ impl TemporalDenoiser {
     pub fn cut(&mut self) {
         self.epoch += 1;
     }
-    fn prepare(&mut self, size: [u32; 2], materials: usize) -> Result<()> {
+    fn prepare(&mut self, size: [u32; 2], materials: usize, sample_tiles: bool) -> Result<()> {
+        let mut options = self.options;
+        if sample_tiles {
+            if options.accumulate_guides {
+                return Err("Experimental tile sampling requires current-frame OIDN guides".into());
+            }
+            if let Some(budget) = options.memory_budget.as_mut() {
+                // Reserve the largest possible ring of tile counts before choosing a plan.
+                let tiles = u64::from(size[0].div_ceil(4)) * u64::from(size[1].div_ceil(4));
+                let slots = 2 * u64::from(self.latency()) + 1;
+                *budget = budget
+                    .checked_sub(tiles * slots * 4)
+                    .ok_or("Tile counts exceed the temporal memory budget")?;
+            }
+        }
+
         if let Some(p) = &mut self.passes {
+            if p.sample_tiles != sample_tiles {
+                return Err("Keep the sampling mode fixed throughout a temporal shot".into());
+            }
             if p.size != size {
                 return Err("Flush before changing temporal dimensions".into());
             }
@@ -192,9 +212,7 @@ impl TemporalDenoiser {
                     TemporalSpatial::Custom(_) => plan::SpatialCost::Custom,
                     _ => plan::SpatialCost::Oidn,
                 };
-                let plans = self
-                    .options
-                    .plans(size, materials, cost, &p.gpu.device.limits())?;
+                let plans = options.plans(size, materials, cost, &p.gpu.device.limits())?;
                 let updated = plans
                     .into_iter()
                     .find(|x| {
@@ -213,9 +231,7 @@ impl TemporalDenoiser {
             TemporalSpatial::Custom(_) => plan::SpatialCost::Custom,
             _ => plan::SpatialCost::Oidn,
         };
-        let plans = self
-            .options
-            .plans(size, materials, cost, &gpu.device.limits())?;
+        let plans = options.plans(size, materials, cost, &gpu.device.limits())?;
         for plan in plans.into_iter().take(2) {
             let validation = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
             let oom = gpu.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
@@ -229,6 +245,7 @@ impl TemporalDenoiser {
                     self.options.guide_window(cost, plan.max),
                     self.options.reflection_motion,
                     self.planar_reflections,
+                    sample_tiles,
                 )?;
                 let spatial = match &self.spatial {
                     TemporalSpatial::Oidn(weights) => Some((
@@ -302,10 +319,17 @@ impl TemporalDenoiser {
     }
 
     fn insert_capture(&mut self, index: u32, capture: Capture) -> Result<()> {
-        self.prepare(capture.size, capture.revisions.len())?;
+        self.prepare(
+            capture.size,
+            capture.revisions.len(),
+            capture.sample_tiles.is_some(),
+        )?;
         self.failed = true;
         let p = self.passes.as_ref().unwrap();
         let i = self.count;
+        if let Some(tiles) = capture.sample_tiles {
+            p.store_sample_tiles(i, &tiles);
+        }
         let mut guides = capture.guides.map(Resource::Buffer);
         let raw_albedo = (self.options.reflection_motion && capture.raw)
             .then(|| Resource::Buffer(guides[3].buffer().clone()));

@@ -438,7 +438,7 @@ impl GpuScene {
             });
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &self.groups[0], &[]);
-            pass.set_bind_group(1, &self.groups[1], &[]);
+            pass.set_bind_group(1, self.sample_texture_group(target), &[]);
             pass.set_bind_group(3, output, &[]);
             for sample in first..until {
                 #[cfg(test)]
@@ -449,7 +449,7 @@ impl GpuScene {
                 if bindings.audit.is_some() {
                     pass.set_pipeline(pipeline);
                     pass.set_bind_group(0, &self.groups[0], &[]);
-                    pass.set_bind_group(1, &self.groups[1], &[]);
+                    pass.set_bind_group(1, self.sample_texture_group(target), &[]);
                     pass.set_bind_group(3, output, &[]);
                 }
                 let slot = (sample - first) as usize;

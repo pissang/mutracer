@@ -194,10 +194,10 @@ export class Worker {
       if (header.type !== 'frames') throw new NativeError('Expected a temporal frame batch.');
       for (const item of header.frames) yield {frame:item.frame, bytes:bytes.subarray(item.offset, item.offset + item.bytes)};
     };
-    for await (const {frame, t, descriptor, camera, cut} of inputs) {
+    for await (const {frame, t, descriptor, camera, cut, tiles} of inputs) {
       if (descriptor) await this.scene(descriptor, camera);
       if (cut) await this.request('cut', {});
-      const result = await this.request('render', {frame, t, settings});
+      const result = await this.request('render', {frame, t, settings}, tiles);
       await submitted?.(frame, result.header);
       yield* unpack(result);
     }

@@ -56,6 +56,8 @@ struct Overrides {
     experimental_capture: bool,
     #[serde(default)]
     experimental_planar: bool,
+    #[serde(default)]
+    experimental_geometry: bool,
     render: Option<RenderOptions>,
     display: Option<shot::Display>,
     format: Option<Format>,
@@ -117,12 +119,14 @@ enum Request {
         frame: u32,
         t: Option<f64>,
         settings: Option<Value>,
+        bytes: Option<u32>,
     },
     Check {
         id: u32,
         frame: u32,
         t: Option<f64>,
         settings: Option<Value>,
+        bytes: Option<u32>,
     },
 }
 
@@ -237,6 +241,7 @@ struct Stream {
     last_time: f64,
     flushing: bool,
     planar: bool,
+    sample_tiles: bool,
 }
 fn temporal_reply(
     writer: &mut impl Write,
@@ -391,7 +396,7 @@ impl Session {
                 reply(
                     writer,
                     json!({"type":"ok","id":id,"protocol":1,"shotVersion":1,"descriptorVersions":[8],
-                    "capabilities":["shot-json","descriptor-v8","asset-path","asset-bytes","shot-edit","png","oidn","image-decode","exr","render-settings","display-settings","frame-sample-sequence","check-settings","oidn-clean-aux-large","structured-warnings","temporal-offline","descriptor-camera","experimental-capture"],
+                    "capabilities":["shot-json","descriptor-v8","asset-path","asset-bytes","shot-edit","png","oidn","image-decode","exr","render-settings","display-settings","frame-sample-sequence","check-settings","oidn-clean-aux-large","structured-warnings","temporal-offline","descriptor-camera","experimental-capture","experimental-sample-tiles"],
                     "maxHeaderBytes":MAX_HEADER,"maxPayloadBytes":MAX_PAYLOAD,"build":env!("MUTRACER_CLI_BUILD_ID")}),
                     None,
                 )
@@ -586,12 +591,14 @@ impl Session {
                 frame,
                 t,
                 settings,
+                bytes,
             }
             | Request::Check {
                 id,
                 frame,
                 t,
                 settings,
+                bytes,
             } => {
                 let tick = Instant::now();
                 let scene = self
@@ -682,12 +689,69 @@ impl Session {
                         "Planar reflections require temporal reflection motion",
                     ));
                 }
+                let sample_tiles = bytes.is_some();
+                if sample_tiles
+                    && (check_only
+                        || !overrides.experimental_capture
+                        || overrides.experimental_geometry
+                        || settings.denoise != Denoise::Temporal
+                        || settings.tracer != Tracer::Hardware
+                        || config.options.accumulate_guides
+                        || settings.spp != 3
+                        || settings.sequence_stride.unwrap_or(settings.spp) < 8)
+                {
+                    return Err(invalid(
+                        "/bytes",
+                        "Sample tiles require experimental offline capture, 3 spp, current-frame guides and a stride of at least 8",
+                    ));
+                }
+                let tiles = if sample_tiles {
+                    let [columns, rows] = settings.size.map(|n| n.div_ceil(4));
+                    if payload.len() != (columns * rows) as usize * 4 {
+                        return Err(invalid(
+                            "/bytes",
+                            "Sample tile grid does not match the image size",
+                        ));
+                    }
+                    let tiles = payload
+                        .chunks_exact(4)
+                        .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
+                        .collect::<Vec<_>>();
+                    if tiles.iter().any(|n| !(3..=8).contains(n)) {
+                        return Err(invalid("/bytes", "Sample tile counts must be in 3..=8"));
+                    }
+                    Some(tiles)
+                } else {
+                    None
+                };
+                if overrides.experimental_geometry {
+                    if self.temporal.is_some()
+                        || settings.denoise != Denoise::Temporal
+                        || settings.tracer != Tracer::Hardware
+                    {
+                        return Err(invalid(
+                            "/settings/experimentalGeometry",
+                            "Trace hardware geometry before opening an offline stream",
+                        ));
+                    }
+                    let bytes_per_pixel = if config.options.reflection_motion {
+                        112
+                    } else {
+                        80
+                    };
+                    if settings.size[0] as usize * settings.size[1] as usize * bytes_per_pixel
+                        > MAX_PAYLOAD
+                    {
+                        return Err(Error::budget("Geometry exceeds the stdio payload limit"));
+                    }
+                }
                 if !check_only
                     && self.temporal.as_ref().is_some_and(|s| {
                         s.flushing
                             || s.settings != settings
                             || s.config != config
                             || s.planar != overrides.experimental_planar
+                            || s.sample_tiles != sample_tiles
                             || s.last.checked_add(1) != Some(frame)
                     })
                 {
@@ -789,8 +853,22 @@ impl Session {
                             .map_err(|e| Error::gpu(e.to_string()))?;
                     }
                 };
+                if overrides.experimental_geometry {
+                    let geometry = crate::temporal::geometry(&renderer.render)?;
+                    let mut payload = geometry.records;
+                    let record_bytes = payload.len();
+                    payload.extend(geometry.material.iter().flat_map(|word| word.to_le_bytes()));
+                    return reply(
+                        writer,
+                        json!({"type":"geometry","id":id,"size":geometry.size,
+                        "records":record_bytes,"eye":geometry.eye,"direction":geometry.direction,
+                        "focalLength":geometry.focal_length,"apertureRadius":geometry.aperture_radius,
+                        "sceneKey":geometry.scene_key.to_string(),"bytes":payload.len()}),
+                        Some(&payload),
+                    );
+                }
                 let image = if settings.denoise == Denoise::Temporal {
-                    renderer.converge(settings, frame)?;
+                    renderer.converge_with_tiles(settings, frame, tiles)?;
                     if self.temporal.is_none() {
                         self.temporal = Some(Stream {
                             filter: config.start_with_planar(
@@ -803,6 +881,7 @@ impl Session {
                             last_time: f64::NEG_INFINITY,
                             flushing: false,
                             planar: overrides.experimental_planar,
+                            sample_tiles,
                         });
                     }
                     let stream = self.temporal.as_mut().unwrap();

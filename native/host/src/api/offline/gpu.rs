@@ -30,6 +30,7 @@ pub(super) struct Passes {
     pub material_capacity: u32,
     accumulate_guides: bool,
     reflection_motion: bool,
+    pub sample_tiles: bool,
     diagnostic: Option<std::path::PathBuf>,
     pipelines: HashMap<String, wgpu::ComputePipeline>,
     resources: HashMap<&'static str, Resource>,
@@ -47,6 +48,7 @@ impl Passes {
         accumulate_guides: bool,
         reflection_motion: bool,
         planar_reflections: bool,
+        sample_tiles: bool,
     ) -> Result<Self> {
         let shaders = &crate::postprocess::sources()?.temporal;
         let pixels = u64::from(size[0]) * u64::from(size[1]);
@@ -60,6 +62,7 @@ impl Passes {
             material_capacity: materials.max(1) as u32,
             accumulate_guides,
             reflection_motion,
+            sample_tiles,
             diagnostic,
             pipelines: Default::default(),
             resources: Default::default(),
@@ -122,6 +125,20 @@ impl Passes {
             } else {
                 "windowReflections"
             });
+        }
+        if sample_tiles {
+            let bytes = u64::from(size[0].div_ceil(4))
+                * u64::from(size[1].div_ceil(4))
+                * u64::from(slots)
+                * 4;
+            if bytes > u64::from(pass.gpu.device.limits().max_storage_buffer_binding_size) {
+                return Err("Tile ring exceeds the GPU storage binding limit".into());
+            }
+            pass.buffer("sampleTiles", bytes);
+            names.push("windowTiles");
+            if reflection_motion {
+                names.push("windowReflectionsTiles");
+            }
         }
         if accumulate_guides {
             pass.buffer("albedoSum", pass.bytes);
@@ -429,6 +446,14 @@ impl Passes {
     fn guide_slot(&self, index: u32) -> u32 {
         index % self.plan.guide_slots(self.accumulate_guides)
     }
+    pub fn store_sample_tiles(&self, index: u32, tiles: &[u32]) {
+        self.write(
+            "sampleTiles",
+            u64::from(index % self.plan.slots()) * tiles.len() as u64 * 4,
+            tiles,
+        );
+    }
+
     pub fn window(&self, i: u32, j: u32, stage: u32, revisions: bool, check_lighting: bool) {
         let [w, h] = self.size;
         let p = self.plan;
@@ -464,11 +489,20 @@ impl Passes {
                 &self["reflectedTotal"],
             ]);
         }
-        let kernel = match (self.accumulate_guides, reflections) {
-            (true, true) => "windowGuidesReflections",
-            (false, true) => "windowReflections",
-            (true, false) => "windowGuides",
-            (false, false) => "window",
+        let kernel = if self.sample_tiles {
+            bindings.push(&self["sampleTiles"]);
+            if reflections {
+                "windowReflectionsTiles"
+            } else {
+                "windowTiles"
+            }
+        } else {
+            match (self.accumulate_guides, reflections) {
+                (true, true) => "windowGuidesReflections",
+                (false, true) => "windowReflections",
+                (true, false) => "windowGuides",
+                (false, false) => "window",
+            }
         };
         self.image_pass(
             kernel,

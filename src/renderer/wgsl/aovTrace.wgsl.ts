@@ -2,7 +2,7 @@ import {aovReflectionWgsl} from './aovReflection.wgsl.js';
 import {materialCall, type MaterialShaderHooks} from './materialShaderHooks.js';
 // These entry points use their own output bindings and never mutate beauty RNG
 // state or accumulation. Storage usage remains four scene + three AOV buffers.
-export function createAovTraceWgsl(materialHooks: MaterialShaderHooks = {}, reflections = false, coatNormals = false) { return /* wgsl */ `
+export function createAovTraceWgsl(materialHooks: MaterialShaderHooks = {}, reflections = false, coatNormals = false, centerMaterial = false) { return /* wgsl */ `
 override AOV_REFLECTANCE: bool = true;
 override AOV_PRIMARY: bool = false;
 struct AovAccumulation {
@@ -152,7 +152,12 @@ ${reflections ? `  let reflectionIndex = primaryIndex + select(0u, size.x*size.y
     let depth = max(dot(si.position-cameraUniform.viewInv[3].xyz, -normalize(cameraUniform.viewInv[2].xyz)), 0.0);
     aovCenter[primaryIndex] = AovCenter(bitcast<vec4u>(vec4f(si.normal, depth)), vec4f(si.position, ${reflections ? 'aovDielectricGloss(ray, si, material)' : '1.0'}));
   }
-  let offset = 52u + u32(si.instanceIndex) * 24u;
+${centerMaterial ? `  if ((aovParameters.w & 0x80000000u) != 0u) {
+    // Geometry-only pilots use material data from the very same center hit.
+    aovAccum[index].depthRoughness = vec4f(0.0, material.specularRoughness, material.baseMetalness, 0.0);
+    aovAccum[index].position = vec4f(si.position, 1.0);
+  }
+` : ''}  let offset = 52u + u32(si.instanceIndex) * 24u;
 ${reflections ? `  aovCenter[reflectionIndex] = traceReflection(id.xy, size, ray, si, material, offset);
 ` : ''}  let materialOffset = aovScene[16u];
   let primitiveOffset = aovScene[17u];

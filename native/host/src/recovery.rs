@@ -64,9 +64,10 @@ impl GpuScene {
                 && t.format() == wgpu::TextureFormat::R32Float
                 && t.usage().contains(wgpu::TextureUsages::COPY_DST)
         });
-        let Some(texture) = texture else {
+        let adaptive_targets = target.sample_targets.as_ref();
+        if texture.is_none() && adaptive_targets.is_none() {
             return Err(original);
-        };
+        }
         let begun = Instant::now();
         let deadline = begun + TIME_LIMIT;
         let mut retries = 0;
@@ -80,8 +81,12 @@ impl GpuScene {
         let uniform = &target.buffers[&layout::resource::TRACE_UNIFORM];
         let adaptive = layout::ray_uniform::ADAPTIVE_SAMPLING as u64;
         let set_target = |value: f32| {
+            if let Some(targets) = adaptive_targets {
+                targets.upload(queue, Some(value));
+                return;
+            }
             queue.write_texture(
-                texture.as_image_copy(),
+                texture.unwrap().as_image_copy(),
                 &value.to_le_bytes(),
                 wgpu::TexelCopyBufferLayout::default(),
                 wgpu::Extent3d {
@@ -152,7 +157,7 @@ impl GpuScene {
                         pass.set_pipeline(target.pipeline.as_ref().unwrap_or(&self.pipeline));
                         for (i, group) in [
                             &self.groups[layout::group::SCENE],
-                            &self.groups[layout::group::TEXTURES],
+                            self.sample_texture_group(target),
                             &target.groups[0],
                             &target.groups[1],
                         ]
@@ -204,8 +209,12 @@ impl GpuScene {
         })();
         // Queue writes are ordered before the next ordinary submission. Restore
         // on failure too, so subsequent targets never inherit repair state.
-        queue.write_buffer(uniform, adaptive, &0i32.to_le_bytes());
-        set_target(0.);
+        if let Some(targets) = adaptive_targets {
+            targets.upload(queue, None);
+        } else {
+            queue.write_buffer(uniform, adaptive, &0i32.to_le_bytes());
+            set_target(0.);
+        }
         native_log!(
             "{}",
             serde_json::json!({"nativeFlightRecovery": {

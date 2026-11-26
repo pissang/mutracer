@@ -14,6 +14,9 @@ export const output = {
   temporal: {mode: 'offline'}
 };
 
+// The center-ray pilot replays this absolute camera cut before allocating tiles.
+export const experimentalGeometryCuts = [Math.ceil(temporalStressTiming.cut * temporalStressTiming.fps)];
+
 let shot;
 
 export function setup({mutracer}) {

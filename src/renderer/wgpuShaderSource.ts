@@ -22,6 +22,7 @@ export interface WGPUShaderFeatures {
   shareSpectralPrefix?: boolean;
   /** WebGPU display AOV storage specialization. Default false preserves the native/default shader. */
   displayAovStorage?: boolean;
+  centerMaterialAov?: boolean;
   radianceOutputs?: boolean;
   hasDisplacement: boolean;
   /** Browser camera extension; false preserves the native uniform layout. */

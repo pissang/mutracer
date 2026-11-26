@@ -18,6 +18,17 @@ pub(crate) mod abi;
 mod custom_denoise;
 mod offline;
 pub use offline::{HistoryInvalidation,HistoryRadius,OfflineFrame,OfflineSpatialFilter,TemporalDenoiser,TemporalOptions,TemporalPlan,TemporalSpatial};
+#[doc(hidden)]
+pub struct OfflineGeometry {
+    pub records: Vec<u8>,
+    pub material: Vec<f32>,
+    pub scene_key: u64,
+    pub size: [u32; 2],
+    pub eye: [f32; 3],
+    pub direction: Option<[f32; 3]>,
+    pub focal_length: f32,
+    pub aperture_radius: f32,
+}
 pub(crate) mod custom_gpu;
 #[cfg(test)]
 mod custom_gpu_failure_tests;

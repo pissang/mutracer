@@ -782,7 +782,36 @@ fn build_pipeline(
 /// pipeline of its pattern/bevel-sample variant when it differs from the scene's.
 const REFLECTED_RADIANCE_BINDING: u32 = 14;
 
+struct SampleTargets {
+    texture: wgpu::Texture,
+    group: wgpu::BindGroup,
+    pixels: Vec<f32>,
+}
+
+impl SampleTargets {
+    fn upload(&self, queue: &GpuQueue, limit: Option<f32>) {
+        let clamped;
+        let pixels = if let Some(limit) = limit {
+            clamped = self.pixels.iter().map(|v| v.min(limit)).collect::<Vec<_>>();
+            &clamped
+        } else {
+            &self.pixels
+        };
+        queue.write_texture(
+            self.texture.as_image_copy(),
+            bytemuck::cast_slice(pixels),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(self.texture.width() * 4),
+                rows_per_image: None,
+            },
+            self.texture.size(),
+        );
+    }
+}
+
 struct Target {
+    sample_targets: Option<SampleTargets>,
     reflected_radiance: Option<wgpu::Buffer>,
     query_guard: Option<query_guard::Guard>,
     workgroup_size: u32,
@@ -1292,6 +1321,7 @@ impl GpuScene {
                 .filter_map(|id| buffers.remove(&id).map(|b| (id, b)))
                 .collect();
             Some(Target {
+                sample_targets: None,
                 query_guard: query_guard.clone(),
                 workgroup_size: 8,
                 caustic_sequence_offset: 0,
@@ -1709,6 +1739,7 @@ impl GpuScene {
             caustics.is_some(),
         );
         Ok(Target {
+            sample_targets: None,
             reflected_radiance,
             query_guard,
             workgroup_size,
@@ -1731,6 +1762,65 @@ impl GpuScene {
             .then(|| DispatchAudit::new(device)),
         })
     }
+    fn set_sample_tiles(&self, target: &mut Target, tiles: &[u32]) -> Result<()> {
+        use layout::{group::TEXTURES, ray_uniform::ADAPTIVE_SAMPLING, resource};
+        with_error_scopes(
+            &self.gpu.device,
+            || {
+                let texture = self.gpu.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("Offline sample targets"),
+                    size: wgpu::Extent3d {
+                        width: target.width,
+                        height: target.height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::R32Float,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+                let group = self.texture_group(TEXTURES, Some((resource::DISPLACEMENT, &texture)));
+                let columns = target.width.div_ceil(4) as usize;
+                let mut pixels = Vec::with_capacity((target.width * target.height) as usize);
+                for y in (0..target.height).rev() {
+                    let row = y as usize / 4 * columns;
+                    for x in 0..target.width {
+                        pixels.push(tiles[row + x as usize / 4] as f32);
+                    }
+                }
+                let targets = SampleTargets {
+                    texture,
+                    group,
+                    pixels,
+                };
+                targets.upload(&self.gpu.queue, None);
+                self.gpu.queue.write_buffer(
+                    &target.buffers[&resource::TRACE_UNIFORM],
+                    ADAPTIVE_SAMPLING as u64,
+                    &1i32.to_le_bytes(),
+                );
+                if let Some(batch) = &target.sampling_batch {
+                    batch
+                        .lock()
+                        .unwrap()
+                        .write_trace(ADAPTIVE_SAMPLING, &1i32.to_le_bytes());
+                }
+                target.sample_targets = Some(targets);
+                Ok(())
+            },
+            |e| e.to_string().into(),
+        )
+    }
+
+    fn sample_texture_group<'a>(&'a self, target: &'a Target) -> &'a wgpu::BindGroup {
+        target
+            .sample_targets
+            .as_ref()
+            .map_or(&self.groups[layout::group::TEXTURES], |t| &t.group)
+    }
+
     /// Submits samples `start..start + additional` of a target without waiting.
     fn dispatch_target(
         &self,
@@ -1776,7 +1866,7 @@ impl GpuScene {
                 .caustics
                 .as_ref()
                 .map(|c| &c.textures)
-                .unwrap_or(&self.groups[layout::group::TEXTURES]),
+                .unwrap_or_else(|| self.sample_texture_group(target)),
             &target.groups[0],
             &target.groups[1],
         ];
@@ -2444,12 +2534,27 @@ impl GpuScene {
         }
         Ok(())
     }
-    /// Rebuilds the bind groups that sample any of the `replaced` textures.
-    fn rebind_textures(&mut self, replaced: &[usize]) -> Result<()> {
+    fn texture_group(
+        &self,
+        index: usize,
+        replacement: Option<(usize, &wgpu::Texture)>,
+    ) -> wgpu::BindGroup {
+        let group = &self.scene.bind_groups[index];
         let views: HashMap<_, _> = self
             .textures
             .iter()
-            .map(|(id, texture)| (*id, scene_texture_view(&self.scene, texture, *id)))
+            .map(|(id, texture)| {
+                (
+                    *id,
+                    scene_texture_view(
+                        &self.scene,
+                        replacement
+                            .filter(|(key, _)| key == id)
+                            .map_or(texture, |(_, value)| value),
+                        *id,
+                    ),
+                )
+            })
             .collect();
         let independent_views: Vec<_> = (0..self
             .scene
@@ -2459,6 +2564,34 @@ impl GpuScene {
             .count())
             .map(|i| &views[&(layout::resource::MATERIAL_TEXTURE_BASE + i)])
             .collect();
+        let entries: Vec<_> = group
+            .entries
+            .iter()
+            .map(|entry| wgpu::BindGroupEntry {
+                binding: entry.binding,
+                resource: match entry.kind {
+                    BindingKind::Buffer => self.buffers[&entry.id].as_entire_binding(),
+                    BindingKind::TextureArray(_) => {
+                        wgpu::BindingResource::TextureViewArray(&independent_views)
+                    }
+                    BindingKind::Texture => wgpu::BindingResource::TextureView(&views[&entry.id]),
+                    BindingKind::Sampler => {
+                        wgpu::BindingResource::Sampler(&self.samplers[&entry.id])
+                    }
+                },
+            })
+            .collect();
+        self.gpu
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("MuTracer scene textures"),
+                layout: &self.pipeline.get_bind_group_layout(index as u32),
+                entries: &entries,
+            })
+    }
+
+    /// Rebuilds the bind groups that sample any of the `replaced` textures.
+    fn rebind_textures(&mut self, replaced: &[usize]) -> Result<()> {
         for (index, group) in self.scene.bind_groups.iter().enumerate() {
             let uses = |entry: &Binding| match entry.kind {
                 BindingKind::Texture => replaced.contains(&entry.id),
@@ -2473,33 +2606,7 @@ impl GpuScene {
             if index == layout::group::SCENE {
                 return Err("Scene group textures cannot be resized".into());
             }
-            let entries: Vec<_> = group
-                .entries
-                .iter()
-                .map(|entry| wgpu::BindGroupEntry {
-                    binding: entry.binding,
-                    resource: match entry.kind {
-                        BindingKind::Buffer => self.buffers[&entry.id].as_entire_binding(),
-                        BindingKind::TextureArray(_) => {
-                            wgpu::BindingResource::TextureViewArray(&independent_views)
-                        }
-                        BindingKind::Texture => {
-                            wgpu::BindingResource::TextureView(&views[&entry.id])
-                        }
-                        BindingKind::Sampler => {
-                            wgpu::BindingResource::Sampler(&self.samplers[&entry.id])
-                        }
-                    },
-                })
-                .collect();
-            self.groups[index] = self
-                .gpu
-                .device
-                .create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("MuTracer capture resources"),
-                    layout: &self.pipeline.get_bind_group_layout(index as u32),
-                    entries: &entries,
-                });
+            self.groups[index] = self.texture_group(index, None);
         }
         Ok(())
     }

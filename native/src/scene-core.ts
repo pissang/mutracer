@@ -685,7 +685,7 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
     USE_ENVMAP: !!environment, ...sceneTraversalConstants(Math.max(stacks.tlas, 32), stacks.blas), ...attributeLayout.constants,
     ...nativeMaterialConstants(prepared.materials, table, geometry, configuration.bevelSamples), SAMPLING_PATTERN: configuration.sampling.code};
   const independentTextures = table.atlas.independentTextures;
-  const features: Parameters<typeof wgpuShaderSource>[1] = {sampleIndexedRandomJitter: true, independentTextures, analyticLightStorage: true, compactVertices: true, hasDisplacement: table.displacementMaps.length > 0,
+  const features: Parameters<typeof wgpuShaderSource>[1] = {centerMaterialAov: true, sampleIndexedRandomJitter: true, independentTextures, analyticLightStorage: true, compactVertices: true, hasDisplacement: table.displacementMaps.length > 0,
     // Match the browser spectral reservoir even for one-wavelength previews.
     // Only three-wavelength targets replay RGB prefixes; the source feature is
     // part of nativeShaderVariant's key and the host caches the resulting WGSL.

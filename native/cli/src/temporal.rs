@@ -171,6 +171,13 @@ pub fn flush(filter: &mut api::TemporalDenoiser) -> Result<Option<api::OfflineFr
     watched(TEMPORAL_TIMEOUT, "temporal flush", || filter.flush()).map_err(gpu)
 }
 
+pub fn geometry(render: &api::Render) -> Result<api::OfflineGeometry> {
+    watched(TEMPORAL_TIMEOUT, "offline geometry", || {
+        render.experimental_offline_geometry()
+    })
+    .map_err(gpu)
+}
+
 pub fn capture_inputs(render: &api::Render) -> Result<([u32; 2], Vec<u8>)> {
     watched(TEMPORAL_TIMEOUT, "capture input readback", || {
         let hdr = render.read_pixels(api::PixelKind::Hdr).map_err(gpu)?;

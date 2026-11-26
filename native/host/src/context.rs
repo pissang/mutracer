@@ -399,6 +399,7 @@ pub(crate) fn set_target(
     alpha_blend_strategy: u32,
     camera: &[u8; 128],
     capture_reflections: bool,
+    tiles: Option<&[u32]>,
 ) -> Result<()> {
     let snapshot = with_registry(|registry| {
         let (current, source) = target_contexts(registry, handle, owner)?;
@@ -462,7 +463,10 @@ pub(crate) fn set_target(
         let previous = current.target.take();
         current.job = None;
         current.failed = true;
-        let target = scene.target(packet, size, previous)?;
+        let mut target = scene.target(packet, size, previous)?;
+        if let Some(tiles) = tiles {
+            scene.set_sample_tiles(&mut target, tiles)?;
+        }
         current.target = Some(target);
         current.link = Some(Link {
             scene: owner,
