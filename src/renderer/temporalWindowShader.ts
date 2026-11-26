@@ -399,7 +399,26 @@ fn silhouetteConfidence(x: vec2i, at: vec2i, pos: vec4f, rgb: vec3f) -> f32 {
     }
   }
   let allowed = 4.*max(current,supportedPeak);
-  return 1.-smoothstep(allowed,2.*allowed,history);
+  if (history <= allowed) { return 1.; }
+  let sourceDepth = surface(at,p.source,0u).w;
+  let backgroundBlur = max(coc(pos.w,p.current),coc(sourceDepth,p.source));
+  if (backgroundBlur >= 1.) { return 1.; }
+  for (var dy = -1; dy <= 1; dy++) {
+    for (var dx = -1; dx <= 1; dx++) {
+      let neighbor = at+vec2i(dx,dy);
+      if (!inFrame(vec2f(neighbor))) { continue; }
+      let depth = surface(neighbor,p.source,0u).w;
+      if (depth > 0. && depth < .96*sourceDepth &&
+          dot(radiance(neighbor,p.source),luma) >= .9*history) {
+        let edgeBlur = max(backgroundBlur,coc(depth,p.source));
+        let confidence = 1.-smoothstep(.5,1.,edgeBlur);
+        if (confidence > 0.) {
+          return 1.-confidence*smoothstep(allowed,2.*allowed,history);
+        }
+      }
+    }
+  }
+  return 1.;
 }
 `;
 

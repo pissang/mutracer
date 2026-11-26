@@ -39,12 +39,14 @@ center ray hits the background. The background correspondence can be valid
 while some of its radiance belongs to the foreground. This can leave a bright
 trail after the foreground moves.
 
-The offline window marks source pixels next to substantially nearer geometry.
-If a matched tap is much brighter than the current center and nearby samples
-with the same surface identity, the window reduces its weight. Two nearby
-samples can support a bright value, so one noisy neighbor is insufficient.
-The current frame and independently matched virtual reflections keep their
-weights. Capture stores the foreground marker in the existing motion flags.
+Capture marks source pixels next to substantially nearer geometry. The offline
+window reduces a matched tap's weight when nearby pixels on that foreground
+can account for its brightness and the current surface cannot. Two nearby
+samples with the current surface identity can support a bright value, so one
+noisy neighbor is insufficient. The check fades out as the circle of confusion
+approaches one pixel, where a 3×3 neighborhood is less reliable. The current
+frame and independently matched virtual reflections keep their weights.
+Capture stores the marker in the existing motion flags.
 
 ## Experimental geometry-guided sampling
 

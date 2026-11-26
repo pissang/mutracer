@@ -892,7 +892,7 @@ fn offline_window_rejects_unexplained_bright_history_behind_foreground() {
         ..Default::default()
     };
     let mut filter = TemporalDenoiser::new(&engine, options, TemporalSpatial::None).unwrap();
-    let size = [8, 4];
+    let size = [11, 4];
     let mut camera = [0.; 20];
     for i in [0, 5, 10, 15, 18] {
         camera[i] = 1.;
@@ -902,9 +902,11 @@ fn offline_window_rejects_unexplained_bright_history_behind_foreground() {
             let pixels = (0..size[0] * size[1])
                 .flat_map(|pixel| {
                     let x = pixel % size[0];
-                    let foreground = index == 0 && x == 6;
+                    let foreground = index == 0 && matches!(x, 6 | 9);
                     let depth = if foreground { 0.5 } else { 1. };
-                    let value = if x == 1 || index == 0 && matches!(x, 3 | 5) {
+                    let value = if index == 0 && x == 6 {
+                        48.
+                    } else if x == 1 || index == 0 && matches!(x, 3 | 5 | 8) {
                         24.
                     } else {
                         0.2
@@ -963,4 +965,8 @@ fn offline_window_rejects_unexplained_bright_history_behind_foreground() {
         "Retain the bright tap away from the edge"
     );
     assert!((pixels[5 * 4] - 0.2).abs() < 0.001);
+    assert!(
+        pixels[8 * 4] > 5.,
+        "Retain the bright tap next to a dim foreground"
+    );
 }
