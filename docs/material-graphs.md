@@ -69,10 +69,10 @@ edits nor drives rendering: keep calling `refine()` or running RenderLoop until
 it resolves.
 
 The compiler module downloads when the committed scene first uses a graph, or
-earlier with `shaderPrefetch: 'editing'`. Until a graph installs, and when it
-fails, rendering uses the previous successful graph for that material, or the
-material's constants and maps if none exists. Node and port errors on one
-material do not block valid graphs on others.
+earlier with `shaderPrefetch: 'editing'`. While graph preparation is pending or
+after it fails, interactive rendering uses each material's previous successful
+graph, or its constants and maps. Node and port errors affect just their
+materials. For offline rendering, see [`converge()`](./api.md#convergeoptions).
 
 Read `engine.getDiagnostics()?.materialGraphs` for `status` (`idle`, `compiling`,
 `ready`, `failed`), revisions, topology count, compilation timings and located
