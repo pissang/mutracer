@@ -58,6 +58,7 @@ export interface RayTraceShaderOptions {
   independentTextures?: boolean;
   /** WebGPU display AOV storage specialization. Default false preserves the native/default shader. */
   displayAovStorage?: boolean;
+  centerMaterialAov?: boolean;
   /** Add path-radiance split writes to the beauty invocation. Default false. */
   radianceOutputs?: boolean;
   hasDisplacement: boolean;
@@ -1302,7 +1303,7 @@ ${radianceOutputs ? `  if (!outAux.isShadowCatcher) {
   // It has no effect on the beauty entry point or its bindings.
   // Gate optional material layers on scene-level feature flags so drivers can
   // skip the unused BSDF lobes.
-  let specializedSource = source + createDepthQueryWgsl(materialHooks) + reflectanceWGSL + (options.displayAovStorage ? createAovTraceDisplayWgsl(materialHooks, radianceOutputs, hasCoatNormals) : createAovTraceWgsl(materialHooks, radianceOutputs, hasCoatNormals));
+  let specializedSource = source + createDepthQueryWgsl(materialHooks) + reflectanceWGSL + (options.displayAovStorage ? createAovTraceDisplayWgsl(materialHooks, radianceOutputs, hasCoatNormals) : createAovTraceWgsl(materialHooks, radianceOutputs, hasCoatNormals, options.centerMaterialAov));
   const backgroundBits: Record<string, number> = {
     USE_BACKGROUND: 1,
     USE_BACKGROUND_MAP: 2,

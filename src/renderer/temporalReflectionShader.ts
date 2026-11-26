@@ -1,7 +1,7 @@
 // The native trace outputs are bottom-first. Store the reflection data on the
 // same top-first capture grid as the A2 window and its motion field.
-export const captureReflectionsWGSL = /* wgsl */ `
-struct Params { size: vec2u, slot: u32, samples: u32 }
+export const createCaptureReflectionsWGSL = (planarExperiment = false) => /* wgsl */ `
+${planarExperiment ? 'override EXPERIMENTAL_PLANAR_REFLECTIONS: bool = false;\n' : ''}struct Params { size: vec2u, slot: u32, samples: u32 }
 struct Record { endpoint: vec4u, motion: vec4f }
 @group(0) @binding(0) var<uniform> p: Params;
 @group(0) @binding(1) var<storage, read> radianceSum: array<vec4f>;
@@ -47,7 +47,7 @@ fn axisCurvature(at: vec2i, axis: vec2i, key: vec3u, center: Record) -> vec3f {
 // stores the negated curvature confidence. -2 marks a rejected solve.
 fn curvedDisplacement(pixel: vec2i, source: u32, record: Record, samples: f32) -> vec3f {
   let planar=record.motion.xy;
-  let surfaceMotion=record.motion.zw;
+${planarExperiment ? '  if (EXPERIMENTAL_PLANAR_REFLECTIONS) { return vec3f(planar,1.); }\n' : ''}  let surfaceMotion=record.motion.zw;
   let distance=bitcast<f32>(record.endpoint.z);
   if (distance==0. || any(abs(planar)>=vec2f(p.size)) || any(abs(surfaceMotion)>=vec2f(p.size))) {
     return vec3f(planar,1.);
@@ -134,6 +134,7 @@ fn packReflectionMetadata(raw: vec4u) -> u32 {
     vec4u(record.endpoint.xy,displacement,packReflectionMetadata(record.endpoint)));
 }
 `;
+export const captureReflectionsWGSL = createCaptureReflectionsWGSL();
 
 export function reflectionWindowWGSL(binding: number) {
   return /* wgsl */ `

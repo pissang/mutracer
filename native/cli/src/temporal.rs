@@ -82,9 +82,21 @@ impl Config {
         Ok(())
     }
     pub fn start(&self, engine: &api::Engine) -> Result<api::TemporalDenoiser> {
+        self.start_with_planar(engine, false)
+    }
+    pub fn start_with_planar(
+        &self,
+        engine: &api::Engine,
+        planar: bool,
+    ) -> Result<api::TemporalDenoiser> {
         let library = render_settings::denoiser_library(Denoise::Temporal, "/output/denoise")?;
-        api::TemporalDenoiser::new(engine, self.options, api::TemporalSpatial::Oidn(library))
-            .map_err(gpu)
+        let mut denoiser =
+            api::TemporalDenoiser::new(engine, self.options, api::TemporalSpatial::Oidn(library))
+                .map_err(gpu)?;
+        denoiser
+            .experimental_planar_reflections(planar)
+            .map_err(gpu)?;
+        Ok(denoiser)
     }
 }
 pub fn validate_settings(settings: Settings, pointer: &str) -> Result<()> {
@@ -159,6 +171,25 @@ pub fn flush(filter: &mut api::TemporalDenoiser) -> Result<Option<api::OfflineFr
     watched(TEMPORAL_TIMEOUT, "temporal flush", || filter.flush()).map_err(gpu)
 }
 
+pub fn geometry(render: &api::Render) -> Result<api::OfflineGeometry> {
+    watched(TEMPORAL_TIMEOUT, "offline geometry", || {
+        render.experimental_offline_geometry()
+    })
+    .map_err(gpu)
+}
+
+pub fn capture_inputs(render: &api::Render) -> Result<([u32; 2], Vec<u8>)> {
+    watched(TEMPORAL_TIMEOUT, "capture input readback", || {
+        let hdr = render.read_pixels(api::PixelKind::Hdr).map_err(gpu)?;
+        let ids = render.read_pixels(api::PixelKind::Id).map_err(gpu)?;
+        let ids = ids.id_data.ok_or_else(|| gpu("Missing input IDs"))?;
+        let mut bytes = Vec::with_capacity(hdr.data.len() * 4 + ids.len() * 4);
+        bytes.extend(hdr.data.iter().flat_map(|word| word.to_le_bytes()));
+        bytes.extend(ids.iter().flat_map(|word| word.to_le_bytes()));
+        Ok(([hdr.width, hdr.height], bytes))
+    })
+}
+
 pub fn encode(frame: &api::OfflineFrame, format: Format) -> Result<Vec<u8>> {
     let image = watched(TEMPORAL_TIMEOUT, "temporal readback", || {
         frame.read_pixels(false)
@@ -194,7 +225,12 @@ mod tests {
 
     #[test]
     fn parses_guide_accumulation_in_temporal_settings() {
-        assert!(!serde_json::from_str::<Config>("{}").unwrap().options.accumulate_guides);
+        assert!(
+            !serde_json::from_str::<Config>("{}")
+                .unwrap()
+                .options
+                .accumulate_guides
+        );
         let settings: Config = serde_json::from_str(r#"{"accumulateGuides":true}"#).unwrap();
         assert!(settings.options.accumulate_guides);
         assert!(serde_json::from_str::<Config>(r#"{"accumulateGuides":null}"#).is_err());

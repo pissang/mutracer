@@ -88,6 +88,7 @@ impl Fixture {
                 0,
                 &self.camera,
                 false,
+                Default::default(),
             ),
         )
     }
@@ -107,6 +108,7 @@ impl Fixture {
                     0,
                     &camera,
                     false,
+                    Default::default(),
                 ),
             )
         })

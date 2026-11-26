@@ -123,6 +123,8 @@ pub struct Settings {
     pub seed_value: u32,
     pub sample_sequence_offset: u32,
     pub sample_sequence: SampleSequence,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sequence_stride: Option<u32>,
     pub render: RenderOptions,
     pub denoise: Denoise,
     pub format: Format,
@@ -155,6 +157,7 @@ impl Settings {
             seed_value: output.seed_value,
             sample_sequence_offset: output.sample_sequence_offset,
             sample_sequence: overrides.sample_sequence.unwrap_or(output.sample_sequence),
+            sequence_stride: None,
             render,
             denoise: overrides.denoise.unwrap_or(defaults.2),
             format: overrides.format,
@@ -201,7 +204,7 @@ impl Settings {
     pub fn offset(self, frame: u32, pointer: &str) -> Result<u32> {
         self.sample_sequence.offset(
             self.sample_sequence_offset,
-            self.spp,
+            self.sequence_stride.unwrap_or(self.spp),
             frame,
             &format!("{pointer}/sampleSequenceOffset"),
         )
@@ -514,6 +517,14 @@ impl Renderer {
         }
     }
     pub fn converge(&self, settings: Settings, frame: u32) -> Result<()> {
+        self.converge_with_tiles(settings, frame, None)
+    }
+    pub fn converge_with_tiles(
+        &self,
+        settings: Settings,
+        frame: u32,
+        tiles: Option<Vec<u32>>,
+    ) -> Result<()> {
         let mut options = self
             .render
             .settings()
@@ -527,9 +538,12 @@ impl Renderer {
         }
         let mut converge = api::ConvergeOptions::new(settings.spp);
         converge.sample_sequence_offset = settings.offset(frame, "/output")?;
-        self.render
-            .converge(converge)
-            .map_err(|e| Error::gpu(e.to_string()))?;
+        if let Some(tiles) = tiles {
+            self.render.experimental_converge_tiles(converge, tiles)
+        } else {
+            self.render.converge(converge)
+        }
+        .map_err(|e| Error::gpu(e.to_string()))?;
         if matches!(settings.denoise, Denoise::Oidn | Denoise::CleanAuxLarge) {
             match self.render.denoise_report() {
                 Some(report) if report.samples == settings.spp && report.error.is_none() => {}

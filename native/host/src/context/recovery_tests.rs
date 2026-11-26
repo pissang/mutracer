@@ -192,6 +192,7 @@ fn collection_without_scene_owner_preserves_original_failure_state() {
         0,
         &camera,
         false,
+        Default::default(),
     )
     .unwrap();
     let job = submit(target, 2).unwrap();

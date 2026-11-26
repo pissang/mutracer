@@ -11,6 +11,8 @@ import {NativeSceneEncoder} from '../../viewer/src/engine/nativeScene.ts';
 import {loaders} from './load.mjs';
 import {strictConversion} from './strict.mjs';
 import {NativeError, Worker, nativeCommand} from './worker.mjs';
+import {planSampling} from './offline-sampling.mjs';
+import {offlineSampleCap} from '../../src/temporal/offlineSamplePlan.ts';
 
 const emit = record => process.stdout.write(JSON.stringify(record) + '\n');
 const emittedWarnings = new Set();
@@ -49,11 +51,16 @@ function args() {
       t: {type: 'string'}, seed: {type: 'string'}, denoise: {type: 'string'}, tracer: {type: 'string'},
       bounces: {type: 'string'}, format: {type: 'string'}, 'sample-sequence': {type: 'string'},
       'keep-frames': {type: 'string'}, 'contact-sheet': {type: 'string'},
+      'seed-value': {type: 'string'}, 'sample-stride': {type: 'string'},
+      'reflection-motion': {type: 'string'}, 'history-radius': {type: 'string'},
+      'post-radius': {type: 'string'}, 'timing-only': {type: 'boolean'},
+      'context': {type: 'string'}, 'sample-budget': {type: 'string'},
+      'sample-floor': {type: 'string'}, 'save-geometry': {type: 'boolean'},
     },
   });
   if (values.help) return {};
   const [command, file] = positionals;
-  if (positionals.length !== 2 || !['validate','still','preview','render'].includes(command)) {
+  if (positionals.length !== 2 || !['validate','still','preview','render','capture'].includes(command)) {
     throw new Error('Usage: mutracer-js validate|still|preview|render SHOT.mjs [-o FILE]');
   }
   if (command !== 'validate' && !values.output) throw new Error('Specify -o FILE.');
@@ -102,7 +109,7 @@ function options(input, command, values) {
   if (!['oidn','cleanAuxLarge','temporal','none'].includes(denoise)) throw new Error('Use --denoise oidn, cleanAuxLarge, temporal or none.');
   const tracer = values.tracer ?? input.tracer ?? 'hardware';
   if (!['hardware','software'].includes(tracer)) throw new Error('Use --tracer hardware or software.');
-  const seedValue = number(input.seedValue ?? 12345, 'seedValue', 0, 0xffffffff);
+  const seedValue = number(values['seed-value'] ?? input.seedValue ?? 12345, 'seedValue', 0, 0xffffffff);
   const offset = number(input.sampleSequenceOffset ?? 0, 'sampleSequenceOffset', 0, 0xffffffff);
   if (offset + spp > 0x100000000) throw new Error('Sequence range exceeds 32-bit sample indices.');
   if (values.frames !== undefined && !/^\d+(?:-\d+)?$/.test(values.frames)) {
@@ -128,14 +135,46 @@ function options(input, command, values) {
   if (denoise === 'temporal' && (preview || sampleSequence !== 'frame')) {
     throw new Error('Temporal rendering requires stride 1 and output.sampleSequence set to frame.');
   }
-  const temporal = input.temporal && {...input.temporal};
+  const experimentalKeys = ['seed-value','sample-stride','reflection-motion','history-radius','post-radius','timing-only','context','sample-budget','sample-floor','save-geometry'];
+  const experimental = command === 'capture';
+  if (!experimental && experimentalKeys.some(key => values[key] !== undefined)) {
+    throw new Error('Experimental options require the capture command.');
+  }
+  const temporal = denoise === 'temporal' && experimental ? {...input.temporal} : input.temporal && {...input.temporal};
+  const projection = values['reflection-motion'];
+  if (projection !== undefined) {
+    if (!temporal || denoise !== 'temporal' || !['off','planar','curved'].includes(projection)) {
+      throw new Error('Use --reflection-motion off, planar or curved with temporal denoising.');
+    }
+    temporal.reflectionMotion = projection !== 'off';
+  }
+  for (const [flag, key] of [['history-radius','historyRadius'], ['post-radius','postRadius']]) {
+    if (values[flag] === undefined) continue;
+    if (!temporal || denoise !== 'temporal') throw new Error(`--${flag} requires temporal denoising.`);
+    temporal[key] = number(values[flag], flag, 0, key === 'postRadius' ? 3 : 32);
+  }
+  if (temporal?.postRadius === 0 && experimental) temporal.stabilizeSparkle = false;
+  const sampleBudget = values['sample-budget'] === undefined ? undefined : Number(values['sample-budget']);
+  const sampleFloor = values['sample-floor'] === undefined ? 10 : Number(values['sample-floor']);
+  if (sampleBudget !== undefined && (denoise !== 'temporal' || spp !== 3 || tracer !== 'hardware' ||
+      temporal?.accumulateGuides || !Number.isFinite(sampleBudget) || sampleBudget < spp || sampleBudget > offlineSampleCap)) {
+    throw new Error('Sample budgets need hardware offline rendering at 3 base spp, current-frame guides and a budget in [3, 8].');
+  }
+  if ((values['sample-floor'] !== undefined || values['save-geometry']) && sampleBudget === undefined) {
+    throw new Error('Specify a sample budget to configure or save the geometry pilot.');
+  }
+  if (!Number.isFinite(sampleFloor) || sampleFloor <= 0) throw new Error('Sample floor must be positive.');
+  const sequenceStride = values['sample-stride'] === undefined ? (sampleBudget === undefined ? undefined : 32) :
+    number(values['sample-stride'], 'sample stride', sampleBudget === undefined ? spp : offlineSampleCap, 0xffffffff);
   const format = values.format;
   if (format !== undefined && (command !== 'still' || !['png','exr'].includes(format))) {
     throw new Error('Use --format png or exr for a still.');
   }
-  return {duration, fps, first, last, time, stride: preview ? 2 : 1,
+  return {duration, fps, first, last, time, sampleBudget, sampleFloor, stride: preview ? 2 : 1,
     settings: {size:[w,h], spp, seed, denoise, seedValue, sampleSequenceOffset:offset, tracer,
-      sampleSequence, ...(temporal && {temporal}), display: canonicalDisplay(display, command === 'validate'), format,
+      sampleSequence, ...(experimental && {experimentalCapture:true}),
+      ...(sequenceStride !== undefined && {experimentalSequenceStride: sequenceStride}),
+      ...(projection === 'planar' && {experimentalPlanar:true}), ...(temporal && {temporal}), display: canonicalDisplay(display, command === 'validate'), format,
       render: values.bounces === undefined ? render : {...render, bounces:number(values.bounces, 'Bounces', 1, 20)}}};
 }
 
@@ -235,6 +274,13 @@ async function prepare(module, url, worker, settings) {
   }) : undefined;
   const encoder = new NativeSceneEncoder(async () => {throw new Error('Use a loaded HDR texture for the environment.');});
   return {
+    geometryCuts: module.experimentalGeometryCuts ?? [],
+    get materialsByMeshName() {
+      const meshes = (sync ? sink.scene : scene).meshes;
+      const materials = [...new Set(meshes.flatMap(mesh => mesh.materials))];
+      return Object.fromEntries(meshes.filter(mesh => mesh.name)
+        .map(mesh => [mesh.name, mesh.materials.map(material => materials.indexOf(material) + 1)]));
+    },
     get assets() { return [...dependencies.entries()].sort(([a],[b]) => a.localeCompare(b)); },
     async frame(t, index) {
       await module.frame({t,frame:index,scene,camera});
@@ -296,6 +342,101 @@ async function lock(directory) {
   }
 }
 
+async function captureShot(worker, shot, replayShot, opts, values, directory) {
+  if (!worker.info.capabilities.includes('experimental-capture')) {
+    throw new Error('Build the native worker with experimental capture support.');
+  }
+  const {settings, fps, duration, first, last} = opts;
+  const radius = settings.temporal?.historyRadius;
+  const latency = settings.denoise === 'temporal' ?
+    (typeof radius === 'number' ? radius : radius?.max ?? 16) + (settings.temporal?.postRadius ?? 3) : 0;
+  const context = values.context?.split('-');
+  if (context && !/^\d+-\d+$/.test(values.context)) throw new Error('Use --context FIRST-LAST.');
+  const maxFrame = Math.ceil(duration * fps) - 1;
+  const begin = context ? number(context[0], 'Context start', 0, first) :
+    latency ? Math.max(0, first - latency - 1) : first;
+  const end = context ? number(context[1], 'Context end', last, maxFrame) :
+    Math.min(maxFrame, last + latency);
+  const save = index => index >= first && index <= last;
+  const prefix = index => resolve(directory, `frame-${String(index).padStart(4,'0')}`);
+  const started = performance.now();
+  const timing = {renderMs: [], workerMs: [], outputMs: {}};
+  let planning;
+  if (opts.sampleBudget !== undefined) {
+    const saveGeometry = values['save-geometry'] ? async (index, header, bytes) => {
+      await atomic(prefix(index) + '.geometry.bin', bytes);
+      await atomic(prefix(index) + '.geometry.json', JSON.stringify(header));
+    } : undefined;
+    planning = await planSampling(worker, shot, settings, fps, begin, end, opts.sampleBudget, opts.sampleFloor, saveGeometry);
+    Object.assign(timing, {
+      pilotMs: performance.now() - started, geometryMs: planning.geometryMs, allocationMs: planning.allocationMs,
+      beautySamples: planning.plans.map(plan => plan.average),
+      belowMinimum: planning.plans.map(plan => plan.belowMinimum),
+    });
+    emit({event:'sample-plan', frames:planning.plans.length, elapsedMs:timing.pilotMs});
+    shot = await replayShot();
+  }
+  const materials = {}, cameras = {};
+  async function saveInput(index) {
+    if (!save(index) || values['timing-only']) return;
+    const {header,bytes} = await worker.request('capture', {});
+    const length = settings.size[0] * settings.size[1] * 16;
+    if (header.type !== 'capture' || bytes?.length !== length * 2) throw new NativeError('Invalid capture readback.');
+    materials[index] = shot.materialsByMeshName;
+    await Promise.all([
+      atomic(prefix(index) + '.hdr.f32', bytes.subarray(0,length)),
+      atomic(prefix(index) + '.id.u32', bytes.subarray(length)),
+    ]);
+  }
+  async function saveOutput(index, bytes) {
+    if (!save(index)) return;
+    await atomic(prefix(index) + '.png', bytes);
+    timing.outputMs[index] = performance.now() - started;
+    emit({event:'frame',frame:index,path:prefix(index) + '.png'});
+  }
+  let tick;
+  async function* inputs() {
+    for (let index = begin; index <= end; index++) {
+      tick = performance.now();
+      const t = index / fps;
+      const descriptor = await shot.frame(t,index);
+      const plan = planning?.plans[index - begin];
+      if (plan && digest(descriptor) !== planning.sources[index - begin]) {
+        throw new Error(`frame(${index}) changed when replayed after the geometry pilot.`);
+      }
+      const camera = cameraRange(descriptor);
+      const words = new Float32Array(descriptor.buffer, descriptor.byteOffset + camera[0], C.WORDS);
+      cameras[index] = {transform: [...words.slice(C.TRANSFORM)], fov: words[C.FOV], zoom: words[C.ZOOM]};
+      yield {frame:index,t,descriptor,camera,tiles:plan && Buffer.from(plan.targets.buffer)};
+    }
+  }
+  async function submitted(index, header) {
+    timing.renderMs.push(performance.now() - tick);
+    timing.workerMs.push(header.elapsedMs);
+    await saveInput(index);
+  }
+  if (settings.denoise === 'temporal') {
+    let expected = begin;
+    for await (const {frame,bytes} of worker.temporalFrames(inputs(),settings,submitted)) {
+      if (frame !== expected++) throw new NativeError(`Unexpected capture frame ${frame}.`);
+      await saveOutput(frame,bytes);
+    }
+    if (expected !== end + 1) throw new NativeError('Incomplete capture sequence.');
+  } else {
+    for await (const {frame,t,descriptor,camera} of inputs()) {
+      await worker.scene(descriptor,camera);
+      const {header,bytes} = await worker.request('render',{frame,t,settings});
+      await submitted(frame,header);
+      await saveOutput(frame,bytes);
+    }
+  }
+  await atomic(resolve(directory,'capture.json'),JSON.stringify({
+    backend:settings.tracer, build:worker.info.build, first:begin, last:end, saved:[[first,last]],
+    fps, settings, materials, cameras, sampleBudget:opts.sampleBudget, sampleFloor:planning && opts.sampleFloor,
+    samplePlanHashes:planning?.plans.map(plan => digest(Buffer.from(plan.targets.buffer))), seconds:(performance.now()-started)/1000, timing,
+  },null,2) + '\n');
+}
+
 async function main() {
   const {command,file,values} = args();
   if (!command) {
@@ -310,22 +451,41 @@ async function main() {
   const module = await import(url.href);
   const opts = options(module.output,command,values);
   const extension = command === 'still' ? (opts.settings.format ?? 'png') : 'mp4';
-  if (values.output && !values.output.toLowerCase().endsWith('.' + extension)) {
+  if (command !== 'capture' && values.output && !values.output.toLowerCase().endsWith('.' + extension)) {
     throw new Error(`Output must end in .${extension}.`);
   }
   let worker = await openWorker();
   let release;
   let shot;
   try {
-    shot = await prepare(module,url,worker,opts.settings);
+    async function setupShot() {
+      shot?.dispose();
+      shot = await prepare(module,url,worker,opts.settings);
+    }
+    await setupShot();
     const {settings,fps,duration,first,last,time,stride} = opts;
     const frame = (t,index) => shot.frame(t,index);
     const timeA = command === 'still' ? time : first / fps;
     const indexA = command === 'still' ? Math.floor(time * fps) : first;
-    const early = digest(await frame(timeA,indexA));
     const other = Math.min(duration,timeA + 1 / fps);
-    await frame(other,Math.floor(other * fps));
-    if (digest(await frame(timeA,indexA)) !== early) throw new Error(`frame(t=${timeA}) is not deterministic. Assign an absolute pose from t and frame.`);
+    let orderedReplay = false;
+    async function checkReplay() {
+      const early = digest(await frame(timeA,indexA));
+      if (orderedReplay) return early;
+      await frame(other,Math.floor(other * fps));
+      if (digest(await frame(timeA,indexA)) === early) return early;
+      if (command === 'capture') {
+        // Capture can replay identical frame sequences from a fresh setup,
+        // even when a shot's transforms retain floating-point pose state.
+        await setupShot();
+        if (digest(await frame(timeA,indexA)) === early) {
+          orderedReplay = true;
+          return early;
+        }
+      }
+      throw new Error(`frame(t=${timeA}) is not deterministic. Assign an absolute pose from t and frame.`);
+    }
+    const early = await checkReplay();
     const canCheck = worker.info.capabilities.includes('check-settings');
     let denoiserWeights, directLightCandidates;
     if (canCheck || command === 'validate') {
@@ -361,6 +521,22 @@ async function main() {
       return worker.request('render',{t,frame:index,settings});
     });
     const output = resolve(values.output);
+    if (command === 'capture') {
+      await mkdir(output,{recursive:true});
+      release = await lock(output);
+      if ((await readdir(output)).some(name => name.startsWith('frame-') || name === 'capture.json')) {
+        throw new Error('Use an empty capture directory.');
+      }
+      if (denoiserWeights) emit({event:'denoiser',weights:denoiserWeights});
+      await captureShot(worker, shot, async () => {
+        // Replay from the same setup and preflight state as the pilot.
+        await setupShot();
+        if (await checkReplay() !== early) throw new Error('Shot setup changed between pilot and render.');
+        if (canCheck) await frame(timeA,indexA);
+        return shot;
+      }, opts, values, output);
+      return;
+    }
     if (command === 'still' && settings.denoise === 'temporal') {
       const descriptor = await frame(time,indexA);
       const inputs = [{frame:indexA,t:time,descriptor,camera:cameraRange(descriptor)}];

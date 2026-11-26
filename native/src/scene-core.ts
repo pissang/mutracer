@@ -242,7 +242,8 @@ export function acceptSceneLighting(token: number): Uint8Array {
 /**
  * One render target of a retained scene, without preparing the scene again.
  * Input: render settings record, then width, height, quality flags, production shader id,
- * camera flag (0 = the descriptor camera), alpha blend strategy, reserved×2 and one camera record.
+ * camera flag (0 = the descriptor camera), alpha strategy, reflection capture,
+ * center material capture and one camera record.
  * Output: version 1, shader byte length, then the camera uniform, the trace uniform (the
  * scene's current one with this target's fields) and, when sampling, bevel samples or
  * alpha strategy need a variant, the specialized production shader.
@@ -256,7 +257,7 @@ export function sceneTargetParameters(bytes: Uint8Array, token: number): Uint8Ar
     const configuration = decodeSceneConfiguration(bytes.subarray(0, settingsBytes));
     const u = new Uint32Array(bytes.buffer, bytes.byteOffset + settingsBytes, 8);
     const [width, height, qualityFlags, shaderId] = [u[0], u[1], u[2], u[3]];
-    if (!width || !height || u[5] > 1 || u[6] > 1 || u[7] || (shaderId !== RESOURCE.SOFTWARE_SHADER && shaderId !== RESOURCE.HWRT_SHADER)) throw new Error('Invalid target request');
+    if (!width || !height || u[5] > 1 || u[6] > 1 || u[7] > 1 || (shaderId !== RESOURCE.SOFTWARE_SHADER && shaderId !== RESOURCE.HWRT_SHADER)) throw new Error('Invalid target request');
     const camera = sceneCameraParameters(bytes.subarray(settingsBytes + 8 * WORD_BYTES), width, height);
     const rt = makeRayTraceUniform();
     new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
@@ -267,9 +268,11 @@ export function sceneTargetParameters(bytes: Uint8Array, token: number): Uint8Ar
     const hasAlpha = u[5] === 1 && Boolean(constants.HAS_ALPHA_BLEND);
     const frameInputs=(configuration.variants & 16)!==0;
     const radianceOutputs = u[6] === 1;
+    const centerMaterialAov = u[7] === 1;
     const frameFeatures = nativeGraphFeatures({...state.shader.features, hasAlpha,
       shareSpectralPrefix: Boolean(constants.SPECTRAL) && !!(qualityFlags & 2)}, state.shader.graphs);
     if (radianceOutputs) frameFeatures.radianceOutputs = true;
+    if (centerMaterialAov) frameFeatures.centerMaterialAov = true;
     const targetConstants: Record<string,boolean|number>={...constants, SAMPLING_PATTERN:configuration.sampling.code,BEVEL_SAMPLES:configuration.bevelSamples};
     const nativeHits=shaderId===RESOURCE.HWRT_SHADER?nativeIntersections({...frameFeatures, materialHooks: {}},state.shader.isEmpty,false,false,true,state.shader.opaqueClosest):'';
     // Independently traced frame guides use the original PT scene bindings.
@@ -288,7 +291,7 @@ export function sceneTargetParameters(bytes: Uint8Array, token: number): Uint8Ar
       frameFeatures.photonDirectSubset=frameFeatures.photonMapping&&!frameFeatures.lightTracing;
       rt.views.lightSamplingTextureWidth[0]=caustics.metadata.lightWidth;
     }
-    const variant=radianceOutputs||!!caustics||frameFeatures.shareSpectralPrefix!==state.shader.features.shareSpectralPrefix||constants.SAMPLING_PATTERN!==configuration.sampling.code||constants.BEVEL_SAMPLES!==configuration.bevelSamples||hasAlpha!==state.shader.features.hasAlpha;
+    const variant=radianceOutputs||centerMaterialAov||!!caustics||frameFeatures.shareSpectralPrefix!==state.shader.features.shareSpectralPrefix||constants.SAMPLING_PATTERN!==configuration.sampling.code||constants.BEVEL_SAMPLES!==configuration.bevelSamples||hasAlpha!==state.shader.features.hasAlpha;
     const frameShader=()=>nativeShaderVariant(shaderId===RESOURCE.HWRT_SHADER?RESOURCE.HWRT_FRAME_SHADER:RESOURCE.SOFTWARE_FRAME_SHADER,targetConstants,frameFeatures,configuration.variants,()=>
       (shaderId===RESOURCE.HWRT_SHADER?'enable wgpu_ray_query;\n':'')+wgpuShaderSource(targetConstants,frameFeatures,true,
         shaderId===RESOURCE.HWRT_SHADER?nativeIntersections(frameFeatures,state.shader.isEmpty,false,false,true,state.shader.opaqueClosest):'',false,nativeFrameInputHooks()),state.shader.graphs?.key??'');

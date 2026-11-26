@@ -416,6 +416,12 @@ impl Output {
     fn constants(&self) -> [(&'static str, f64); 1] {
         [("AOV_COMPACT", f64::from(u8::from(self.layout.compact)))]
     }
+    pub(crate) fn read_center_records(&self) -> Result<Vec<u8>> {
+        self.gpu
+            .queue
+            .read_buffer(&self.gpu.device, self.center.slice(..))
+    }
+
     pub(crate) fn render(&mut self, query: &Query, samples: u32, mask: u32) -> Result<()> {
         self.gpu.loss.check()?;
         let device = &self.gpu.device;
@@ -466,7 +472,7 @@ impl Output {
             changed = true;
         }
         // ID and motion are center-ray outputs; no jittered accumulation pass.
-        if mask & 31 == 0 {
+        if mask & 31 == 0 || mask & (1 << 31) != 0 {
             self.samples = samples.min(1);
         } else {
             while self.samples < samples {

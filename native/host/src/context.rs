@@ -386,6 +386,11 @@ fn retire_targets(registry: &mut Registry, owner: u64) -> Result<()> {
     }
     Ok(())
 }
+#[derive(Default)]
+pub(crate) struct OfflineTarget<'a> {
+    pub(crate) sample_tiles: Option<&'a [u32]>,
+    pub(crate) center_material: bool,
+}
 /// Links context `handle` to the scene of context `owner` as a render target
 /// with its own size, settings, quality flags and camera, restarting its
 /// accumulation. Buffers of the previous target are reused when sizes match.
@@ -399,6 +404,7 @@ pub(crate) fn set_target(
     alpha_blend_strategy: u32,
     camera: &[u8; 128],
     capture_reflections: bool,
+    offline: OfflineTarget<'_>,
 ) -> Result<()> {
     let snapshot = with_registry(|registry| {
         let (current, source) = target_contexts(registry, handle, owner)?;
@@ -429,6 +435,7 @@ pub(crate) fn set_target(
                 &loss,
                 false,
                 capture_reflections,
+                offline.center_material,
             )
             .map_err(rejected)
     }));
@@ -462,7 +469,10 @@ pub(crate) fn set_target(
         let previous = current.target.take();
         current.job = None;
         current.failed = true;
-        let target = scene.target(packet, size, previous)?;
+        let mut target = scene.target(packet, size, previous)?;
+        if let Some(tiles) = offline.sample_tiles {
+            scene.set_sample_tiles(&mut target, tiles)?;
+        }
         current.target = Some(target);
         current.link = Some(Link {
             scene: owner,

@@ -1524,6 +1524,7 @@ impl PreparedState {
             loss,
             frame_inputs,
             false,
+            false,
         )
     }
     pub(super) fn target_with_reflections(
@@ -1537,6 +1538,7 @@ impl PreparedState {
         loss: &crate::device_loss::DeviceLossNotifier,
         frame_inputs: bool,
         capture_reflections: bool,
+        center_material: bool,
     ) -> Result<TargetPacket> {
         if camera.len() != cam::WORDS * WORD_BYTES {
             return Err("Camera descriptor must contain exactly 128 bytes".into());
@@ -1563,7 +1565,7 @@ impl PreparedState {
             1,
             alpha_blend_strategy,
             u32::from(capture_reflections),
-            0,
+            u32::from(center_material),
         ]));
         input.extend_from_slice(camera);
         let state = self.clone();
