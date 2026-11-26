@@ -450,15 +450,10 @@ candidate inputs and AS storage. `MUTRACER_NATIVE_METAL_REFIT=0` retains the wgp
 rebuild path for A/B diagnostics. Preserve the HAL thread and owning-handle
 lifetime assumptions.
 
-Metal matrix edits keep a separate descriptor buffer and upload changed ranges.
-TLASes refit through half the active instances and rebuild above that count;
-both remain incremental scene commits. `MUTRACER_NATIVE_TLAS_BUILD=refit|rebuild`
-forces either AS strategy for A/B evidence; `MUTRACER_NATIVE_METAL_TLAS=0` uses
-wgpu's full instance upload/build path. Raw TLAS encoders complete before input
-buffers can be overwritten. Stable matrix edits preserve the dependency list
-from the tracked wgpu TLAS build; raw build registration would erase that list
-and Metal residency.
-Membership changes use a tracked build to register newly referenced BLASes.
+Transform and membership edits rebuild the TLAS through wgpu and reuse
+resident BLASes. The tracked build makes indirectly referenced BLASes
+resident during both Metal TLAS construction and tracing. Matrix edits
+remain incremental scene commits.
 Geometry candidates reconstruct instance metadata from retained state plus
 destination spans, never by treating one dirty span as a complete instance array.
 

@@ -1079,6 +1079,109 @@ fn full_plane_scene() -> (
 }
 
 #[test]
+#[ignore = "requires real hardware ray-query GPU"]
+fn hardware_aovs_follow_consecutive_rigid_scene_updates() {
+    use crate::scene_api::{Geometry, Mesh};
+    use glam::{Mat4, Vec3};
+
+    let _guard = crate::abi_test_lock();
+    let engine = aov_engine(Backend::Hardware);
+    let (mut scene, wall, material) = full_plane_scene();
+    let mut camera = Camera {
+        projection: 1,
+        left: -2.,
+        right: 2.,
+        top: 1.125,
+        bottom: -1.125,
+        ..Default::default()
+    };
+    camera.world_matrix[14] = 4.;
+    scene.set_default_camera(Some(camera));
+
+    // Give the three foreground objects independent BLASes. Only the middle
+    // object moves, so its first update exercises a sparse retained TLAS edit.
+    let divisions = 32u32;
+    let vertices = (0..=divisions)
+        .flat_map(|y| {
+            (0..=divisions).flat_map(move |x| {
+                [
+                    x as f32 / divisions as f32 * 0.6 - 0.3,
+                    y as f32 / divisions as f32 * 0.6 - 0.3,
+                    0.,
+                ]
+            })
+        })
+        .collect::<Vec<_>>();
+    let indices = (0..divisions)
+        .flat_map(|y| {
+            (0..divisions).flat_map(move |x| {
+                let a = y * (divisions + 1) + x;
+                let b = a + divisions + 1;
+                [a, a + 1, b, b, a + 1, b + 1]
+            })
+        })
+        .collect::<Vec<_>>();
+    let objects = [-1., 0., 1.].map(|x| {
+        let geometry = scene
+            .add_geometry(Geometry::new(vertices.clone(), indices.clone()))
+            .unwrap();
+        let mut mesh = Mesh::new(geometry, material);
+        mesh.transform = Mat4::from_translation(Vec3::new(x, 0., 1.));
+        scene.add_mesh(mesh).unwrap()
+    });
+
+    let (width, height) = (640, 360);
+    let render = Render::new(
+        &engine,
+        RenderSettings {
+            size: RenderSize::Fixed { width, height },
+            aovs: TemporalDenoiser::AOVS,
+            aov_samples: 1,
+            max_samples: 4,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    for (frame, z) in [1., 1.25, 0.75, 1.5, 1., 1.25, 0.75, 1.5]
+        .into_iter()
+        .enumerate()
+    {
+        scene.mesh_mut(objects[1]).unwrap().transform =
+            Mat4::from_translation(Vec3::new(0., 0., z));
+        if frame % 2 == 0 {
+            engine.set_scene_object(&scene).unwrap();
+        } else {
+            engine
+                .set_scene_shared(scene.descriptor().unwrap())
+                .unwrap();
+        }
+        assert!(engine.update().unwrap());
+        render.converge(ConvergeOptions::new(4)).unwrap();
+        assert_eq!(render.backend().unwrap().0, Backend::Hardware);
+        if frame > 0 {
+            assert_eq!(render.last_commit().unwrap(), Some(CommitKind::Incremental));
+        }
+
+        let ids = render.read_pixels(PixelKind::Id).unwrap().id_data.unwrap();
+        let depths = render.read_pixels(PixelKind::CenterDepth).unwrap().data;
+        for (x, object, expected_depth) in [
+            (80, wall, 4.),
+            (160, objects[0], 3.),
+            (320, objects[1], 4. - z),
+            (480, objects[2], 3.),
+        ] {
+            let pixel = ((height / 2 * width + x) * 4) as usize;
+            assert_eq!(ids[pixel], object.aov_id(), "frame {frame}, x {x}");
+            assert!(
+                (depths[pixel] - expected_depth).abs() < 1e-4,
+                "frame {frame}, x {x}: expected depth {expected_depth}, got {}",
+                depths[pixel]
+            );
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires real GPU with a 256 MiB storage binding"]
 fn aov_resolve_covers_images_larger_than_one_dispatch_dimension() {
     let _guard = crate::abi_test_lock();

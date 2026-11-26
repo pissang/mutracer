@@ -611,6 +611,8 @@ MT_ENGINE_LAYOUT(mt_converge_options, 160 + 2 * sizeof(void *));
 int32_t mt_converge_options_default(uint32_t samples, mt_converge_options *output);
 /* Renders exactly options->samples samples, blocking until they complete, then
  * denoises when a denoiser is set. samples (optional) receives the count.
+ * Uses the scene and camera committed by the latest completed mt_engine_update,
+ * waiting for preparation as needed. A newer input commit interrupts convergence.
  * mt_render_cancel from another thread returns MT_ERROR_CANCELLED. refine on the
  * same render returns MT_ERROR_INVALID_STATE meanwhile. */
 int32_t mt_render_converge(mt_render render, const mt_converge_options *options, uint32_t *samples,
