@@ -642,6 +642,10 @@ impl Engine {
     /// on this thread, except new geometry appends, which use the same library
     /// thread as full preparation. Renders report
     /// [`super::RenderStatus::Preparing`] until it is published.
+    /// Eligible Metal hardware matrix batches with stable membership refit the
+    /// TLAS through half the active instances and rebuild for larger edits.
+    /// Referenced BLASes are resident during the TLAS update, which completes
+    /// before publication. Camera-only updates skip TLAS work.
     pub fn update(&self) -> Result<bool> {
         self.poll_device();
         let changed = crate::runtime::with_loss(&self.inner.gpu, || {
