@@ -1799,8 +1799,8 @@ width: renderWidth, height: renderHeight,
       return rayTracePass.renderAovs(aov, camera, samples, Math.min(execution.aovSamples ?? 16, aovResolution() ? DISPLAY_AOV_SAMPLE_CAP : Infinity), execution.aovs, aovResolution());
     },
     async readOfflineGeometry() {
-      if (!aov.centerReady || !aov.primary || !aov.center || aov.reflections) {
-        throw new Error('Offline geometry requires a center-only surface capture.');
+      if (!aov.centerReady || !aov.primary || !aov.center) {
+        throw new Error('Offline geometry requires a pixel-center surface capture.');
       }
       const staging = device.createBuffer({label: 'Offline geometry readback', size: aov.center.size,
         usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ});

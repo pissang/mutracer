@@ -17,6 +17,7 @@ interface Settings {
   stabilizeSparkle?: boolean;
   temporalSampleBudget?: number;
   temporalSampleFloor?: number;
+  reflectionAwareSampling?: boolean;
   sampleStride?: number;
 }
 
@@ -60,18 +61,24 @@ let captureTiming: {pilotMs: number; geometryMs: number[]; allocationMs: number;
   beautySamples: number[]; belowMinimum: number[]} | undefined;
 
 async function planSampling(options: Settings, start: number, end: number, stopped: () => boolean) {
+  const aovs = ['id', 'motion', 'centerPosition'] as const;
+  const predictReflection = options.reflectionAwareSampling === true;
   const geometry = new Render(engine, {width: geometryWidth, height: geometryHeight, maxSamples: 1,
-    aovs: ['id', 'motion', 'centerPosition'], bounces: 6});
+    aovs: [...aovs, ...(predictReflection ? ['roughness'] as const : [])], bounces: 6});
+  if (predictReflection && options.reflectionMotion) geometry._attachTemporal(aovs, true);
   const history = new OfflineGeometryHistory(geometryWidth, geometryHeight);
   const geometryMs = [];
+  let previousRevision = engine._temporalRevision;
   try {
     for (let i = start; i < end; i++) {
       const started = performance.now();
       shot.setTime(i / temporalStressTiming.fps, {depthOfField: options.depthOfField});
       engine.update();
-      const frame = await captureOfflineGeometry(geometry, stopped);
+      const frame = await captureOfflineGeometry(geometry, stopped, predictReflection);
       if (!frame) return;
-      history.add(frame, i === Math.ceil(temporalStressTiming.cut * temporalStressTiming.fps));
+      const changed = engine._temporalRevision !== previousRevision;
+      history.add(frame, i === Math.ceil(temporalStressTiming.cut * temporalStressTiming.fps) || (predictReflection && changed));
+      previousRevision = engine._temporalRevision;
       geometryMs.push(performance.now() - started);
     }
     const started = performance.now();
@@ -85,9 +92,9 @@ async function planSampling(options: Settings, start: number, end: number, stopp
 async function* frames(options: Settings, start: number, end: number, stopped: () => boolean) {
   const started = performance.now();
   if (options.temporalSampleBudget !== undefined && (engine.backend !== 'webgpu' || options.mode !== 'offline' ||
-    options.reflectionMotion || options.accumulateGuides || options.spp !== 3 || !Number.isFinite(options.temporalSampleBudget) ||
+    options.accumulateGuides || options.spp !== 3 || !Number.isFinite(options.temporalSampleBudget) ||
     options.temporalSampleBudget < options.spp || options.temporalSampleBudget > offlineSampleCap)) {
-    throw new Error('The temporal sampling experiment needs offline WebGPU surface history and a total budget of at least 3 spp.');
+    throw new Error('The temporal sampling experiment needs offline WebGPU history without accumulated guides and a total budget of at least 3 spp.');
   }
   const planning = options.temporalSampleBudget === undefined ? undefined : await planSampling(options, start, end, stopped);
   if (stopped()) return;

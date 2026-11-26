@@ -174,9 +174,9 @@ export class TemporalDenoiser {
   _configureOfflineSampling({tileSize}: {tileSize: number}) {
     this.assertAlive();
     if (this.attached || this.history || this.options.mode !== 'offline' ||
-      this.options.reflectionMotion || this.options.accumulateGuides || this.options.memoryBudget !== undefined ||
+      this.options.accumulateGuides || this.options.memoryBudget !== undefined ||
       (!Number.isSafeInteger(tileSize) || tileSize < 1)) {
-      throw new Error('Offline sampling experiments require an unattached offline surface window and the default memory budget.');
+      throw new Error('Offline sampling experiments require an unattached offline window without accumulated guides and the default memory budget.');
     }
     this.sampleTileSize = tileSize;
   }

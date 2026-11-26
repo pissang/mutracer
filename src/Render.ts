@@ -1,3 +1,4 @@
+import {cameraApertureRadius} from './renderer/cameraLens.js';
 import {AOV_KINDS, DISPLAY_AOV_SAMPLE_CAP, isCenterAov, type AovKind} from './renderer/aov.js';
 import {aovMask} from './renderer/aov.js';
 import {displayAovKind} from './renderer/aovDisplay.js';
@@ -320,7 +321,7 @@ export default class Render {
   /** @internal */ get _presentable() { return this._complete && (!this._denoisePending || this._denoisedSamples > 0 || (this._schedule() === 'converged' && this.maxSamples > 1)); }
   /** @internal Fixed export crop, applied before display passes. */ get _exportCrop() { return this._fixed; }
   /** @internal */ get _output() { if (this._disposed) throw new Error('Render is disposed.'); return this._target; }
-  /** @internal Reads the two packed pixel-center AOV records for offline geometry prediction. */
+  /** @internal Reads packed pixel-center AOV records for offline geometry prediction. */
   async _readOfflineGeometry() {
     const target = this._target;
     const camera = this._engine._inputs.value;
@@ -336,7 +337,7 @@ export default class Render {
     const buffer = await target.readOfflineGeometry();
     return {words: new Uint32Array(buffer), values: new Float32Array(buffer),
       stride, rows, left: (stride - width) >> 1, top: (rows - height) >> 1,
-      eye, direction, focalLength: height * projection[5] * .5};
+      eye, direction, focalLength: height * projection[5] * .5, apertureRadius: cameraApertureRadius(camera)};
   }
   /** @internal Capture converged GPU inputs for the optional temporal sub-path. */
   async _captureTemporal(capture: (input: import('./renderer/accumulationTarget.js').TemporalCaptureInput) => Promise<void>,
