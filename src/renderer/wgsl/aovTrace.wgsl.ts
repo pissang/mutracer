@@ -68,7 +68,7 @@ fn aovSurface(rayInput: Ray, si: ptr<function, SurfaceInteraction>, material: pt
   }
   return false;
 }
-// The primary record stores two unorm8 values above the zero/miss sentinel.
+${reflections ? /* wgsl */ `// The primary record stores two unorm8 values above the zero/miss sentinel.
 // A narrow lobe can carry a bright highlight even if it reflects little light
 // on average. Keep the narrower of the base and coat lobes that can contribute.
 fn aovDielectricGloss(ray: Ray, si: SurfaceInteraction, material: OpenPbrResolvedMaterial) -> f32 {
@@ -85,7 +85,7 @@ fn aovDielectricGloss(ray: Ray, si: SurfaceInteraction, material: OpenPbrResolve
     vec2f(material.coatRoughness, coat), useCoat), vec2f(0.), vec2f(1.))));
   return f32(1u + values.x + (values.y << 8u));
 }
-@compute @workgroup_size(8, 8)
+` : ''}@compute @workgroup_size(8, 8)
 fn aovTrace(@builtin(global_invocation_id) id: vec3u) {
   let size = aovParameters.xy;
   if (any(id.xy >= size)) { return; }
@@ -150,7 +150,7 @@ ${reflections ? `  let reflectionIndex = primaryIndex + select(0u, size.x*size.y
   if (!aovSurface(ray, &si, &material)) { return; }
   if (AOV_PRIMARY) {
     let depth = max(dot(si.position-cameraUniform.viewInv[3].xyz, -normalize(cameraUniform.viewInv[2].xyz)), 0.0);
-    aovCenter[primaryIndex] = AovCenter(bitcast<vec4u>(vec4f(si.normal, depth)), vec4f(si.position, aovDielectricGloss(ray, si, material)));
+    aovCenter[primaryIndex] = AovCenter(bitcast<vec4u>(vec4f(si.normal, depth)), vec4f(si.position, ${reflections ? 'aovDielectricGloss(ray, si, material)' : '1.0'}));
   }
   let offset = 52u + u32(si.instanceIndex) * 24u;
 ${reflections ? `  aovCenter[reflectionIndex] = traceReflection(id.xy, size, ray, si, material, offset);

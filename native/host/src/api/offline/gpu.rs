@@ -29,8 +29,7 @@ pub(super) struct Passes {
     pub bytes: u64,
     pub material_capacity: u32,
     accumulate_guides: bool,
-    pub(super) reflected_radiance: bool,
-    optical_motion: bool,
+    reflection_motion: bool,
     diagnostic: Option<std::path::PathBuf>,
     pipelines: HashMap<String, wgpu::ComputePipeline>,
     resources: HashMap<&'static str, Resource>,
@@ -59,8 +58,7 @@ impl Passes {
             bytes: pixels * 16,
             material_capacity: materials.max(1) as u32,
             accumulate_guides,
-            reflected_radiance: reflection_motion,
-            optical_motion: reflection_motion,
+            reflection_motion,
             diagnostic,
             pipelines: Default::default(),
             resources: Default::default(),
@@ -393,7 +391,7 @@ impl Passes {
         }
         std::fs::create_dir_all(path)?;
         let mut fields = vec!["window", "sum"];
-        if self.reflected_radiance {
+        if self.reflection_motion {
             fields.push("reflectedTotal");
         }
         for name in fields {
@@ -404,9 +402,6 @@ impl Passes {
             )?;
         }
         Ok(())
-    }
-    pub fn set_optical_motion(&mut self, enabled: bool) {
-        self.optical_motion = enabled;
     }
     pub fn resize_materials(&mut self, count: u32) {
         if count <= self.material_capacity {
@@ -432,7 +427,6 @@ impl Passes {
             | 2
             | u32::from(revisions) << 2
             | u32::from(self.accumulate_guides && revisions) << 3
-            | u32::from(!self.optical_motion) << 4
             | u32::from(self.diagnostic.is_some()) << 5;
         let mut bindings = Vec::with_capacity(16);
         bindings.extend([
@@ -450,7 +444,7 @@ impl Passes {
         if self.accumulate_guides {
             bindings.extend([&self["guides"], &self["albedoSum"], &self["normalSum"]]);
         }
-        let reflections = self.reflected_radiance && revisions;
+        let reflections = self.reflection_motion && revisions;
         if reflections {
             bindings.extend([
                 &self["reflected"],

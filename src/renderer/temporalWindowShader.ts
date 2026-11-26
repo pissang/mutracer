@@ -77,7 +77,7 @@ fn guideAt(q:vec2f,frame:u32,field:u32,id:vec3u,revision:u32)->vec4f{
     let s=surface(at,frame,field);if(s.w<=0.){continue;}
     let w=select(1.-phase.x,phase.x,dx==1)*select(1.-phase.y,phase.y,dy==1);value+=s*w;total+=w;
   }}if(total<=0.){return vec4f(0);}value/=total;
-  if(field==1u){value=vec4f(normalize(value.xyz),total);}return value;
+  if(field==1u){value=vec4f(normalize(value.xyz),1.);}return value;
 }
 fn traceMotionFrom(x:vec2f,id:vec3u,first:u32,delta:i32)->vec4f{
   let revision=revisionAt(vec2i(x),first);
@@ -329,8 +329,7 @@ const startWindowWGSL = (guides = false, reflections = false, sampleTileSize?: n
   let x=vec2i(g.xy); let index=g.y*p.size.x+g.x;
   if(p.stage==0u){
     total[index]=vec4f(radiance(x,p.current),1.0);${reflections ? `
-    let reflected = select(vec3f(0.),reflection(x,p.current),
-      opticalReflectionMotion() || hasGlossyDielectric(surfaceMaterial(x)));
+    let reflected = reflection(x,p.current);
     total[index] = vec4f(total[index].rgb-reflected,1.0);
     reflectedTotal[index] = vec4f(reflected,1.0);${sampleTileSize ? '\n    reflectedTotal[index] *= centerSampleWeight(x);' : ''}
     if ((p.mode&32u)!=0u) { reflectedTotal[index+p.size.x*p.size.y]=vec4f(0); reflectedTotal[index+2u*p.size.x*p.size.y]=vec4f(0); }` : ''}${sampleTileSize ? '\n    total[index] *= centerSampleWeight(x);' : ''}${guides ? `
@@ -421,14 +420,7 @@ ${reflections ? `  let accepted = distance <= surfaceWindow && tap.support>0. &&
   let rgb = select(vec3f(0),skyCorrection(x,tap.at,pos,radiance(tap.at,p.source)),accepted);
   var surfaceConfidence = 1.;
   if (accepted) { surfaceConfidence = dielectricSurfaceConfidence(x,q.xy,material); }
-  if (opticalReflectionMotion()) {
-    accumulateReflection(x,index,tap,q,weight,rgb,tent,material.y,surfaceConfidence,hasGlossyDielectric(material));
-  } else {
-    let reflected = select(vec3f(0.),reflectedSurfaceRgb(tap.at,rgb),hasGlossyDielectric(material));
-    total[index] += vec4f((rgb-reflected)*weight,weight);
-    let reflectedWeight = weight*surfaceConfidence;
-    reflectedTotal[index] += vec4f(reflected*reflectedWeight,reflectedWeight);
-  }` : `  if(tap.support<=0. || overflowMissing(tap.at,p.source)){atomicAdd(&rejects[reason],1u);return;}
+  accumulateReflection(x,index,tap,q,weight,rgb,tent,material.y,surfaceConfidence,hasGlossyDielectric(material));` : `  if(tap.support<=0. || overflowMissing(tap.at,p.source)){atomicAdd(&rejects[reason],1u);return;}
   atomicAdd(&rejects[0],1u);
   let weight=(surfaceWindow+1.-distance)/(surfaceWindow+1.)*tap.support${sampleTileSize ? '*neighborSampleWeight(x,tap)' : ''};
   let rgb=skyCorrection(x,tap.at,pos,radiance(tap.at,p.source));

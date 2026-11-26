@@ -36,8 +36,8 @@ export function usesTemporalGuideWindow(options: NormalizedTemporalOptions) {
     options.denoiser?.type === 'oidn' && options.historyRadius.max > 0;
 }
 
-export function usesTemporalReflectedRadiance(options: NormalizedTemporalOptions) {
-  return options.mode === 'offline' && (options.historyRadius.max > 0 || options.reflectionMotion);
+export function usesTemporalReflectionWindow(options: NormalizedTemporalOptions) {
+  return options.reflectionMotion && options.mode === 'offline';
 }
 
 export function temporalGuideSlots(options: NormalizedTemporalOptions) {
@@ -66,7 +66,7 @@ export function estimateTemporalMemory(width: number, height: number, options: N
   const materialRevisionTable = Math.max(8, materialCount * 8);
   const changedMaterialIds = options.postRadius > 0 ? postSlots * Math.max(8, (materialCount + 1) * 4) : 0;
   // Two history textures, one window sum, the extended center AOV and the beauty sum.
-  const reflection = usesTemporalReflectedRadiance(options) ? pixels * (24 * historySlots + 64) : 0;
+  const reflection = usesTemporalReflectionWindow(options) ? pixels * (24 * historySlots + 64) : 0;
   return history + window + reflection + post + composition + queuedFrames + pendingAndTransient + customAovs + materialRevisionTable + changedMaterialIds;
 }
 
@@ -89,7 +89,7 @@ function layerLimits(width: number, height: number, options: NormalizedTemporalO
   const revisionTable = Math.max(8, materialCount * 8);
   const changedMaterialIds = options.postRadius > 0 ? post * Math.max(8, (materialCount + 1) * 4) : 0;
   const buffers = [image, overflow, history * 80, image / 4, ceilDiv(pixels, 64) * 4, revisionTable, changedMaterialIds,
-    ...(post ? grids : []), ...(usesTemporalReflectedRadiance(options) ? [pixels * 96] : [])];
+    ...(post ? grids : []), ...(usesTemporalReflectionWindow(options) ? [pixels * 96] : [])];
   return buffers.every(size => Number.isSafeInteger(size) &&
     size <= Math.min(limits.maxBufferSize, limits.maxStorageBufferBindingSize));
 }

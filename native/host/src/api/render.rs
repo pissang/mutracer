@@ -93,8 +93,7 @@ pub struct RenderSettings {
     /// AOV dimensions. Default [`AovResolution::Render`].
     pub aov_resolution: AovResolution,
     /// Capture reflected radiance and center-ray reflection motion for offline temporal denoising.
-    /// Default false. Enable before rendering inputs for glossy highlight rejection
-    /// or [super::TemporalOptions::reflection_motion].
+    /// Default false. Enable before rendering when using [super::TemporalOptions::reflection_motion].
     pub capture_reflections: bool,
     /// Maximum complete samples, 1–16384. Default 2048. Raising it continues the
     /// accumulation; with [`SamplingPattern::ZSobol`] a change restarts it.
@@ -3342,7 +3341,7 @@ impl Render {
             // The native resolve pipeline uses consecutive channel indices.
             let resolve_mask = (0..10)
                 .filter(|i| PixelKind::from_aov_index(*i).aov_mask() & TemporalDenoiser::AOVS != 0)
-                .filter(|i| PixelKind::from_aov_index(*i) != PixelKind::CenterDepth)
+                .filter(|i| !reflections || PixelKind::from_aov_index(*i) != PixelKind::CenterDepth)
                 .fold(0, |mask, i| mask | 1 << i);
             let shots = context_result(aov.ordered_snapshot(resolve_mask, true))?;
             let get = |kind| {
@@ -3381,14 +3380,14 @@ impl Render {
             } else {
                 Default::default()
             };
-            let reflections = if reflections || r.settings.capture_reflections {
+            let reflection_capture = if reflections {
                 let radiance = context_result(context::reflected_radiance(r.context))?;
                 Some((radiance, aov.reflection_records().clone()))
             } else {
                 None
             };
             Ok(super::offline::Capture {
-                reflections,
+                reflections: reflection_capture,
                 raw: true,
                 check_camera: true,
                 size,
@@ -3398,7 +3397,12 @@ impl Render {
                 revisions,
                 scene_key,
                 guides: [
-                    aov.primary_records().clone(),
+                    if reflections {
+                        // The reflection records share the buffer with the primary records.
+                        aov.reflection_records().clone()
+                    } else {
+                        get(PixelKind::CenterDepth)
+                    },
                     get(PixelKind::CenterNormal),
                     get(PixelKind::Roughness),
                     albedo,

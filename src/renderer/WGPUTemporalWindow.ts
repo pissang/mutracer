@@ -15,7 +15,7 @@ export class DirectWindowGPU {
   private readonly tilesPerFrame: number;
 
   private constructor(private readonly history: TemporalHistoryGPU, private readonly adaptiveRadius: boolean,
-    accumulateGuides: boolean, private readonly sampleTileSize?: number, private readonly opticalMotion = true) {
+    accumulateGuides: boolean, private readonly sampleTileSize?: number) {
     const d = history.device;
     const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
     this.total = d.createBuffer({label: 'Direct window weighted sum', size: history.bytes, usage});
@@ -35,8 +35,8 @@ export class DirectWindowGPU {
     this.params = d.createBuffer({label: 'Direct window parameters', size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST});
   }
 
-  static async create(history: TemporalHistoryGPU, adaptiveRadius = false, accumulateGuides = false, sampleTileSize?: number, opticalMotion = true) {
-    const window = new DirectWindowGPU(history, adaptiveRadius, accumulateGuides, sampleTileSize, opticalMotion);
+  static async create(history: TemporalHistoryGPU, adaptiveRadius = false, accumulateGuides = false, sampleTileSize?: number) {
+    const window = new DirectWindowGPU(history, adaptiveRadius, accumulateGuides, sampleTileSize);
     const device = history.device;
     try {
       const createPipeline = (code: string) => {
@@ -64,7 +64,7 @@ export class DirectWindowGPU {
     const h = this.history, d = h.device;
     // Camera-cut validation uses stage 1 without a preceding window initialization.
     const mode = Number(this.adaptiveRadius) | 2 | (Number(includeMaterialRevisions) << 2) |
-      (Number(!!this.guides && includeMaterialRevisions) << 3) | (Number(!this.opticalMotion) << 4);
+      (Number(!!this.guides && includeMaterialRevisions) << 3);
     d.queue.writeBuffer(this.params, 0, new Uint32Array([h.width, h.height, h.slot(current), h.slot(source),
       source - current, Number(symmetric), stage, mode, radiusMin, radiusMax]));
     const resources = [this.params, h.surface, h.id, h.raw, h.meta, this.total, this.output, h.overflow, this.rejects, h.motion, h.material];

@@ -44,7 +44,7 @@ fn nearestHalf4(value:vec4f)->vec4f{return vec4f(nearestHalf(value.x),nearestHal
   textureStore(surfaceOut, at, layer * 2 + 1, surface);
 
   let r = roughness[i];
-  textureStore(materialOut, at, layer, vec4u(packSurfaceMaterial(r.xy, gloss), 0, 0, 0));
+  textureStore(materialOut, at, layer, vec4u(packSurfaceMaterial(r.xy, gloss, p.centerRecords != 0u), 0, 0, 0));
   let peak = max(albedo[i].x, max(albedo[i].y, albedo[i].z));
   let guide = u32(floor(255. * sqrt(clamp(peak, 0., 1.)) + .5));
   let coverage = u32(floor(255. * clamp(r.w, 0., 1.) + .5));

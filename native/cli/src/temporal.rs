@@ -54,21 +54,9 @@ impl Config {
         }
         Ok(())
     }
-    fn capture_reflected_radiance(&self) -> bool {
-        self.options.reflection_motion
-            || match self.options.history_radius {
-                api::HistoryRadius::Fixed(radius) => radius > 0,
-                api::HistoryRadius::Adaptive { max, .. } => max > 0,
-            }
-    }
     pub fn check_budget(&self, settings: Settings, pointer: &str) -> Result<()> {
         if settings.denoise == Denoise::Temporal && self.options.memory_budget.is_some() {
-            api::TemporalOptions {
-                reflection_motion: self.capture_reflected_radiance(),
-                ..self.options
-            }
-            .estimate(settings.size, 0)
-            .map_err(|e| {
+            self.options.estimate(settings.size, 0).map_err(|e| {
                 Error::validation(
                     format!("{pointer}/memoryBudget"),
                     e.to_string(),
@@ -86,7 +74,7 @@ impl Config {
     }
     pub fn configure_capture(&self, render: &api::Render, denoise: Denoise) -> Result<()> {
         let mut settings = render.settings().map_err(gpu)?;
-        let enabled = denoise == Denoise::Temporal && self.capture_reflected_radiance();
+        let enabled = denoise == Denoise::Temporal && self.options.reflection_motion;
         if settings.capture_reflections != enabled {
             settings.capture_reflections = enabled;
             render.set_settings(settings).map_err(gpu)?;
@@ -206,12 +194,7 @@ mod tests {
 
     #[test]
     fn parses_guide_accumulation_in_temporal_settings() {
-        assert!(
-            !serde_json::from_str::<Config>("{}")
-                .unwrap()
-                .options
-                .accumulate_guides
-        );
+        assert!(!serde_json::from_str::<Config>("{}").unwrap().options.accumulate_guides);
         let settings: Config = serde_json::from_str(r#"{"accumulateGuides":true}"#).unwrap();
         assert!(settings.options.accumulate_guides);
         assert!(serde_json::from_str::<Config>(r#"{"accumulateGuides":null}"#).is_err());

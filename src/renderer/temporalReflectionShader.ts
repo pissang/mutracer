@@ -43,8 +43,6 @@ export function reflectionWindowWGSL(binding: number) {
 @group(0) @binding(${binding + 2}) var<storage, read_write> reflectedTotal: array<vec4f>;
 const OPTICAL_SILHOUETTE = 14.;
 
-fn opticalReflectionMotion() -> bool { return (p.mode & 16u) == 0u; }
-
 fn reflection(at: vec2i, frame: u32) -> vec3f {
   return textureLoad(reflected,at,i32(frame),0).rgb;
 }

@@ -92,8 +92,7 @@ async function run() {
     const reducedInternal = reduced as any;
     const liveBase = reducedInternal.history.memory().total + reducedInternal.window.memory().total + reducedInternal.post.memory().total +
       reducedInternal.motionCoverageCounts.size + reducedInternal.composeParams.size;
-    // The plan also charges the attached render's center records and reflected beauty sum.
-    const exactReducedPeak = liveBase + 64 * 64 * (4 * 80 + 3 * 64 + 32 + 48);
+    const exactReducedPeak = liveBase + 64 * 64 * (4 * 80 + 3 * 64 + 32);
     check(reduced.plan!.bytes === exactReducedPeak, `Temporal plan did not match live allocations and bounded queue: ${reduced.plan!.bytes} vs ${exactReducedPeak} (base ${liveBase}, pre ${reducedInternal.history.memory().total}, window ${reducedInternal.window.memory().total}, post ${reducedInternal.post.memory().total}, expected ${estimateTemporalMemory(64, 64, {...budgetBase, ...reduced.plan}, materialCount)})`);
     for await (const frame of reduced.flush()) { check(frame.index === reducedOutputs, 'Reduced history flush changed output order'); reducedOutputs++; }
     check(reducedOutputs === 12, `Reduced ring overwrote or lost frames after exceeding capacity: ${reducedOutputs}`);
@@ -333,7 +332,7 @@ async function exercisePaddedPresentation(engine: Engine) {
 
 async function createTestWindow(device: GPUDevice, width: number, height: number, capacity: number, accumulateGuides = false, experiment?: number, reflectedRadiance = false) {
   const history = await TemporalHistoryGPU.create(device, width, height, capacity, accumulateGuides ? capacity : 1, false, reflectedRadiance);
-  const window = await DirectWindowGPU.create(history, false, accumulateGuides, experiment, false);
+  const window = await DirectWindowGPU.create(history, false, accumulateGuides, experiment);
   return {
     history,
     guides: window.guides,
