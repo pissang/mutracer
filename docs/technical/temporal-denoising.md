@@ -67,8 +67,9 @@ keeps the tile counts with their history slots.
 
 The experiment defaults to uniform sampling. The native capture uses hardware
 traversal, a base of 3 spp, a cap of 8 spp per tile, and current-frame OIDN
-guides. Tune supplemental sampling and offline temporal quality on native
-before synchronizing stable results to WebGPU.
+guides with caustic estimators disabled. Tune supplemental sampling and
+offline temporal quality on native before synchronizing stable results to
+WebGPU.
 
 ## Why this design
 
