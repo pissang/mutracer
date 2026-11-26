@@ -799,7 +799,7 @@ fn surface_aov_plane_matches_cross_backend_fixture_with_uint32_ids() {
         }
     }
 }
-fn aov_test_backend() -> Backend {
+pub(super) fn aov_test_backend() -> Backend {
     if std::env::var_os("MUTRACER_AOV_HWRT").is_some() {
         Backend::Hardware
     } else {

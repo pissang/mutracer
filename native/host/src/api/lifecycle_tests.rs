@@ -3,10 +3,11 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 pub(super) fn fixture() -> (Engine, Arc<Render>) {
-    let engine = Engine::new(EngineOptions {
-        backend: Backend::Software,
-    })
-    .unwrap();
+    fixture_with_backend(Backend::Software)
+}
+
+pub(super) fn fixture_with_backend(backend: Backend) -> (Engine, Arc<Render>) {
+    let engine = Engine::new(EngineOptions { backend }).unwrap();
     engine.display().set_size(8, 6).unwrap();
     let render = Arc::new(
         Render::new(

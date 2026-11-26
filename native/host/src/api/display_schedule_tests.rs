@@ -26,10 +26,12 @@ mod parity_schedule_tests {
         ))
         .unwrap();
         for row in table["cases"].as_array().unwrap() {
-            let (engine, render) = super::super::lifecycle_tests::fixture();
+            let backend = super::super::aov_tests::aov_test_backend();
+            let (engine, render) = super::super::lifecycle_tests::fixture_with_backend(backend);
             engine.set_scene(&crate::api::tests::lit_scene()).unwrap();
             engine.update().unwrap();
             render.converge(ConvergeOptions::new(1)).unwrap();
+            assert_eq!(render.backend().unwrap().0, backend);
             let (entered, receive) = mpsc::channel();
             let (release, resume) = mpsc::channel();
             let resume = Arc::new(Mutex::new(resume));
