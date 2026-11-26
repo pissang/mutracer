@@ -182,12 +182,16 @@ returns `None`. Each `OfflineFrame` keeps its original index. Read the
 denoised image with `read_pixels(false)` or pre-spatial HDR with
 `read_pixels(true)`.
 
-Call `cut()` before the first input of a new segment. A full output queue
-holds four frames. The effective `plan()` and `latency()` are available after
-the first push. Wider windows delay output and use more GPU memory. Smooth
-metals blend in more surface history as roughness increases. Near mirrors
-still use mostly the current frame. Moving reflections and shadows can leave
-trails, and newly visible surfaces have less history. The
+Call `cut()` before the first input of a new segment or at a known lighting
+jump that must share no history. With automatic history invalidation, light
+edits can reduce history locally.
+
+A full output queue holds four frames. The effective `plan()` and `latency()`
+are available after the first push. Wider windows delay output and use more
+GPU memory. Smooth metals blend in more surface history as roughness increases.
+Near mirrors use mostly the current frame where reflection history is unavailable.
+Moving reflections and shadows can leave trails, and newly visible surfaces have
+less history. The
 [shot options](../cli/schema/shot.md#output-and-animation) describe the radii,
 byte budget and spatial weights used for video.
 
@@ -200,11 +204,11 @@ To accumulate reflections along their apparent motion, set
 `TemporalOptions::reflection_motion` and
 `RenderSettings::capture_reflections` before rendering the first frame. Both
 default to `false`. At 720p with a radius of 16, the temporal plan reserves
-about 804 MB more GPU memory. This also reduces sliding reflection trails on
-smooth, opaque nonmetals, which can leave more noise in those highlights.
-Virtual-image motion helps flat reflectors. Near-mirror metals use less
-history where correspondence fails. Glass reflections can fall back to
-surface motion. Transmission uses surface motion.
+about 804 MB more GPU memory. It adds capture and window processing.
+Curvature correction is available in perspective views. Moving highlights
+may retain more noise where the reflection changes or motion is uncertain.
+Glass reflections can fall back to surface motion. Transmission uses
+surface motion.
 
 At 720p and below, offline OIDN may process the whole image on a supported GPU.
 This is faster and can use more temporary GPU memory. Set `memoryBudget` to

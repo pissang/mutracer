@@ -60,11 +60,11 @@ export class DirectWindowGPU {
   }
 
   async dispatch(current: number, source: number, symmetric: boolean, stage: number,
-    radiusMin: number, radiusMax: number, includeMaterialRevisions = true) {
+    radiusMin: number, radiusMax: number, includeMaterialRevisions = true, checkLighting = false) {
     const h = this.history, d = h.device;
     // Camera-cut validation uses stage 1 without a preceding window initialization.
     const mode = Number(this.adaptiveRadius) | 2 | (Number(includeMaterialRevisions) << 2) |
-      (Number(!!this.guides && includeMaterialRevisions) << 3);
+      (Number(!!this.guides && includeMaterialRevisions) << 3) | (Number(checkLighting) << 4) | (Number(symmetric && !includeMaterialRevisions) << 7);
     d.queue.writeBuffer(this.params, 0, new Uint32Array([h.width, h.height, h.slot(current), h.slot(source),
       source - current, Number(symmetric), stage, mode, radiusMin, radiusMax]));
     const resources = [this.params, h.surface, h.id, h.raw, h.meta, this.total, this.output, h.overflow, this.rejects, h.motion, h.material];
@@ -87,7 +87,7 @@ export class DirectWindowGPU {
   }
 
   async filter(current: number, neighbors: number[], symmetric: boolean,
-    radiusMin = symmetric ? 8 : 17, radiusMax = this.adaptiveRadius ? 16 : radiusMin) {
+    radiusMin = symmetric ? 8 : 17, radiusMax = this.adaptiveRadius ? 16 : radiusMin, lightingRevisions?: readonly number[]) {
     const frames = this.history.frames;
     if (frames.get(this.history.slot(current)) !== current) throw Error('Current frame is missing.');
     for (const source of neighbors) {
@@ -95,7 +95,10 @@ export class DirectWindowGPU {
     }
     this.history.device.queue.writeBuffer(this.rejects, 0, new Uint32Array(16));
     await this.dispatch(current, current, symmetric, 0, radiusMin, radiusMax);
-    for (const source of neighbors) await this.dispatch(current, source, symmetric, 1, radiusMin, radiusMax);
+    for (const source of neighbors) {
+      await this.dispatch(current, source, symmetric, 1, radiusMin, radiusMax, true,
+        lightingRevisions?.[current] !== lightingRevisions?.[source]);
+    }
     await this.dispatch(current, current, symmetric, 2, radiusMin, radiusMax);
     return this.output;
   }

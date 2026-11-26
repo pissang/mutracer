@@ -34,11 +34,13 @@ pub struct TemporalOptions {
     pub stabilize_sparkle: bool,
     /// Accumulate albedo and normal for offline OIDN when the history radius is positive. Default false.
     pub accumulate_guides: bool,
-    /// Follow virtual-image motion on flat reflectors and reduce sliding
-    /// reflection trails on smooth, opaque nonmetals. Default false.
+    /// Follow apparent reflection motion, with curvature correction in perspective
+    /// views. Changing reflections and uncertain motion can leave more noise.
+    /// Default false.
     /// Enable [crate::api::RenderSettings::capture_reflections] on input renders.
     pub reflection_motion: bool,
-    /// Default Auto. Manual uses explicit cuts and frame gaps only.
+    /// Default Auto. Light edits can reduce history locally.
+    /// Manual uses explicit cuts and frame gaps only.
     pub history_invalidation: HistoryInvalidation,
     /// Maximum temporal GPU bytes. Default None selects the full plan.
     pub memory_budget: Option<u64>,

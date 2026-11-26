@@ -194,6 +194,9 @@ async function run() {
     const floatingPostResult = await exerciseFloatingPostCodes(device);
     const materialAcceptanceResult = await exerciseMaterialAcceptance(device);
     const glossyAcceptance = await exerciseGlossyAcceptance(device);
+    await exerciseLightingConfidence(device);
+    await exerciseFocusPull(device);
+    await exerciseCurvedCapture(device);
     const offlineCounts = await exerciseOfflineSampleWeights(device);
     const retainedBaseSamples = await exerciseRetainedBaseSamples(engine);
     const forwardSeed = await exerciseForwardMotionSeed(device);
@@ -338,6 +341,7 @@ async function createTestWindow(device: GPUDevice, width: number, height: number
     guides: window.guides,
     rejects: window.rejects,
     filter: window.filter.bind(window),
+    dispatch: window.dispatch.bind(window),
     read: window.read.bind(window),
     setSampleTiles: window.setSampleTiles.bind(window),
     async upload(frame: number, metadata: Parameters<typeof history.capture>[1],
@@ -464,6 +468,127 @@ async function exerciseMaterialAcceptance(device: GPUDevice) {
     check(tapered === pixels, 'A rougher metal lost its short surface window');
     check(rough === pixels, 'A rough metal lost its full surface window');
     return {materialId: 212, diffuse, nearMirror, tapered, rough};
+  } finally { window.dispose(); }
+}
+
+async function exerciseFocusPull(device: GPUDevice) {
+  const size = 8;
+  const projection = new Camera({projection: 'perspective', fov: 45}).getProjectionMatrix(1);
+  const window = await createTestWindow(device, size, size, 2);
+  const fill = (value: number[]) => {
+    const data = new Float32Array(size * size * 4);
+    for (let i = 0; i < data.length; i += 4) data.set(value, i);
+    return data;
+  };
+  try {
+    for (const frame of [0, 1]) {
+      await window.upload(frame, {viewProjection: projection, projection, apertureRadius: 1, focusDistance: 1+frame},
+        {hdr: fill([1+frame, 0, 0, 1]), id: new Uint32Array(size * size * 4).fill(1),
+          centerDepth: fill([1, 0, 0, 1]), centerNormal: fill([0, 0, 1, 1]),
+          roughness: fill([.5, 0, 0, 1]), motion: fill([0, 0, 1, 3]), albedo: fill([.5, .5, .5, 1])});
+    }
+    const color = new Float32Array(await window.read(await window.filter(1, [0], true, 1, 1)));
+    check(color[0] === 2, 'A focus pull mixed different blur footprints');
+    await window.dispatch(1, 0, true, 1, 1, 1, false);
+    const accepted = new Uint32Array(await window.read(window.rejects, 4))[0];
+    check(accepted === size * size, 'A focus pull invalidated camera correspondence');
+  } finally { window.dispose(); }
+}
+
+async function exerciseCurvedCapture(device: GPUDevice) {
+  const width = 16, height = 8, pixels = width * height;
+  const projection = new Camera({projection: 'perspective', fov: 45}).getProjectionMatrix(width / height);
+  const history = await createTestWindow(device, width, height, 2, false, undefined, true);
+  const readback = device.createBuffer({size: pixels * 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ});
+  const id = new Uint32Array(pixels * 4).fill(1);
+  const centerRecords = new Float32Array(pixels * 24);
+  const records = new Uint32Array(centerRecords.buffer);
+  const guide = new Float32Array(pixels * 4);
+  const hdr = new Float32Array(pixels * 4).fill(1);
+  const motion = new Float32Array(pixels * 4);
+  for (let i = 0; i < pixels; i++) {
+    const x = (i % width - 8) * .05;
+    records.set([1, 1, 1, 0], i * 8);
+    const angle = 2*x;
+    centerRecords.set([Math.sin(angle), 0, Math.cos(angle), 2, x, 0, -2, 1], (pixels + i) * 8);
+    const endpoint = (2*pixels + i) * 8;
+    centerRecords.set([0, 0, 6, 0, 4, 0, 1, 0], endpoint);
+    records[endpoint + 3] = 0x3c000000;
+    guide.set([0, 0, 1, 1], i * 4);
+    motion.set([0, 0, 2, 3], i * 4);
+  }
+  try {
+    for (const [frame, samples] of [[0, 3], [1, 16]]) {
+      const albedo = hdr.slice();
+      for (let i = 3; i < albedo.length; i += 4) albedo[i] = samples;
+      await history.upload(frame, {viewProjection: projection, projection, apertureRadius: 0, focusDistance: 2},
+        {hdr, id, centerNormal: guide, roughness: guide, motion, albedo, centerRecords, reflected: hdr});
+    }
+    const packedMotion = async (frame: number) => {
+      const encoder = device.createCommandEncoder();
+      encoder.copyTextureToBuffer({texture: history.history.reflections!.endpoint, origin: [0, 0, frame]},
+        {buffer: readback, bytesPerRow: width * 16}, [width, height, 1]);
+      device.queue.submit([encoder.finish()]);
+      await readback.mapAsync(GPUMapMode.READ);
+      const displacement = new Uint32Array(readback.getMappedRange())[(4*width + 8)*4 + 2];
+      readback.unmap();
+      return displacement & 0xffff;
+    };
+    const curved = await packedMotion(0);
+    const planar = await packedMotion(1);
+    // Half-float codes for one and four pixels. Convex curvature reduces
+    // the virtual displacement toward the one-pixel surface displacement.
+    check(curved > 0x3c00 && curved < 0x4400, 'Curved motion did not reduce convex image parallax');
+    check(planar === 0x4400, 'Sharp high-sample reflections did not retain the planar fallback');
+  } finally { readback.destroy(); history.dispose(); }
+}
+
+async function exerciseLightingConfidence(device: GPUDevice) {
+  const width = 32, height = 16;
+  const projection = new Camera({projection: 'perspective', fov: 45}).getProjectionMatrix(width / height);
+  const meta = {viewProjection: projection, projection, apertureRadius: 0, focusDistance: 1};
+  const window = await createTestWindow(device, width, height, 2);
+  const fill = (value: number[]) => {
+    const data = new Float32Array(width * height * 4);
+    for (let i = 0; i < data.length; i += 4) data.set(value, i);
+    return data;
+  };
+  try {
+    for (const frame of [0, 1]) {
+      const hdr = fill([1, 1, 1, 1]);
+      const id = new Uint32Array(width * height * 4);
+      for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+        const i = (y * width + x) * 4;
+        id.set([1, 2, x < 27 ? 3 : 4, 0], i);
+        if (x < 10) {
+          // Opposing sample fluctuations cancel in the patch mean.
+          const radiance = (y % 4 < 2) === (frame === 0) ? 1.125 : .875;
+          hdr.set([radiance, radiance, radiance, 1], i);
+        } else if (x < 20) {
+          const step = frame === 0 ? 4 : 1;
+          hdr.set([step, step, step, 1], i);
+        } else if (x < 27 && frame === 0) {
+          // Preserve luminance while changing chromaticity.
+          hdr.set([2, 1 - .2126 / .7152, 1, 1], i);
+        }
+      }
+      await window.upload(frame, meta, {hdr, id, centerDepth: fill([1, 0, 0, 1]),
+        centerNormal: fill([0, 0, 1, 1]), roughness: fill([.5, 0, 0, 1]),
+        motion: fill([0, 0, 1, 3]), albedo: fill([.5, .5, .5, 1])});
+    }
+    for (const frame of [0, 1]) {
+      const neighbor = [1 - frame];
+      const resolve = async (revisions: number[]) =>
+        new Float32Array(await window.read(await window.filter(frame, neighbor, true, 1, 1, revisions)));
+      const unchecked = await resolve([0, 0]);
+      const checked = await resolve([0, 1]);
+      const red = (x: number) => (8 * width + x) * 4;
+      check(checked[red(5)] === unchecked[red(5)], 'Noise reduced unchanged lighting history');
+      check(checked[red(15)] === (frame === 0 ? 4 : 1), 'An intensity step retained stale history');
+      check(checked[red(23)] === (frame === 0 ? 2 : 1), 'A chromatic step retained stale history');
+      check(checked[red(28)] === 1, 'A step reached across a material boundary');
+      check(unchecked[red(15)] !== checked[red(15)], 'Matching light revisions did not bypass the lighting check');
+    }
   } finally { window.dispose(); }
 }
 

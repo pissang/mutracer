@@ -151,6 +151,7 @@ export class TemporalDenoiser {
   private spatialOutputs = new Map<number, GPUBuffer>();
   private epoch = 0;
   private epochs: number[] = [];
+  private lightingRevisions: number[] = [];
   private materialRevisionFrames = new Map<number,Map<number,number>>();
   private globalIndices: number[] = [];
   private sampleCounts: number[] = [];
@@ -174,9 +175,9 @@ export class TemporalDenoiser {
   _configureOfflineSampling({tileSize}: {tileSize: number}) {
     this.assertAlive();
     if (this.attached || this.history || this.options.mode !== 'offline' ||
-      this.options.reflectionMotion || this.options.accumulateGuides || this.options.memoryBudget !== undefined ||
+      this.options.accumulateGuides || this.options.memoryBudget !== undefined ||
       (!Number.isSafeInteger(tileSize) || tileSize < 1)) {
-      throw new Error('Offline sampling experiments require an unattached offline surface window and the default memory budget.');
+      throw new Error('Offline sampling experiments require an unattached offline window without accumulated guides and the default memory budget.');
     }
     this.sampleTileSize = tileSize;
   }
@@ -263,6 +264,7 @@ export class TemporalDenoiser {
           revisionEntries, input.reflection, input.centerRecords);
         if (this.activeOptions.historyInvalidation === 'auto' && aovs.centerPosition && frame > 0 && this.activeOptions.historyRadius.max > 0 &&
             this.previousFrameSequence === metadata.frameSequence - 1 && this.previousSceneRevision === metadata.sceneRevision &&
+            (this.activeOptions.mode === 'offline' || this.lightingRevisions[frame - 1] === metadata.lightingRevision) &&
             this.previousScene === metadata.scene && this.previousCameraSource === metadata.cameraSource &&
             this.epochs[frame - 1] === this.epoch &&
             await this.cameraCutCoverage(frame, aovs.centerPosition)) this.epoch++;
@@ -280,9 +282,13 @@ export class TemporalDenoiser {
         }
       }, metadata.frameSequence);
       if (hasTemporalFrameGap(this.previousFrameSequence, metadata.frameSequence)) this.epoch++;
-      if (this.activeOptions.historyInvalidation === 'auto' && this.previousScene !== undefined && metadata.scene !== this.previousScene) this.epoch++;
-      if (this.activeOptions.historyInvalidation === 'auto' && this.previousSceneRevision !== undefined && metadata.sceneRevision !== this.previousSceneRevision) this.epoch++;
-      if (this.activeOptions.historyInvalidation === 'auto' && this.previousCameraSource !== undefined && metadata.cameraSource !== this.previousCameraSource) this.epoch++;
+      const auto = this.activeOptions.historyInvalidation === 'auto';
+      if (auto && this.previousScene !== undefined && metadata.scene !== this.previousScene) this.epoch++;
+      if (auto && this.previousSceneRevision !== undefined && metadata.sceneRevision !== this.previousSceneRevision) this.epoch++;
+      if (auto && this.activeOptions.mode === 'interactive' && frame > 0 &&
+          this.lightingRevisions[frame - 1] !== metadata.lightingRevision) this.epoch++;
+      this.lightingRevisions[frame] = auto ? metadata.lightingRevision : 0;
+      if (auto && this.previousCameraSource !== undefined && metadata.cameraSource !== this.previousCameraSource) this.epoch++;
       if (this.previousOffset === metadata.sampleSequenceOffset && !this.warnedOffset) {
         this.warnedOffset = true; console.warn('Consecutive temporal frames use the same sampleSequenceOffset; correlated noise will not average out.');
       }
@@ -517,7 +523,7 @@ export class TemporalDenoiser {
       const radius = this.activeOptions.historyRadius.max;
       const neighbors = historyNeighbors(i, this.frames, this.activeOptions, radius).filter(j => this.epochs[j] === this.epochs[i]);
       const output = await this.window!.filter(i, neighbors, this.activeOptions.mode === 'offline',
-        this.activeOptions.historyRadius.min, this.activeOptions.historyRadius.max);
+        this.activeOptions.historyRadius.min, this.activeOptions.historyRadius.max, this.lightingRevisions);
       const device = this.engine.device!;
       this.accumulated.set(i, copyBuffer(device, output, this.history.bytes, 'Temporal accumulated history'));
       this.packExternal(i, output);
@@ -536,8 +542,9 @@ export class TemporalDenoiser {
         throw new Error('Too many finished temporal frames are waiting; drain output before pushing.');
       }
       const i = this.nextOutput++;
+      // Post stabilization compares spatially filtered images without a lighting confidence test.
       const neighbors = historyNeighbors(i, this.nextWindow, {...this.activeOptions, historyRadius: {min: this.activeOptions.postRadius, max: this.activeOptions.postRadius}}, this.activeOptions.postRadius)
-        .filter(j => this.epochs[j] === this.epochs[i]);
+        .filter(j => this.epochs[j] === this.epochs[i] && this.lightingRevisions[j] === this.lightingRevisions[i]);
       const bytes = this.history!.bytes, device = this.engine.device!;
       let denoised: GPUBuffer;
       if (!this.post) { denoised = this.spatialOutputs.get(i)!; this.spatialOutputs.delete(i); }
@@ -570,7 +577,7 @@ export class TemporalDenoiser {
   }
 
   private resetShot() {
-    this.frames = this.nextWindow = this.nextOutput = this.epoch = 0; this.epochs.length = 0; this.materialRevisionFrames.clear(); this.globalIndices.length = 0; this.sampleCounts.length = 0; this.displaySettings.length = 0; this.previousOffset = undefined; this.previousFrameSequence = undefined; this.previousScene = undefined; this.previousCameraSource = undefined; this.previousSceneRevision = undefined;
+    this.frames = this.nextWindow = this.nextOutput = this.epoch = 0; this.epochs.length = 0; this.lightingRevisions.length = 0; this.materialRevisionFrames.clear(); this.globalIndices.length = 0; this.sampleCounts.length = 0; this.displaySettings.length = 0; this.previousOffset = undefined; this.previousFrameSequence = undefined; this.previousScene = undefined; this.previousCameraSource = undefined; this.previousSceneRevision = undefined;
     for (const buffer of this.accumulated.values()) buffer.destroy(); this.accumulated.clear();
     for (const buffer of this.spatialOutputs.values()) buffer.destroy(); this.spatialOutputs.clear();
     for (const input of this.presentationInputs.values()) for (const buffer of Object.values(input)) buffer.destroy();

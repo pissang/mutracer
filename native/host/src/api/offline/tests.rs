@@ -102,6 +102,7 @@ fn frozen_offline_replay() {
                     display,
                     revisions,
                     scene_key: j["sceneRevision"].as_u64().unwrap_or(0),
+                    lighting_key: j["lightingRevision"].as_u64().unwrap_or(0),
                     guides,
                 },
             )
@@ -515,9 +516,9 @@ fn window_guides_match_web_packed_guides() {
         passes.capture(frame, &resources, &camera, &[], false);
     }
     passes.clear("rejects", 0, 64);
-    passes.window(0, 0, 0, true);
-    passes.window(0, 1, 1, true);
-    passes.window(0, 0, 2, true);
+    passes.window(0, 0, 0, true, false);
+    passes.window(0, 1, 1, true, false);
+    passes.window(0, 0, 2, true, false);
     let output = ["Color", "Albedo", "Normal"].map(|name| passes.alloc(name, passes.bytes));
     passes.pack(0, 2, &passes["window"], &output);
     let albedo = passes.read::<[f32; 4]>(&output[1]).unwrap()[4 * 16 + 4];
@@ -529,6 +530,11 @@ fn window_guides_match_web_packed_guides() {
     assert!((normal[2] - expected).abs() < 1e-6);
     assert_eq!(normal[3], 2.);
     println!("Packed guide parity: {}", serde_json::json!({ "albedo": albedo, "normal": normal }));
+    passes.window(0, 0, 0, true, false);
+    passes.window(0, 1, 1, true, true);
+    passes.window(0, 0, 2, true, false);
+    let checked = passes.read::<[f32; 4]>(&passes["sum"]).unwrap();
+    assert_eq!(checked[4 * 16 + 4][3], 1., "lighting step accepted a tap");
 }
 
 #[test]
@@ -624,9 +630,9 @@ fn reflection_window_accumulates_a_translating_highlight_in_both_directions() {
         }
     }
     for (frame, at, expected, current) in [(0, 8, 7. / 3., 3.), (1, 6, 5. / 3., 1.)] {
-        passes.window(frame, frame, 0, true);
-        passes.window(frame, 1 - frame, 1, true);
-        passes.window(frame, frame, 2, true);
+        passes.window(frame, frame, 0, true, false);
+        passes.window(frame, 1 - frame, 1, true, false);
+        passes.window(frame, frame, 2, true, false);
         let result = passes.read::<[f32; 4]>(&passes["window"]).unwrap();
         for (index, expected) in [
             (4 * 16 + at, expected),
@@ -751,9 +757,9 @@ fn curved_mirror_window(
         capture(frame, at, false);
     }
     [0, 1].map(|frame| {
-        passes.window(frame, frame, 0, true);
-        passes.window(frame, 1 - frame, 1, true);
-        passes.window(frame, frame, 2, true);
+        passes.window(frame, frame, 0, true, false);
+        passes.window(frame, 1 - frame, 1, true, false);
+        passes.window(frame, frame, 2, true, false);
         passes.read::<[f32; 4]>(&passes["window"]).unwrap()
     })
 }

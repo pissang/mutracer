@@ -2,7 +2,6 @@
 // stable identities come from the same AOV metadata as surface motion.
 export function aovReflectionWgsl(hasCoatNormals: boolean) {
   return /* wgsl */ `
-override AOV_REFLECTION_CURVATURE: bool = false;
 // Tangent-plane image construction from MuTracer's DLSS integration (ec0f0c3c).
 fn reflectionImage(point: vec3f, normal: vec3f, endpoint: vec3f) -> vec3f {
   return endpoint - 2.0 * dot(endpoint - point, normal) * normal;
@@ -74,34 +73,7 @@ ${hasCoatNormals ? `  if (material.coatNormalEnabled) { n = normalize(mix(n, coa
   let projected = reflectionProjection(previous, size);
   let planar = projected-center;
   if (!all(abs(planar) < vec2f(size))) { return record; }
-  record.motion = vec4f(planar, vec2f(1e20));
-  if (!AOV_REFLECTION_CURVATURE) { return record; }
-  var curved = planar;
-  // Estimate the directional normal derivative near the surface-motion landing.
-  // A positive derivative is convex and shortens the apparent feature depth.
-  let parallax = projected-reflectionProjection(surface,size);
-  if (length(parallax) > 0.05) {
-    let step = normalize(parallax) * vec2f(1.0,-1.0);
-    var neighbor: SurfaceInteraction; var neighborMaterial: OpenPbrResolvedMaterial;
-    let neighborRay = initCameraRay((vec2f(pixel)+0.5+step)/vec2f(size));
-    if (aovSurface(neighborRay, &neighbor, &neighborMaterial) &&
-        neighbor.instanceIndex == si.instanceIndex && neighbor.materialIndex == si.materialIndex) {
-      let dp = neighbor.position-si.position;
-      let k = dot(neighbor.normal-si.normal,dp) / max(dot(dp,dp),1e-12);
-      let depth = dot(si.position-ray.o, -normalize(cameraUniform.viewInv[2].xyz));
-      let hitDistance = select(1e6, distanceToHit, finiteHit);
-      let denominator = 1.0 + 2.0 * k * cosine * hitDistance;
-      // Near a focal singularity, keep the tangent-plane hypothesis. Bound
-      // the correction because one directional derivative cannot fit a caustic.
-      if (denominator > 0.25) {
-        let scale = clamp((depth+hitDistance) / (depth*denominator+hitDistance), 0.0, 2.0);
-        curved = planar + (scale-1.0)*parallax;
-      }
-    }
-  }
-  if (all(abs(curved) < vec2f(size))) {
-    record.motion = vec4f(curved,vec2f(1e20));
-  }
+  record.motion = vec4f(planar, reflectionProjection(surface,size)-center);
   return record;
 }
 `;

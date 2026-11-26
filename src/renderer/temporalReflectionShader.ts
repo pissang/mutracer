@@ -10,6 +10,104 @@ struct Record { endpoint: vec4u, motion: vec4f }
 @group(0) @binding(4) var<storage, read> hdr: array<vec4f>;
 @group(0) @binding(5) var radianceOut: texture_storage_2d_array<rgba16float, write>;
 @group(0) @binding(6) var endpointOut: texture_storage_2d_array<rgba32uint, write>;
+struct CameraData { vp: mat4x4f, lens: vec4f }
+@group(0) @binding(7) var<storage, read> cameraData: array<CameraData>;
+
+fn centerIndex(at: vec2i) -> u32 {
+  return u32(at.x) + p.size.x*(p.size.y-1u-u32(at.y));
+}
+
+fn curvaturePrimary(at: vec2i) -> Record {
+  return records[p.size.x*p.size.y + centerIndex(at)];
+}
+fn curvatureNeighbor(at: vec2i, key: vec3u) -> bool {
+  if (any(at < vec2i(0)) || any(at >= vec2i(p.size))) { return false; }
+  return all(records[centerIndex(at)].endpoint.xyz == key);
+}
+
+fn normalDerivative(a: Record, b: Record) -> f32 {
+  let dp=b.motion.xyz-a.motion.xyz;
+  let dn=bitcast<vec3f>(b.endpoint.xyz)-bitcast<vec3f>(a.endpoint.xyz);
+  return dot(dn,dp)/max(dot(dp,dp),1e-12);
+}
+
+fn axisCurvature(at: vec2i, axis: vec2i, key: vec3u, center: Record) -> vec3f {
+  let hasLo=curvatureNeighbor(at-axis,key);
+  let hasHi=curvatureNeighbor(at+axis,key);
+  var lo=center;
+  var hi=center;
+  if (hasLo) { lo=curvaturePrimary(at-axis); }
+  if (hasHi) { hi=curvaturePrimary(at+axis); }
+  let mid=normalDerivative(lo,hi);
+  let noise=abs(normalDerivative(center,hi)-normalDerivative(lo,center))*.5;
+  return vec3f(mid,noise,select(0.,1.,hasLo && hasHi));
+}
+
+// The packed alpha marks a tangent-plane record with +1. A negative value
+// stores the negated curvature confidence. -2 marks a rejected solve.
+fn curvedDisplacement(pixel: vec2i, source: u32, record: Record, samples: f32) -> vec3f {
+  let planar=record.motion.xy;
+  let surfaceMotion=record.motion.zw;
+  let distance=bitcast<f32>(record.endpoint.z);
+  if (distance==0. || any(abs(planar)>=vec2f(p.size)) || any(abs(surfaceMotion)>=vec2f(p.size))) {
+    return vec3f(planar,1.);
+  }
+  let camera=cameraData[p.slot];
+  let position=curvaturePrimary(pixel);
+  let depth=bitcast<f32>(position.endpoint.w);
+  if (!(depth > 0.) || !(camera.lens.x > 0.)) { return vec3f(planar,1.); }
+  let normal=bitcast<vec3f>(position.endpoint.xyz);
+  let key=records[source].endpoint.xyz;
+  let kx=axisCurvature(pixel,vec2i(1,0),key,position);
+  let ky=axisCurvature(pixel,vec2i(0,1),key,position);
+  let k=vec2f(kx.x,ky.x);
+  let parallax=planar-surfaceMotion;
+  let lobes=unpack2x16float(record.endpoint.w);
+  let cosine=lobes.y;
+  let vp=camera.vp;
+  let wAxis=vec3f(vp[0].w,vp[1].w,vp[2].w);
+  if (dot(wAxis,wAxis) <= 1e-12) { return vec3f(planar,1.); }
+  let vpPoint=vp*vec4f(position.motion.xyz,1.);
+  let vpNormal=vp*vec4f(normal,0.);
+  let planeNormal=(vpNormal.xy-vpPoint.xy/vpPoint.w*vpNormal.w)*vec2f(f32(p.size.x),-f32(p.size.y));
+  var incidence=vec2f(1,0);
+  if (dot(planeNormal,planeNormal)>1e-8) { incidence=normalize(planeNormal); }
+  let incidence2=incidence*incidence;
+  let projected=(vec2f(pixel)+.5-.5*vec2f(p.size))/camera.lens.x;
+  let eyeRange=depth*sqrt(1.+dot(projected,projected));
+  let reach=select(eyeRange,distance*eyeRange/(eyeRange+distance),distance>0.);
+  let curvature=vec2f(dot(k,incidence2),dot(k,incidence2.yx));
+  let power=2.*reach*vec2f(1./max(.05,cosine),cosine);
+  let u=power*curvature;
+  let denominator=1.+u;
+  if (max(abs(u.x),abs(u.y))<1e-4) { return vec3f(planar,1.); }
+  if (any(denominator<vec2f(.25)) || min(kx.z,ky.z)==0.) { return vec3f(planar,-2.); }
+  let sagittal=vec2f(-incidence.y,incidence.x);
+  let components=vec2f(dot(parallax,incidence),dot(parallax,sagittal));
+  let adjusted=components/denominator;
+  let correction=adjusted.x*incidence+adjusted.y*sagittal;
+  let localTurns=max(abs(k.x),abs(k.y))*eyeRange*length(correction)/(camera.lens.x*max(.2,cosine));
+  let uncertainty=vec2f(kx.y,ky.y);
+  let deltaU=power*vec2f(dot(uncertainty,incidence2),dot(uncertainty,incidence2.yx));
+  let estimationError=length(adjusted*deltaU/denominator);
+  let aperture=camera.lens.x*camera.lens.y*(1./max(depth,1e-4)-select(0.,1./(depth+distance),distance>0.));
+  let residual=length(correction)*localTurns+estimationError+aperture*max(abs(u.x/denominator.x),abs(u.y/denominator.y));
+  // A nearest-texel tap adds up to half a pixel of rounding on each
+  // axis. This matters more for narrow projected lobes and as current-frame
+  // sample noise falls with 1/sqrt(spp). Keep the tangent-plane validation
+  // when the added alignment error outweighs the expected noise reduction.
+  let lobeWidth = .5 + camera.lens.x*lobes.x*lobes.x/max(denominator.x,denominator.y);
+  let samplePrecision = sqrt(max(1.,samples/3.))-1.;
+  let alignmentCost = samplePrecision*(.5+residual)/lobeWidth;
+  if (alignmentCost >= 1.) { return vec3f(planar,1.); }
+  let trust = (1.-smoothstep(.10,.45,residual))*smoothstep(.25,.48,cosine)*
+    (1.-smoothstep(.5,1.,alignmentCost));
+  // The smallest normal half-float keeps the model tag on devices that
+  // flush subnormals when storing the confidence.
+  let packedTrust = select(-2.,-trust,trust >= 0.00006103515625);
+  return vec3f(surfaceMotion+correction,packedTrust);
+}
+
 fn packReflectionMetadata(raw: vec4u) -> u32 {
   let distance = bitcast<f32>(raw.z);
   // A logarithmic fixed-point code preserves relative distance precision from
@@ -22,15 +120,16 @@ fn packReflectionMetadata(raw: vec4u) -> u32 {
 }
 @compute @workgroup_size(8,8) fn main(@builtin(global_invocation_id) g:vec3u) {
   if (any(g.xy >= p.size)) { return; }
-  let source = (p.size.y - 1u - g.y) * p.size.x + g.x;
+  let source = centerIndex(vec2i(g.xy));
   let targetIndex = g.y * p.size.x + g.x;
   let record = records[2u*p.size.x*p.size.y+source];
   let samples = select(f32(p.samples),albedoSum[source].w,albedoSum[source].w>0.0);
   let reflected = clamp(radianceSum[source].rgb/max(1.0,samples),vec3f(0),max(hdr[targetIndex].rgb,vec3f(0)));
   let finite = all(abs(reflected) <= vec3f(65504));
-  textureStore(radianceOut,vec2i(g.xy),i32(p.slot),vec4f(select(vec3f(0),reflected,finite),1.0));
+  let corrected = curvedDisplacement(vec2i(g.xy),source,record,samples);
+  textureStore(radianceOut,vec2i(g.xy),i32(p.slot),vec4f(select(vec3f(0),reflected,finite),corrected.z));
   // Keep invalid motion outside the viewport, including after conversion to half.
-  let displacement = pack2x16float(clamp(record.motion.xy,vec2f(-65504),vec2f(65504)));
+  let displacement = pack2x16float(clamp(corrected.xy,vec2f(-65504),vec2f(65504)));
   textureStore(endpointOut,vec2i(g.xy),i32(p.slot),
     vec4u(record.endpoint.xy,displacement,packReflectionMetadata(record.endpoint)));
 }
@@ -42,6 +141,14 @@ export function reflectionWindowWGSL(binding: number) {
 @group(0) @binding(${binding + 1}) var endpoints: texture_2d_array<u32>;
 @group(0) @binding(${binding + 2}) var<storage, read_write> reflectedTotal: array<vec4f>;
 const OPTICAL_SILHOUETTE = 14.;
+
+fn reflectionModel(at: vec2i, frame: u32) -> f32 {
+  return textureLoad(reflected,at,i32(frame),0).a;
+}
+
+fn modelTrust(model: f32) -> f32 {
+  return select(select(-model,0.,model < -1.),1.,model >= 0.);
+}
 
 fn reflection(at: vec2i, frame: u32) -> vec3f {
   return textureLoad(reflected,at,i32(frame),0).rgb;
@@ -61,22 +168,24 @@ fn roughnessCosine(record: vec4u) -> vec2f {
   return vec2f((vec2u(record.w)>>vec2u(16u,24u)) & vec2u(255u))/255.;
 }
 
-fn virtualStep(q: vec2f, frame: u32, id: vec3u, revision: u32, key: vec2u) -> vec3f {
-  if (!inFrame(q)) { return vec3f(0); }
+fn virtualStep(q: vec2f, frame: u32, id: vec3u, revision: u32, key: vec2u) -> vec4f {
+  if (!inFrame(q)) { return vec4f(0); }
   let origin = vec2i(floor(q));
   let phase = fract(q);
-  var motion = vec2f(0); var support = 0.;
+  var motion = vec2f(0); var support = 0.; var confidence = 0.;
   for (var dy=0; dy<2; dy++) { for (var dx=0; dx<2; dx++) {
     let at = min(origin+vec2i(dx,dy),vec2i(p.size)-1);
     let record = endpoint(at,frame);
     if (!sameMaterial(at,frame,id,revision) || any(record.xy!=key)) { continue; }
     let delta = unpack2x16float(record.z);
-    if (any(abs(delta) >= vec2f(p.size))) { continue; }
+    let trust = modelTrust(reflectionModel(at,frame));
+    if (trust <= 0. || any(abs(delta) >= vec2f(p.size))) { continue; }
     let w = select(1.-phase.x,phase.x,dx==1)*select(1.-phase.y,phase.y,dy==1);
     support += w;
+    confidence += w*trust;
     motion += w*delta;
   }}
-  return vec3f(motion/max(support,1e-6),support);
+  return vec4f(motion/max(support,1e-6),support,confidence/max(support,1e-6));
 }
 
 fn reflectionAgreement(a: vec4u, b: vec4u) -> f32 {
@@ -123,7 +232,7 @@ fn invertVirtualStep(q: vec2f, seed: vec2f, frame: u32, id: vec3u, revision: u32
   let check = virtualStep(guess,frame,id,revision,key);
   if (check.z < .5) { return vec4f(0,0,0,4); }
   if (distance(guess+check.xy,q) > .25) { return vec4f(0,0,0,5); }
-  return vec4f(guess,check.z,0);
+  return vec4f(guess,min(check.z,check.w),0);
 }
 
 fn virtualLanding(x: vec2i, id: vec3u, revision: u32, record: vec4u, surfaceQ: vec2f) -> vec4f {
@@ -138,7 +247,7 @@ fn virtualLanding(x: vec2i, id: vec3u, revision: u32, record: vec4u, surfaceQ: v
       let m = virtualStep(q,frame,id,revision,record.xy);
       if (m.z < .5) { return vec4f(0,0,0,3); }
       q += m.xy;
-      confidence = min(confidence,m.z);
+      confidence = min(confidence,min(m.z,m.w));
     } else {
       let surfaceSeed = q+(surfaceQ-vec2f(x))/f32(p.delta);
       let previousMotion = virtualStep(q,frame,id,revision,record.xy);
@@ -187,7 +296,7 @@ fn virtualWeight(x: vec2i, landing: vec4f, surfaceDepth: f32, record: vec4u) -> 
   let coverage = smoothstep(.94,1.,min(hitCoverage(x,p.current),hitCoverage(nearest,p.source)));
   let footprint = footprintWeight(x,landing.xy,nearest,oldPos.w);
   if (coverage <= 0. || footprint <= 0.) { return vec2f(0,13); }
-  return vec2f(landing.z * normalWeight * coverage * footprint,0);
+  return vec2f(min(landing.z,modelTrust(reflectionModel(nearest,p.source))) * normalWeight * coverage * footprint,0);
 }
 
 // View-space position of a center hit. lens.x is the focal length in pixels;
@@ -272,7 +381,9 @@ fn accumulateReflection(
   // Without a landing, extrapolate the current frame's virtual motion.
   let slipped = select(vec2f(0),(delta-localMotion)*f32(abs(p.delta)),validDelta);
   let parallax = select(slipped,land.xy-q.xy,land.z>0.);
-  let trust = planarTrust(x,id,revision,record,parallax);
+  let model = reflectionModel(x,p.current);
+  var trust = modelTrust(model);
+  if (model >= 0.) { trust = planarTrust(x,id,revision,record,parallax); }
   var validation = virtualWeight(x,land,q.z,record);
   let virtualTap = vec2i(floor(land.xy+0.5));
   let isMetal = metallic > METALLIC_THRESHOLD;
@@ -298,8 +409,10 @@ fn accumulateReflection(
   let fade = mix(1.,smoothstep(.05,.20,roughness),smoothstep(.25,2.,select(slip,length(parallax),glossyDielectric)));
   let fallback = select(1.,fade,isMetal || glossyDielectric);
   let geometricFallback = mix(1.,(1.-amount)*(1.-mismatch)*fallback,trust);
-  let surfaceWeight = select(weight*min(surfaceConfidence,geometricFallback),0.,validation.y==OPTICAL_SILHOUETTE);
-  let virtualW = tent*amount*trust;
+  var surfaceWeight = select(weight*min(surfaceConfidence,geometricFallback),0.,validation.y==OPTICAL_SILHOUETTE);
+  if (surfaceWeight > 0.) { surfaceWeight *= lightingConfidence(x,tap.at,true); }
+  var virtualW = tent*amount*trust;
+  if (virtualW > 0.) { virtualW *= lightingConfidence(x,virtualTap,true); }
   total[index] += vec4f((surfaceRgb-reflectedSurface)*weight,weight);
   reflectedTotal[index] += vec4f(reflectedSurface*surfaceWeight +
     reflection(virtualTap,p.source)*virtualW,surfaceWeight+virtualW);

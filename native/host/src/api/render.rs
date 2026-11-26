@@ -3370,7 +3370,7 @@ impl Render {
                 layout[33],
                 0.,
             ]);
-            let (scene_key, revisions) = if auto {
+            let (scene_key, lighting_key, revisions) = if auto {
                 super::offline::scene_revisions(
                     state
                         .scene
@@ -3396,6 +3396,7 @@ impl Render {
                 display: state.display.settings,
                 revisions,
                 scene_key,
+                lighting_key,
                 guides: [
                     if reflections {
                         // The reflection records share the buffer with the primary records.
