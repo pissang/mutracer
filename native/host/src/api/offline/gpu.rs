@@ -69,6 +69,7 @@ impl Passes {
         for (name, layers, format) in [
             ("surface", 2 * slots, Rgba16Float),
             ("motion", slots, Rgba32Float),
+            ("material", slots, R32Uint),
             ("id", slots, Rgba32Uint),
             ("raw", slots, Rgba16Float),
             (
@@ -107,13 +108,6 @@ impl Passes {
             "snapshot",
             "coverage",
         ];
-        if reflection_motion {
-            names.push(if accumulate_guides {
-                "windowGuidesUncapped"
-            } else {
-                "windowUncapped"
-            });
-        }
         if reflection_motion {
             pass.texture("reflected", slots, size, Rgba16Float);
             pass.texture("endpoints", slots, size, Rgba32Uint);
@@ -349,6 +343,7 @@ impl Passes {
                 &self["raw"],
                 &self["motion"],
                 &self["overflow"],
+                &self["material"],
             ],
         );
         self.write("revision", 0, revisions);
@@ -432,7 +427,7 @@ impl Passes {
             | u32::from(revisions) << 2
             | u32::from(self.accumulate_guides && revisions) << 3
             | u32::from(self.diagnostic.is_some()) << 5;
-        let mut bindings = Vec::with_capacity(12);
+        let mut bindings = Vec::with_capacity(16);
         bindings.extend([
             &self["surface"],
             &self["id"],
@@ -443,6 +438,7 @@ impl Passes {
             &self["overflow"],
             &self["rejects"],
             &self["motion"],
+            &self["material"],
         ]);
         if self.accumulate_guides {
             bindings.extend([&self["guides"], &self["albedoSum"], &self["normalSum"]]);
@@ -455,17 +451,11 @@ impl Passes {
                 &self["reflectedTotal"],
             ]);
         }
-        let kernel = match (
-            self.accumulate_guides,
-            reflections,
-            self.reflection_motion && !revisions,
-        ) {
-            (true, true, _) => "windowGuidesReflections",
-            (false, true, _) => "windowReflections",
-            (true, false, true) => "windowGuidesUncapped",
-            (false, false, true) => "windowUncapped",
-            (true, false, false) => "windowGuides",
-            (false, false, false) => "window",
+        let kernel = match (self.accumulate_guides, reflections) {
+            (true, true) => "windowGuidesReflections",
+            (false, true) => "windowReflections",
+            (true, false) => "windowGuides",
+            (false, false) => "window",
         };
         self.image_pass(
             kernel,

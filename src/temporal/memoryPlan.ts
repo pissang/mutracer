@@ -1,4 +1,5 @@
 import type {NormalizedTemporalOptions} from './options.js';
+import {temporalMaterialBytes} from '../renderer/temporalKernels.js';
 
 export interface TemporalMemoryPlan {
   readonly historyRadius: Readonly<{min: number; max: number}>;
@@ -51,7 +52,7 @@ export function estimateTemporalMemory(width: number, height: number, options: N
   const historySlots = temporalHistorySlots(options);
   const guideSlots = temporalGuideSlots(options);
   const postSlots = postHistorySlots(options);
-  const history = historySlots * (pixels * 56 + 80 + overflowBuckets * overflowEntryBytes) + guideSlots * pixels * 16 + 32;
+  const history = historySlots * (pixels * (56 + temporalMaterialBytes) + 80 + overflowBuckets * overflowEntryBytes) + guideSlots * pixels * 16 + 32;
   const window = pixels * (usesTemporalGuideWindow(options) ? 64 : 32) + 112;
 
   const pyramidBytes = scales.reduce((sum, scale) => sum + ceilDiv(width, scale) * ceilDiv(height, scale) * 8, 0);

@@ -441,13 +441,23 @@ async function exerciseMaterialAcceptance(device: GPUDevice) {
       const roughness=new Float32Array(pixels*4);for(let i=0;i<pixels;i++)roughness.set([rough,metal,0,1],i*4);
       await window.upload(frame,meta,{centerPosition,centerDepth,centerNormal,roughness,motion,id,hdr,albedo,normal});
     };
-    await upload(0,.5,0); await upload(1,.5,0); await window.filter(1, [0], false);
-    const diffuse = new Uint32Array(await window.read(window.rejects, 4))[0];
-    await upload(0,.1,.5); await upload(1,.1,.5); await window.filter(1, [0], false);
-    const metal = new Uint32Array(await window.read(window.rejects, 4))[0];
-    check(diffuse === pixels, 'Material 212 was scene-specifically rejected');
-    check(metal === 0, 'Smooth-metal roughness rule was lost');
-    return {materialId: 212, diffuseAccepted: diffuse, smoothMetalRejected: pixels - metal};
+    const accepted = async (roughness: number, metallic: number) => {
+      await upload(1, roughness, metallic);
+      await window.filter(1, [0], false, 8);
+      return new Uint32Array(await window.read(window.rejects, 4))[0];
+    };
+    // The source material stays unchanged. Only the current-frame
+    // properties should affect the surface radius.
+    await upload(0, 0, 1);
+    const diffuse = await accepted(.05, .10);
+    const nearMirror = await accepted(.05, .100001);
+    const tapered = await accepted(.15, 1);
+    const rough = await accepted(.24, 1);
+    check(diffuse === pixels, 'A dielectric lost its full surface window');
+    check(nearMirror === 0, 'A near-mirror metal accepted a neighboring surface tap');
+    check(tapered === pixels, 'A rougher metal lost its short surface window');
+    check(rough === pixels, 'A rough metal lost its full surface window');
+    return {materialId: 212, diffuse, nearMirror, tapered, rough};
   } finally { window.dispose(); }
 }
 

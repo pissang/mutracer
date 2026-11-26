@@ -207,8 +207,6 @@ export function postprocessParameters(): Uint8Array {
       captureReflections: captureReflectionsWGSL,
       windowReflections: createMixedWindowWGSL(false, true),
       windowGuidesReflections: createMixedWindowWGSL(true, true),
-      windowUncapped: createMixedWindowWGSL(false, false, true),
-      windowGuidesUncapped: createMixedWindowWGSL(true, false, true),
       windowGuides: createMixedWindowWGSL(true), packGuides: createComposePackWGSL(true),
       idSnapshot: idSnapshot, snapshot: snapshot, reproject: reproject, accumulate: accumulate, blur: blur, combine: combine, match: match, pyramid: pyramid},
     bloom: nativeBloomShader(), auxiliary: nativeOidnAuxiliaryShader(),

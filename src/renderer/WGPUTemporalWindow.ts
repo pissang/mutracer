@@ -36,7 +36,7 @@ export class DirectWindowGPU {
         return device.createComputePipelineAsync({layout: 'auto', compute: {module, entryPoint: 'main'}});
       };
       window.pipeline = await createPipeline(createMixedWindowWGSL(accumulateGuides, !!history.reflections));
-      if (history.reflections) window.cameraCutPipeline = await createPipeline(createMixedWindowWGSL(accumulateGuides, false, true));
+      if (history.reflections) window.cameraCutPipeline = await createPipeline(createMixedWindowWGSL(accumulateGuides));
       return window;
     } catch (error) { window.dispose(); throw error; }
   }
@@ -51,7 +51,7 @@ export class DirectWindowGPU {
       (Number(!!this.guides && includeMaterialRevisions) << 3);
     d.queue.writeBuffer(this.params, 0, new Uint32Array([h.width, h.height, h.slot(current), h.slot(source),
       source - current, Number(symmetric), stage, mode, radiusMin, radiusMax]));
-    const resources = [this.params, h.surface, h.id, h.raw, h.meta, this.total, this.output, h.overflow, this.rejects, h.motion];
+    const resources = [this.params, h.surface, h.id, h.raw, h.meta, this.total, this.output, h.overflow, this.rejects, h.motion, h.material];
     if (this.guides) resources.push(h.guides, this.guides.albedo, this.guides.normal);
     if (h.reflections && includeMaterialRevisions) {
       resources.push(h.reflections.radiance, h.reflections.endpoint, this.reflectionSum!);

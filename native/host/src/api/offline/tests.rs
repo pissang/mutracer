@@ -534,7 +534,12 @@ fn window_guides_match_web_packed_guides() {
 #[test]
 #[ignore = "requires real GPU"]
 fn reflection_window_accumulates_a_translating_highlight_in_both_directions() {
-    let engine = super::super::aov_tests::aov_engine(crate::api::Backend::Software);
+    let engine =
+        super::super::aov_tests::aov_engine(if std::env::var_os("MUTRACER_AOV_HWRT").is_some() {
+            crate::api::Backend::Hardware
+        } else {
+            crate::api::Backend::Software
+        });
     let gpu = engine.inner.gpu.clone();
     let size = [16, 8];
     let pixels = 128;

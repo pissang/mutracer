@@ -2,7 +2,7 @@ import {captureReflectionsWGSL} from './temporalReflectionShader.js';
 import type {TemporalCaptureInput} from './accumulationTarget.js';
 import {captureWGSL} from './temporalCaptureShader.js';
 import {TemporalRevisionTable} from './temporalRevisionTable.js';
-import {idSnapshot, snapshot, temporalOverflowBuckets, temporalOverflowEntryBytes} from './temporalKernels.js';
+import {idSnapshot, snapshot, temporalMaterialBytes, temporalMaterialFormat, temporalOverflowBuckets, temporalOverflowEntryBytes} from './temporalKernels.js';
 
 interface CaptureMetadata {
   viewProjection: ArrayLike<number>;
@@ -25,6 +25,7 @@ export class TemporalHistoryGPU {
   private params!: GPUBuffer;
   surface!: GPUTexture;
   motion!: GPUTexture;
+  material!: GPUTexture;
   id!: GPUTexture;
   raw!: GPUTexture;
   guides!: GPUTexture;
@@ -47,7 +48,8 @@ export class TemporalHistoryGPU {
   private texture(label: string, layers: number, format: GPUTextureFormat = 'rgba16float') {
     const texture = this.device.createTexture({label, size: [this.width, this.height, layers], format,
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC});
-    this.resources.set(texture, this.width * this.height * layers * (format === 'rgba16float' ? 8 : 16));
+    const bytesPerPixel = format === temporalMaterialFormat ? temporalMaterialBytes : format === 'rgba16float' ? 8 : 16;
+    this.resources.set(texture, this.width * this.height * layers * bytesPerPixel);
     return texture;
   }
 
@@ -62,6 +64,7 @@ export class TemporalHistoryGPU {
     const d = this.device;
     this.surface = this.texture('Temporal surface history', this.capacity * 2);
     this.motion = this.texture('Temporal motion and surface flags', this.capacity, 'rgba32float');
+    this.material = this.texture('Temporal surface materials', this.capacity, temporalMaterialFormat);
     this.id = this.texture('Temporal IDs and material revisions', this.capacity, 'rgba32uint');
     this.raw = this.texture('Temporal HDR history', this.capacity);
     this.guides = this.texture('Temporal spatial guides', this.guideCapacity * 2);
@@ -111,7 +114,7 @@ export class TemporalHistoryGPU {
 
     this.dispatch(this.capturePipeline, [slot, 0],
       [buffers.centerDepth, buffers.centerNormal, buffers.roughness, buffers.albedo, buffers.color,
-        buffers.motion, this.surface, this.raw, this.motion, this.overflow]);
+        buffers.motion, this.surface, this.raw, this.motion, this.overflow, this.material]);
     if (this.reflections && reflection) {
       this.dispatch(this.reflectionPipeline!, [slot, reflection.samples],
         [reflection.radiance, reflection.albedo, reflection.records, buffers.color,

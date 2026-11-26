@@ -1,4 +1,4 @@
-import {temporalFlagsWGSL, temporalOverflowWGSL} from './temporalKernels.js';
+import {temporalFlagsWGSL, temporalMaterialFormat, temporalMaterialWGSL, temporalOverflowWGSL} from './temporalKernels.js';
 export const captureWGSL = /* wgsl */ `
 struct Params { size: vec2u, slot: u32, revisionCount: u32 }
 @group(0) @binding(0) var<uniform> p: Params;
@@ -13,7 +13,9 @@ struct Params { size: vec2u, slot: u32, revisionCount: u32 }
 @group(0) @binding(9) var motionOut: texture_storage_2d_array<rgba32float, write>;
 ${temporalOverflowWGSL}
 @group(0) @binding(10) var<storage, read_write> overflow: array<Overflow>;
+@group(0) @binding(11) var materialOut: texture_storage_2d_array<${temporalMaterialFormat}, write>;
 ${temporalFlagsWGSL}
+${temporalMaterialWGSL}
 fn nearestHalf(value:f32)->f32{
   let magnitude=abs(value);if(magnitude==0. || magnitude>65504.){return value;}
   let step=select(exp2(floor(log2(magnitude))-10.),exp2(-24.),magnitude<exp2(-14.));
@@ -33,13 +35,13 @@ fn nearestHalf4(value:vec4f)->vec4f{return vec4f(nearestHalf(value.x),nearestHal
   textureStore(surfaceOut, at, layer * 2 + 1, surface);
 
   let r = roughness[i];
-  let capped = !(abs(r.x) <= 3.402823e38) || (r.x < .25 && r.y > .10);
+  textureStore(materialOut, at, layer, vec4u(packSurfaceMaterial(r.xy), 0, 0, 0));
   let peak = max(albedo[i].x, max(albedo[i].y, albedo[i].z));
   let guide = u32(floor(255. * sqrt(clamp(peak, 0., 1.)) + .5));
   let coverage = u32(floor(255. * clamp(r.w, 0., 1.) + .5));
   let m = motion[i];
   var flags = u32(m.w) | (guide << 10u) | (coverage << 2u) |
-    select(0u, CENTER_HIT, hit) | select(0u, SURFACE_CAPPED, capped);
+    select(0u, CENTER_HIT, hit);
 
   let rgba = color[i];
   let stored = vec4f(nearestHalf4(vec4f(clamp(rgba.rgb, vec3f(-65504), vec3f(65504)), 0.)).rgb, rgba.a);

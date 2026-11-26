@@ -195,7 +195,7 @@ impl TemporalOptions {
                 } else {
                     80
                 };
-            plan.bytes = history * (px * 56 + 80)
+            plan.bytes = history * (px * 60 + 80)
                 + overflow
                 // Specular RGB, endpoint records and half-precision motion per history
                 // slot. Include the window sum, center capture and beauty/checkpoint sums.
