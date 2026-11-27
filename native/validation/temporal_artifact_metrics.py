@@ -140,8 +140,9 @@ class QuickMetrics:
             dt = (temporal - t_s) * valid[..., None]
             ds = (spatial - s_s) * valid[..., None]
             flicker, spatial_change = patch_rms(magnitude(dt)), patch_rms(magnitude(ds))
-            switch, comparable, self.previous_changes, reversals = tap_switches(
-                warp, window, previous_window, self.previous_changes)
+            if window is not None and previous_window is not None:
+                switch, comparable, self.previous_changes, reversals = tap_switches(
+                    warp, window, previous_window, self.previous_changes)
             older = np.where(valid[..., None], old_residuals[0][warp.nearest], 0)
             if deltas is not None:
                 # A reversal or change in slope adds evidence of flicker. Keep

@@ -623,9 +623,10 @@ def analyze(temporal_dir, spatial_dir, out, thresholds, reference_dirs=(), refer
             signal = display_signal(rgb)
             baseline = display_signal(image(spatial_dir, index, size))
             ids = sidecar(temporal_dir, index, (*shape, 4), 'id.u32', '<u4')
-            window = sidecar(temporal_dir, index, (*shape, 12), 'window.bin', '<u4')
+            window = (sidecar(temporal_dir, index, (*shape, 12), 'window.bin', '<u4')
+                      if track_issues else None)
             sparkle = (sidecar(temporal_dir, index, (*shape, 4), 'sparkle.f32', '<f4')
-                       if frame_path(temporal_dir, index, 'sparkle.f32').is_file() else None)
+                       if track_issues and frame_path(temporal_dir, index, 'sparkle.f32').is_file() else None)
             if previous_frame != index - 1 or index in cuts:
                 previous_ids = None
                 quick_metrics.reset()
