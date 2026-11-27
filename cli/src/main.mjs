@@ -156,16 +156,17 @@ function options(input, command, values) {
   if (temporal?.postRadius === 0 && experimental) temporal.stabilizeSparkle = false;
   const sampleBudget = values['sample-budget'] === undefined ? undefined : Number(values['sample-budget']);
   const sampleFloor = values['sample-floor'] === undefined ? 10 : Number(values['sample-floor']);
-  if (sampleBudget !== undefined && (denoise !== 'temporal' || spp !== 3 || tracer !== 'hardware' ||
-      temporal?.accumulateGuides || !Number.isFinite(sampleBudget) || sampleBudget < spp || sampleBudget > offlineSampleCap)) {
-    throw new Error('Sample budgets need hardware offline rendering at 3 base spp, current-frame guides and a budget in [3, 8].');
+  if (sampleBudget !== undefined && (denoise !== 'temporal' || tracer !== 'hardware' ||
+      temporal?.accumulateGuides || !Number.isFinite(sampleBudget) || sampleBudget < spp || sampleBudget > Math.max(spp, offlineSampleCap))) {
+    throw new Error('Sample budgets need hardware offline rendering with current-frame guides and a budget between base spp and max(base spp, 8).');
   }
   if ((values['sample-floor'] !== undefined || values['save-geometry']) && sampleBudget === undefined) {
     throw new Error('Specify a sample budget to configure or save the geometry pilot.');
   }
   if (!Number.isFinite(sampleFloor) || sampleFloor <= 0) throw new Error('Sample floor must be positive.');
-  const sequenceStride = values['sample-stride'] === undefined ? (sampleBudget === undefined ? undefined : 32) :
-    number(values['sample-stride'], 'sample stride', sampleBudget === undefined ? spp : offlineSampleCap, 0xffffffff);
+  const strideMinimum = sampleBudget === undefined ? spp : Math.max(spp, offlineSampleCap);
+  const sequenceStride = values['sample-stride'] === undefined ? (sampleBudget === undefined ? undefined : Math.max(32, strideMinimum)) :
+    number(values['sample-stride'], 'sample stride', strideMinimum, 0xffffffff);
   const format = values.format;
   if (format !== undefined && (command !== 'still' || !['png','exr'].includes(format))) {
     throw new Error('Use --format png or exr for a still.');

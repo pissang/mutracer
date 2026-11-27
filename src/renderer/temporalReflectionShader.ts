@@ -136,7 +136,7 @@ fn packReflectionMetadata(raw: vec4u) -> u32 {
 `;
 export const captureReflectionsWGSL = createCaptureReflectionsWGSL();
 
-export function reflectionWindowWGSL(binding: number) {
+export function reflectionWindowWGSL(binding: number, sampleTiles = false) {
   return /* wgsl */ `
 @group(0) @binding(${binding}) var reflected: texture_2d_array<f32>;
 @group(0) @binding(${binding + 1}) var endpoints: texture_2d_array<u32>;
@@ -413,7 +413,8 @@ fn accumulateReflection(
   var surfaceWeight = select(weight*min(surfaceConfidence,geometricFallback),0.,validation.y==OPTICAL_SILHOUETTE);
   if (surfaceWeight > 0.) { surfaceWeight *= lightingConfidence(x,tap.at,true); }
   var virtualW = tent*amount*trust;
-  if (virtualW > 0.) { virtualW *= lightingConfidence(x,virtualTap,true); }
+  if (virtualW > 0.) { virtualW *= lightingConfidence(x,virtualTap,true);${sampleTiles ?
+    ' virtualW *= sampleWeight(virtualTap,p.source,fullCoverage(x,virtualTap));' : ''} }
   total[index] += vec4f((surfaceRgb-reflectedSurface)*weight,weight);
   reflectedTotal[index] += vec4f(reflectedSurface*surfaceWeight +
     reflection(virtualTap,p.source)*virtualW,surfaceWeight+virtualW);
