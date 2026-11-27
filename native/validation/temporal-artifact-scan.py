@@ -599,7 +599,9 @@ def analyze(temporal_dir, spatial_dir, out, thresholds, reference_dirs=(), refer
                 actual = data['cameras'][str(index)]
                 if expected is not None and (
                     actual['fov'] != expected['fov'] or actual['zoom'] != expected['zoom']
-                    or not np.allclose(actual['transform'], expected['transform'], rtol=0, atol=2e-6)
+                    # Replaying a shot from a different start can accumulate
+                    # a few float32 rounding steps in its camera basis.
+                    or not np.allclose(actual['transform'], expected['transform'], rtol=0, atol=4e-6)
                 ):
                     raise ValueError(f'Reference camera differs at frame {index}.')
                 reference_sources[index] = folder
