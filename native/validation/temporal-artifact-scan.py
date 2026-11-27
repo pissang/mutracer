@@ -40,7 +40,7 @@ REFLECTION_CHECKS = frozenset(REASONS[i] for i in (6, 7, 8, 9, 10, 12))
 @dataclass(frozen=True)
 class Thresholds:
     flicker: float = 2.0
-    oidn_ratio: float = .8
+    oidn_ratio: float = .65
     ghost: float = 3.0
     foreground_trail: float = 8.0
     switch: float = .2
@@ -154,9 +154,10 @@ def detector_scores(m, thresholds, scale=1., ratio=None, stage='corroboration'):
         noise_floor = np.where(m.moving, .65 * m.oidn_noise,
                                np.maximum(2.8 * m.oidn_noise, 1.35 * m.oidn_change))
         flicker_floor = np.maximum(flicker_floor, noise_floor)
-        ghost_floor = np.maximum(ghost_floor, .85 * m.oidn_noise)
     if stage == 'corroboration':
-        ghost = m.corroborated_ghost
+        # A hard veto loses observable trails when the optical feature also
+        # moves along the surface path. Reduce confidence without that veto.
+        ghost = .75 * m.ghost + .25 * m.corroborated_ghost
     return np.where(eligible, m.flicker / flicker_floor, 0), np.where(eligible, ghost / ghost_floor, 0)
 
 
@@ -200,7 +201,7 @@ class Calibration:
             return np.stack([confusion(count_tiles(valid & (score >= 1)) >= MIN_PIXELS, truth)
                              for score, truth in zip(scores, (flicker_truth, ghost_truth))])
 
-        defaults = Thresholds()
+        defaults = Thresholds(oidn_ratio=.8)
         for stage, counts in self.stages.items():
             counts += tally(detector_scores(m, defaults, stage=stage))
         for (scale, ratio), counts in self.tallies.items():
