@@ -2,6 +2,7 @@
 """Capture and report temporal flicker, moving trails and unstable history decisions."""
 
 import argparse
+from collections import defaultdict
 import json
 import math
 import os
@@ -31,6 +32,7 @@ REASONS = (
     'reflection silhouette', 'glossy dielectric view change', 'partial or recovered coverage',
     'reflected local lighting',
 )
+REFLECTION_CHECKS = frozenset(REASONS[i] for i in (6, 7, 8, 9, 10, 12))
 
 
 @dataclass(frozen=True)
@@ -201,7 +203,7 @@ class Calibration:
 
 class Report:
     def __init__(self, scan, events):
-        self.active = []
+        self.active = defaultdict(list)
         self.finished = []
         self.names = scan.get('aovNames', {})
         self.events = events
@@ -246,24 +248,29 @@ class Report:
                 identity = (kind, object_id, instance, material_id, name, mat, events)
                 weights = window[yy, xx, 10:12].copy().view('<f4')
                 reason_counts = window[yy, xx, 6:10].copy().view(np.uint8)[:, :len(REASONS)].sum(0)
+                corrections = vetoes = 0.
+                if sparkle is not None:
+                    correction, support, strength, _ = sparkle[yy, xx].T
+                    corrections = float((np.abs(correction) >= .5).mean())
+                    vetoes = float(((support >= .5) & (strength >= .03)).mean())
                 self.track(frame, identity, box, landing, yy.size, float(np.percentile(score[yy, xx], 90)),
-                           reason_counts, weights.mean(0),
-                           float((np.abs(sparkle[yy, xx, 0]) >= .5).mean()) if sparkle is not None else 0.,
+                           reason_counts, weights.mean(0), corrections, vetoes,
                            float(measurements.switch[yy, xx].mean()))
 
-    def track(self, frame, identity, box, landing, area, peak, reasons, weights, sparkle, switches):
+    def track(self, frame, identity, box, landing, area, peak, reasons, weights, sparkle, vetoes, switches):
         def overlap(region):
-            if region['identity'] != identity or region['last'] == frame:
+            if region['last'] == frame:
                 return 0
             a, b, c, d = landing
             return box_intersection(region['lastBox'], [a - TILE, b - TILE, c + TILE, d + TILE])
 
-        region = max(self.active, key=overlap, default=None)
+        active = self.active[identity]
+        region = max(active, key=overlap, default=None)
         if region is None or not overlap(region):
             region = {'identity': identity, 'first': frame, 'last': frame, 'boxes': [],
                       'pixelFrames': 0, 'peak': 0., 'peakFrame': frame, 'reasons': np.zeros(len(REASONS)),
-                      'weights': np.zeros(2), 'sparkle': 0., 'switches': 0.}
-            self.active.append(region)
+                      'weights': np.zeros(2), 'sparkle': 0., 'sparkleVetoes': 0., 'switches': 0.}
+            active.append(region)
         region['last'] = frame
         region['lastBox'] = box
         region['boxes'].append([frame, *box])
@@ -273,15 +280,17 @@ class Report:
         region['reasons'] += reasons
         region['weights'] += weights * area
         region['sparkle'] += sparkle * area
+        region['sparkleVetoes'] += vetoes * area
         region['switches'] += switches * area
 
     def advance(self, frame):
-        remaining = []
-        for region in self.active:
-            if frame - region['last'] <= 3:
-                remaining.append(region)
-            elif len(region['boxes']) >= MIN_FRAMES:
-                self.finished.append(region)
+        remaining = defaultdict(list)
+        for identity, regions in self.active.items():
+            for region in regions:
+                if frame - region['last'] <= 3:
+                    remaining[identity].append(region)
+                elif len(region['boxes']) >= MIN_FRAMES:
+                    self.finished.append(region)
         self.active = remaining
 
     def complete(self):
@@ -295,12 +304,19 @@ class Report:
                       max(x[3] for x in frames), max(x[4] for x in frames)]
             ranked = sorted(zip(REASONS, region['reasons']), key=lambda item: -item[1])
             reasons = [{'check': check, 'tapCount': int(value)} for check, value in ranked if value]
-            if not reasons:
-                weights = region['weights'] / pixel_frames
-                check = ('history unavailable' if weights[0] <= 1.001
-                         else 'no dominant restriction recorded')
-            else:
-                check = reasons[0]['check']
+            weights = region['weights'] / pixel_frames
+            checks = reasons
+            if weights[0] <= 1.25 < weights[1]:
+                # On nearly mirror surfaces the short surface radius can be
+                # constant while reflected history changes substantially.
+                checks = [reason for reason in reasons if reason['check'] in REFLECTION_CHECKS] or reasons
+            check = 'no dominant restriction recorded'
+            if checks:
+                check = checks[0]['check']
+            elif region['sparkle'] + region['sparkleVetoes'] > .1 * pixel_frames:
+                check = 'sparkle correction or glint veto'
+            elif weights[0] <= 1.001:
+                check = 'history unavailable'
             result.append({
                 'type': kind, 'frames': [region['first'], region['last']], 'box': bounds,
                 'frameBoxes': frames, 'pixelFrames': pixel_frames,
@@ -309,8 +325,9 @@ class Report:
                 'severity': round(region['peak'] * math.log2(1 + pixel_frames / TILE ** 2), 3),
                 'peakSignal': round(region['peak'], 3), 'peakFrame': region['peakFrame'], 'primaryCheck': check,
                 'tapReasons': reasons,
-                'meanWindowWeight': (region['weights'] / pixel_frames).round(3).tolist(),
+                'meanWindowWeight': weights.round(3).tolist(),
                 'sparkleCorrectedFraction': round(region['sparkle'] / pixel_frames, 4),
+                'sparkleVetoFraction': round(region['sparkleVetoes'] / pixel_frames, 4),
                 'meanTapSwitchFraction': round(region['switches'] / pixel_frames, 4),
             })
         return sorted(result, key=lambda issue: -issue['severity'])

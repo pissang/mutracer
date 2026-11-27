@@ -30,8 +30,9 @@ class Warp:
         u, v = x + np.where(finite, mx, 0), y + np.where(finite, my, 0)
         inside = (u >= 0) & (u <= w - 1) & (v >= 0) & (v <= h - 1)
         u, v = np.clip(u, 0, w - 1), np.clip(v, 0, h - 1)
-        i, j = u.astype(np.int32), v.astype(np.int32)
-        fu, fv = u - i, v - j
+        floor_u, floor_v = np.floor(u), np.floor(v)
+        i, j = floor_u.astype(np.int32), floor_v.astype(np.int32)
+        fu, fv = u - floor_u, v - floor_v
         k, l = np.minimum(i + 1, w - 1), np.minimum(j + 1, h - 1)
         self.nearest = (np.rint(v).astype(np.int32), np.rint(u).astype(np.int32))
         self.corners = []
@@ -76,10 +77,14 @@ def tap_switches(warp, current, previous, previous_changes=None):
     return np.where(comparable, count / np.maximum(1, available), 0).astype(np.float32), comparable, flips, reversals
 
 
-def signed_support(residual, evidence):
-    strongest = np.argmax(np.abs(residual), axis=-1)[..., None]
-    sign = np.sign(np.take_along_axis(residual, strongest, axis=-1)[..., 0])
-    return sign * np.take_along_axis(evidence, strongest, axis=-1)[..., 0]
+def dominant_channel(signal):
+    channel = np.argmax(np.abs(signal), axis=-1)[..., None]
+    sign = np.sign(np.take_along_axis(signal, channel, axis=-1)[..., 0])
+    return channel, sign
+
+
+def signed_support(evidence, channel, sign):
+    return sign * np.take_along_axis(evidence, channel, axis=-1)[..., 0]
 
 
 @dataclass
@@ -132,15 +137,18 @@ class QuickMetrics:
                                           spatial_change)
             if len(self.ring) >= 2 and len(old_residuals) == 2:
                 older_again = np.where(valid[..., None], old_residuals[1][warp.nearest], 0)
-                persistent = np.minimum(signed_support(residual, older), signed_support(residual, older_again))
+                channel, sign = dominant_channel(residual)
+                persistent = np.minimum(signed_support(older, channel, sign),
+                                        signed_support(older_again, channel, sign))
                 # An old appearance at the same screen position is evidence of a
                 # lagged image. Compare against the motion-aligned old appearance
                 # too, so stable bias on a tracked surface has little support.
                 lag = zeros.copy()
+                current = signed_support(spatial, channel, sign)
                 for _, old_s, *_ in self.ring:
-                    trail = signed_support(residual, old_s - spatial)
+                    trail = signed_support(old_s, channel, sign) - current
                     lag = np.maximum(lag, trail)
-                same_surface_change = signed_support(residual, s_s - spatial)
+                same_surface_change = signed_support(s_s, channel, sign) - current
                 excess = np.maximum(0, lag - np.maximum(0, same_surface_change))
                 ghost = np.minimum(magnitude(residual), np.minimum(persistent, 2 * excess))
                 moving = (warp.travel >= .35) | ndimage.maximum_filter(warp.changed_screen_id, 5)
@@ -181,14 +189,15 @@ class ReferenceMetrics:
                 valid = depth == self.length
                 low = errors.mean(axis=2)
                 high = error - low
-                sign_support = np.median(np.stack([signed_support(low, errors[..., i, :])
+                channel, sign = dominant_channel(low)
+                sign_support = np.median(np.stack([signed_support(errors[..., i, :], channel, sign)
                                                    for i in range(self.length)]), axis=0)
                 flicker = patch_rms(magnitude(high) * valid)
                 appearance = np.zeros_like(zeros)
                 aligned = warp.sample(self.previous[-1]) - reference
                 for old in self.previous:
-                    appearance = np.maximum(appearance, signed_support(low, old - reference))
-                trail = np.maximum(0, appearance - np.maximum(0, signed_support(low, aligned)))
+                    appearance = np.maximum(appearance, signed_support(old - reference, channel, sign))
+                trail = np.maximum(0, appearance - np.maximum(0, signed_support(aligned, channel, sign)))
                 larger_error = np.maximum(0, magnitude(error) - magnitude(direct_error))
                 moving = (warp.travel >= .35) | ndimage.maximum_filter(warp.changed_screen_id, 5)
                 ghost = patch_rms(np.maximum(0, np.minimum.reduce(

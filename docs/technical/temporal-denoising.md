@@ -370,7 +370,6 @@ with the next eligible plan after an out-of-memory error.
   Keep a deforming and a lighting-change fixture beside the camera-move
   archive.
 
-
 ### Offline artifact scan
 
 [How to run the scan](../../native/CONTRIBUTING.md#offline-temporal-artifact-scan)
@@ -403,10 +402,13 @@ surface trajectory can still confuse this comparison.
 **Decisions.** Compare the surface and reflected acceptance masks at the same
 signed tap offsets across aligned frames. Count switches among offsets
 considered in both windows. Measure the fraction of comparable pixels with
-any switch and count offset reversals across three frames. Highlight regions when at least 20% of their comparable offsets
-switch and the local frame change exceeds the flicker floor. Window histograms
-count tap restrictions independently, including partial confidence reductions.
-Sparkle readback measures the local correction after post stabilization.
+any switch and count offset reversals across three frames. Highlight regions
+when at least 20% of their comparable offsets switch and the local frame
+change exceeds the flicker floor. Window histograms count tap restrictions
+independently, including partial confidence reductions. Where the surface
+window is effectively closed and reflected history remains, prioritize
+reflection checks for the main evidence. Sparkle readback measures the local
+correction and glint veto after post stabilization.
 These observations identify candidate causes for an A/B test. A busy check may
 also be correctly rejecting an unstable signal.
 
