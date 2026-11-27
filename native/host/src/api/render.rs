@@ -3488,12 +3488,17 @@ impl Render {
                 layout[33],
                 0.,
             ]);
-            let (scene_key, lighting_key, revisions) = if auto {
-                super::offline::scene_revisions(
-                    state
-                        .scene
-                        .as_ref()
-                        .ok_or_else(|| error(Status::InvalidState, "Missing temporal scene"))?,
+            let (scene_key, lighting_key, revisions, emissions) = if auto {
+                let scene = state
+                    .scene
+                    .as_ref()
+                    .ok_or_else(|| error(Status::InvalidState, "Missing temporal scene"))?;
+                let (scene_key, lighting_key, revisions) = super::offline::scene_revisions(scene);
+                (
+                    scene_key,
+                    lighting_key,
+                    revisions,
+                    super::offline::scene_emissions(scene),
                 )
             } else {
                 Default::default()
@@ -3519,6 +3524,7 @@ impl Render {
                 revisions,
                 scene_key,
                 lighting_key,
+                emissions,
                 guides: [
                     if reflections {
                         // The reflection records share the buffer with the primary records.

@@ -104,6 +104,7 @@ fn frozen_offline_replay() {
                     revisions,
                     scene_key: j["sceneRevision"].as_u64().unwrap_or(0),
                     lighting_key: j["lightingRevision"].as_u64().unwrap_or(0),
+                    emissions: Default::default(),
                     guides,
                 },
             )
@@ -950,6 +951,7 @@ fn offline_window_rejects_unexplained_bright_history_behind_foreground() {
                     revisions: Vec::new(),
                     scene_key: 0,
                     lighting_key: 0,
+                    emissions: Default::default(),
                     guides,
                 },
             )
@@ -969,4 +971,20 @@ fn offline_window_rejects_unexplained_bright_history_behind_foreground() {
         pixels[8 * 4] > 5.,
         "Retain the bright tap next to a dim foreground"
     );
+}
+
+#[test]
+fn emission_steps_distinguish_cuts_from_small_or_dim_changes() {
+    let before = BTreeMap::from([(1, [0.5, 2., 0.8]), (2, [60., 46., 25.])]);
+    let gradual = BTreeMap::from([(1, [0.4, 1.9, 0.7]), (2, [55., 43., 22.])]);
+    let slide = BTreeMap::from([(1, [2., 1.2, 0.3]), (2, [60., 46., 25.])]);
+    let off = BTreeMap::from([(2, [60., 46., 25.])]);
+    assert!(!has_emission_step(&before, &gradual));
+    assert!(has_emission_step(&before, &slide));
+    assert!(has_emission_step(&before, &off));
+    assert!(has_emission_step(&off, &before));
+    assert!(!has_emission_step(
+        &BTreeMap::new(),
+        &BTreeMap::from([(1, [0.001, 0., 0.])])
+    ));
 }

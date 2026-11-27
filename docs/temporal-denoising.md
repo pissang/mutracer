@@ -57,7 +57,7 @@ independent noise. The example advances by its samples-per-frame count.
 | `denoiser` | OIDN `cleanAuxLarge` | Spatial filter applied to the accumulated frame. Accepts OIDN options, a custom denoiser, or `null`. |
 | `reflectionMotion` | `false` | Follows apparent reflection motion in the offline window, with curvature correction in perspective views. |
 | `accumulateGuides` | `false` | Averages OIDN albedo and normal guides across the offline window when the history radius is positive to reduce flicker. |
-| `historyInvalidation` | `'auto'` | Splits history on detected cuts, background, visibility and scene membership changes. Material edits invalidate history on affected surfaces. Light edits can reduce offline history locally and split interactive history. `'manual'` uses explicit cuts and frame gaps. |
+| `historyInvalidation` | `'auto'` | Splits history on detected cuts, background, visibility and scene membership changes. Material edits invalidate history on affected surfaces. Light edits and abrupt mesh emission changes can reduce offline history locally. Interactive history splits on light edits. `'manual'` uses explicit cuts and frame gaps. |
 | `memoryBudget` | Full plan | GPU bytes for temporal history and scratch. A smaller budget can reduce the effective radii in `plan`. |
 
 Smooth metals blend in more surface history as roughness increases. Near

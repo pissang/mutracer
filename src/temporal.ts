@@ -12,6 +12,7 @@ import {DirectWindowGPU} from './renderer/WGPUTemporalWindow.js';
 import {createSparklePost} from './renderer/WGPUTemporalSparkle.js';
 import {createOIDNFilter, type OIDNFilter} from './oidn.js';
 import {hasTemporalFrameGap, historyNeighbors, isTemporalCameraCut, readyThrough, temporalLatency} from './temporal/schedule.js';
+import {hasEmissionStep} from './temporal/emission.js';
 import {normalizeTemporalOptions, type NormalizedTemporalOptions} from './temporal/options.js';
 import {nextTemporalMemoryPlan, planTemporalMemory, temporalGuideSlots, temporalHistorySlots, usesTemporalGuideWindow, usesTemporalReflectionWindow, TEMPORAL_MAX_FINISHED, type TemporalMemoryPlan} from './temporal/memoryPlan.js';
 export type {TemporalDenoiserOptions, TemporalHistoryRadius, TemporalMode, TemporalSpatialDenoiser} from './temporal/options.js';
@@ -152,6 +153,8 @@ export class TemporalDenoiser {
   private epoch = 0;
   private epochs: number[] = [];
   private lightingRevisions: number[] = [];
+  private previousEmissions?: Engine['_temporalEmissions'];
+  private emissionRevision = 0;
   private materialRevisionFrames = new Map<number,Map<number,number>>();
   private globalIndices: number[] = [];
   private sampleCounts: number[] = [];
@@ -226,7 +229,9 @@ export class TemporalDenoiser {
       // The renderer may pad the capture grid while presenting a center crop.
       const captureWidth = metadata.captureWidth ?? render.width;
       const captureHeight = metadata.captureHeight ?? render.height;
-      const revisionEntries = this.activeOptions.historyInvalidation === 'auto' ? this.engine._temporalMaterialRevisionEntries : [];
+      const auto = this.activeOptions.historyInvalidation === 'auto';
+      const revisionEntries = auto ? this.engine._temporalMaterialRevisionEntries : [];
+      const emissions = auto && this.activeOptions.mode === 'offline' ? this.engine._temporalEmissions : undefined;
       await this.ensureResources(captureWidth, captureHeight, revisionEntries.length);
       if (captureWidth !== this.history!.width || captureHeight !== this.history!.height) {
         throw new Error('Temporal frame dimensions changed within a shot.');
@@ -282,12 +287,15 @@ export class TemporalDenoiser {
         }
       }, metadata.frameSequence);
       if (hasTemporalFrameGap(this.previousFrameSequence, metadata.frameSequence)) this.epoch++;
-      const auto = this.activeOptions.historyInvalidation === 'auto';
       if (auto && this.previousScene !== undefined && metadata.scene !== this.previousScene) this.epoch++;
       if (auto && this.previousSceneRevision !== undefined && metadata.sceneRevision !== this.previousSceneRevision) this.epoch++;
       if (auto && this.activeOptions.mode === 'interactive' && frame > 0 &&
           this.lightingRevisions[frame - 1] !== metadata.lightingRevision) this.epoch++;
-      this.lightingRevisions[frame] = auto ? metadata.lightingRevision : 0;
+      if (emissions) {
+        if (this.previousEmissions && hasEmissionStep(this.previousEmissions, emissions)) this.emissionRevision++;
+        this.previousEmissions = emissions;
+      }
+      this.lightingRevisions[frame] = auto ? metadata.lightingRevision + this.emissionRevision : 0;
       if (auto && this.previousCameraSource !== undefined && metadata.cameraSource !== this.previousCameraSource) this.epoch++;
       if (this.previousOffset === metadata.sampleSequenceOffset && !this.warnedOffset) {
         this.warnedOffset = true; console.warn('Consecutive temporal frames use the same sampleSequenceOffset; correlated noise will not average out.');
@@ -577,6 +585,8 @@ export class TemporalDenoiser {
   }
 
   private resetShot() {
+    this.previousEmissions = undefined;
+    this.emissionRevision = 0;
     this.frames = this.nextWindow = this.nextOutput = this.epoch = 0; this.epochs.length = 0; this.lightingRevisions.length = 0; this.materialRevisionFrames.clear(); this.globalIndices.length = 0; this.sampleCounts.length = 0; this.displaySettings.length = 0; this.previousOffset = undefined; this.previousFrameSequence = undefined; this.previousScene = undefined; this.previousCameraSource = undefined; this.previousSceneRevision = undefined;
     for (const buffer of this.accumulated.values()) buffer.destroy(); this.accumulated.clear();
     for (const buffer of this.spatialOutputs.values()) buffer.destroy(); this.spatialOutputs.clear();

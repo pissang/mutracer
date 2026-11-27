@@ -252,6 +252,15 @@ surface whose lighting has changed while it stays visible. Averaging those
 taps can soften moving shadows and leave trails, including on self-shadowed
 deforming geometry.
 
+For offline auto invalidation, each capture compares the authored emission RGB
+of visible mesh materials with the preceding capture. A channel change of at
+least one third of the larger peak RGB value starts a new lighting revision,
+with a floor of 0.01 on the peak value. This uses the emission color and
+luminance controls. Texture and graph animation can require explicit cuts.
+The comparison retains the preceding capture's emissive values. The window
+uses paired radiance patches for taps across the revision. Display
+stabilization uses neighbors within the same revision.
+
 The current window uses geometric and revision checks. An experimental
 per-tap radiance weight reduced ghosting on the deforming fixture but still
 missed its ghosting and sharpness targets. A second experiment used

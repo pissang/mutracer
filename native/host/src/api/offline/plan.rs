@@ -39,7 +39,7 @@ pub struct TemporalOptions {
     /// Default false.
     /// Enable [crate::api::RenderSettings::capture_reflections] on input renders.
     pub reflection_motion: bool,
-    /// Default Auto. Light edits can reduce history locally.
+    /// Default Auto. Light edits and abrupt mesh emission changes can reduce history locally.
     /// Manual uses explicit cuts and frame gaps only.
     pub history_invalidation: HistoryInvalidation,
     /// Maximum temporal GPU bytes. Default None selects the full plan.

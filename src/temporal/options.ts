@@ -25,9 +25,9 @@ export interface TemporalDenoiserOptions {
    */
   reflectionMotion?: boolean;
   /**
-   * Default `'auto'`. Offline light edits can reduce history locally, while
-   * interactive mode splits history on light edits. `'manual'` uses explicit
-   * cuts and frame gaps in place of automatic invalidation.
+   * Default `'auto'`. Light edits and abrupt mesh emission changes can reduce
+   * offline history locally. Interactive mode splits history on light edits.
+   * `'manual'` uses explicit cuts and frame gaps.
    */
   historyInvalidation?: 'auto' | 'manual';
   /** GPU-byte budget for temporal history and scratch. Default `undefined` (full plan). */

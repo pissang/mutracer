@@ -678,6 +678,17 @@ export default class Engine {
   /** @internal */ get _ready() { return !!this._pipeline && this._uploadedRevision === this._sceneRevision && !!this._committedScene && !!this._committedCamera && !this._disposed; }
   /** @internal */ get _temporalRevision() { return this._temporalGlobalRevision; }
   /** @internal */ get _temporalLightingRevision() { return this._temporalLightRevision; }
+  /** @internal Authored mesh emission in the committed frame, keyed by material AOV ID. */
+  get _temporalEmissions(): ReadonlyMap<number, import('./types.js').ColorRGB> {
+    const entries = new Map<number, import('./types.js').ColorRGB>();
+    for (const mesh of this._committedScene?.meshes ?? []) for (const material of mesh.materials) {
+      if (!mesh.visible || material.emissionLuminance <= 0 || entries.has(material.aovId)) continue;
+      const luminance = material.emissionLuminance;
+      const [r, g, b] = material.emissionColor;
+      entries.set(material.aovId, [Math.max(0, r * luminance), Math.max(0, g * luminance), Math.max(0, b * luminance)]);
+    }
+    return entries;
+  }
   /** @internal */ get _temporalMaterialRevisionVersionValue() { return this._temporalMaterialRevisionVersion; }
   /** @internal */ get _temporalMaterialRevisionEntries(): readonly (readonly [number, number])[] {
     const entries = new Map<number, number>();

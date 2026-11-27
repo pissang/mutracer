@@ -87,6 +87,7 @@ pub(super) struct Capture {
     pub revisions: Vec<[u32; 2]>,
     pub scene_key: u64,
     pub lighting_key: u64,
+    pub emissions: BTreeMap<u32, [f32; 3]>,
     pub guides: [wgpu::Buffer; 9],
 }
 struct State {
@@ -118,6 +119,7 @@ pub struct TemporalDenoiser {
     epoch: u64,
     previous: Option<(u32, u64, u64)>,
     previous_lighting: Option<u64>,
+    previous_emissions: BTreeMap<u32, [f32; 3]>,
     lighting_revision: u64,
     flushing: bool,
     failed: bool,
@@ -148,6 +150,7 @@ impl TemporalDenoiser {
             epoch: 0,
             previous: None,
             previous_lighting: None,
+            previous_emissions: BTreeMap::new(),
             lighting_revision: 0,
             flushing: false,
             failed: false,
@@ -381,9 +384,14 @@ impl TemporalDenoiser {
             }
         }
         self.previous = Some((index, capture.scene_key, self.epoch));
-        if auto && self.previous_lighting != Some(capture.lighting_key) {
-            self.lighting_revision += 1;
+        if auto {
+            if self.previous_lighting != Some(capture.lighting_key)
+                || has_emission_step(&self.previous_emissions, &capture.emissions)
+            {
+                self.lighting_revision += 1;
+            }
             self.previous_lighting = Some(capture.lighting_key);
+            self.previous_emissions = capture.emissions;
         }
         let custom = matches!(self.spatial, TemporalSpatial::Custom(_))
             .then(|| [3, 7].map(|k| Resource::Buffer(guides[k].buffer().clone())));
@@ -587,6 +595,7 @@ impl TemporalDenoiser {
         self.frames.clear();
         self.previous = None;
         self.previous_lighting = None;
+        self.previous_emissions.clear();
         self.lighting_revision = 0;
         self.flushing = false;
         self.epoch = 0;
@@ -709,6 +718,65 @@ pub(super) fn scene_revisions(scene: &[u8]) -> (u64, u64, Vec<[u32; 2]>) {
     }
     revisions.sort_unstable();
     (global.finish(), lighting.finish(), revisions)
+}
+
+pub(super) fn scene_emissions(scene: &[u8]) -> BTreeMap<u32, [f32; 3]> {
+    use crate::layout::{header as h, material as m, mesh};
+    let word = |i: usize| u32::from_le_bytes(scene[i * 4..i * 4 + 4].try_into().unwrap()) as usize;
+    let float = |i| f32::from_bits(word(i) as u32);
+    let ids = word(h::MATERIAL_AOV_IDS);
+    let mut entries = BTreeMap::new();
+    let mut capture = |material| {
+        let offset = word(h::MATERIAL_OFFSET) + material * m::WORDS;
+        let luminance = float(offset + m::EMISSION_LUMINANCE);
+        if luminance > 0. {
+            let key = if ids == 0 {
+                material
+            } else {
+                word(ids + material)
+            };
+            let rgb = [0, 1, 2]
+                .map(|channel| (float(offset + m::EMISSION_COLOR + channel) * luminance).max(0.));
+            entries.insert(key as u32, rgb);
+        }
+    };
+    for i in 0..word(h::MESH_COUNT) {
+        let offset = word(h::MESH_OFFSET) + i * mesh::WORDS;
+        if word(offset + mesh::FLAGS) & 1 != 0 {
+            continue;
+        }
+        let count = word(offset + mesh::MATERIAL_COUNT);
+        if count == 0 {
+            capture(word(offset + mesh::MATERIAL));
+        } else {
+            let start = word(offset + mesh::MATERIAL_TABLE);
+            for slot in start..start + count {
+                capture(word(slot));
+            }
+        }
+    }
+    entries
+}
+
+fn has_emission_step(
+    previous: &BTreeMap<u32, [f32; 3]>,
+    current: &BTreeMap<u32, [f32; 3]>,
+) -> bool {
+    // Keep this in sync with the Web offline emission comparison.
+    const DARK: [f32; 3] = [0.; 3];
+    let changed = |before: &[f32; 3], after: &[f32; 3]| {
+        let scale = before.iter().chain(after).copied().fold(0.01, f32::max);
+        before
+            .iter()
+            .zip(after)
+            .any(|(a, b)| (a - b).abs() >= scale / 3.)
+    };
+    current
+        .iter()
+        .any(|(id, after)| changed(previous.get(id).unwrap_or(&DARK), after))
+        || previous
+            .iter()
+            .any(|(id, before)| !current.contains_key(id) && changed(before, &DARK))
 }
 
 #[cfg(test)]
