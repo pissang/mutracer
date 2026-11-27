@@ -212,7 +212,8 @@ export function createTemporalStressShot(mt: MT): TemporalStressShot {
     map.uvScale = [1 / metresPerTile, 1 / metresPerTile];
     return map;
   };
-  const material = (params: MuTracer.OpenPBRMaterialParams) => new mt.OpenPBRMaterial(params);
+  const material = (name: string, params: MuTracer.OpenPBRMaterialParams) =>
+    Object.assign(new mt.OpenPBRMaterial(params), {name});
 
   // Textures: fine periodic detail that shows smearing.
   const wallpaper = texture(pixels(64, 4, x => x < 3 ? [92, 74, 58] : x < 30 ? [214, 200, 172] : x < 34 ? [128, 150, 120] : [196, 210, 186]), .16);
@@ -229,45 +230,45 @@ export function createTemporalStressShot(mt: MT): TemporalStressShot {
   const ballStripes = new mt.Texture(pixels(64, 4, x => [[230, 60, 40], [245, 215, 60], [40, 110, 210], [240, 240, 235]][x >> 4] as V3));
 
   // Materials.
-  const plaster = material({baseColor: [.78, .76, .72], specularRoughness: .8});
-  const paper = material({baseColor: [1, 1, 1], map: wallpaper, specularRoughness: .7});
-  const floor = material({baseColor: [1, 1, 1], map: tiles, specularRoughness: .12});
-  const varnish = material({baseColor: [1, 1, 1], map: wood, specularRoughness: .45, coatWeight: 1, coatRoughness: .04});
-  const darkWood = material({baseColor: [.16, .09, .05], specularRoughness: .3, coatWeight: .8, coatRoughness: .08});
-  const mirror = material({baseColor: [.94, .94, .94], baseMetalness: 1, specularRoughness: 0});
-  const chrome = material({baseColor: [.9, .9, .92], baseMetalness: 1, specularRoughness: .04});
-  const brass = material({baseColor: [.95, .72, .38], baseMetalness: 1, specularRoughness: .2});
-  const glass = material({baseColor: [1, 1, 1], transmissionWeight: 1, specularRoughness: 0, specularIor: 1.5});
-  const ceramic = material({baseColor: [.86, .84, .8], specularRoughness: .05});
-  const vaseGlaze = material({baseColor: [.05, .35, .4], specularRoughness: .15});
-  const blindPaint = material({baseColor: [.86, .85, .8], specularRoughness: .4});
-  const leafGreen = material({baseColor: [.12, .32, .08], specularRoughness: .45});
-  const terracotta = material({baseColor: [.55, .25, .14], specularRoughness: .8});
-  const blackPlastic = material({baseColor: [.03, .03, .035], specularRoughness: .25});
-  const wax = material({baseColor: [.92, .9, .84], specularRoughness: .5, subsurfaceWeight: .6, subsurfaceColor: [.95, .9, .8], subsurfaceRadius: .01});
-  const toyPaint = material({baseColor: [.85, .12, .1], specularRoughness: .2, coatWeight: 1, coatRoughness: .02});
-  const ballPaint = material({baseColor: [1, 1, 1], map: ballStripes, specularRoughness: .25, coatWeight: 1, coatRoughness: .03});
-  const cord = material({baseColor: [.05, .05, .05], specularRoughness: .6});
+  const plaster = material('Plaster', {baseColor: [.78, .76, .72], specularRoughness: .8});
+  const paper = material('Striped wallpaper', {baseColor: [1, 1, 1], map: wallpaper, specularRoughness: .7});
+  const floor = material('Ceramic floor tile', {baseColor: [1, 1, 1], map: tiles, specularRoughness: .12});
+  const varnish = material('Varnished wood', {baseColor: [1, 1, 1], map: wood, specularRoughness: .45, coatWeight: 1, coatRoughness: .04});
+  const darkWood = material('Dark wood', {baseColor: [.16, .09, .05], specularRoughness: .3, coatWeight: .8, coatRoughness: .08});
+  const mirror = material('Mirror metal', {baseColor: [.94, .94, .94], baseMetalness: 1, specularRoughness: 0});
+  const chrome = material('Chrome', {baseColor: [.9, .9, .92], baseMetalness: 1, specularRoughness: .04});
+  const brass = material('Brass', {baseColor: [.95, .72, .38], baseMetalness: 1, specularRoughness: .2});
+  const glass = material('Clear glass', {baseColor: [1, 1, 1], transmissionWeight: 1, specularRoughness: 0, specularIor: 1.5});
+  const ceramic = material('Glazed ceramic', {baseColor: [.86, .84, .8], specularRoughness: .05});
+  const vaseGlaze = material('Vase glaze', {baseColor: [.05, .35, .4], specularRoughness: .15});
+  const blindPaint = material('Blind enamel', {baseColor: [.86, .85, .8], specularRoughness: .4});
+  const leafGreen = material('Leaves', {baseColor: [.12, .32, .08], specularRoughness: .45});
+  const terracotta = material('Terracotta', {baseColor: [.55, .25, .14], specularRoughness: .8});
+  const blackPlastic = material('Black plastic', {baseColor: [.03, .03, .035], specularRoughness: .25});
+  const wax = material('Candle wax', {baseColor: [.92, .9, .84], specularRoughness: .5, subsurfaceWeight: .6, subsurfaceColor: [.95, .9, .8], subsurfaceRadius: .01});
+  const toyPaint = material('Toy enamel', {baseColor: [.85, .12, .1], specularRoughness: .2, coatWeight: 1, coatRoughness: .02});
+  const ballPaint = material('Striped ball enamel', {baseColor: [1, 1, 1], map: ballStripes, specularRoughness: .25, coatWeight: 1, coatRoughness: .03});
+  const cord = material('Black cord', {baseColor: [.05, .05, .05], specularRoughness: .6});
   // Emitters.
-  const bulb = material({baseColor: [1, 1, 1], emissionColor: [1, .82, .6], emissionLuminance: 60});
-  const shade = material({baseColor: [.4, .35, .3], emissionColor: [1, .72, .42], emissionLuminance: 2.5, specularRoughness: .9});
-  const led = material({baseColor: [0, 0, 0], emissionColor: [1, 0, 0], emissionLuminance: 3});
-  const screen = material({baseColor: [.02, .02, .02], emissionColor: [.2, .4, 1], emissionLuminance: 3, specularRoughness: .05});
-  const flame = material({baseColor: [0, 0, 0], emissionColor: [1, .55, .18], emissionLuminance: 40});
+  const bulb = material('Pendant emission', {baseColor: [1, 1, 1], emissionColor: [1, .82, .6], emissionLuminance: 60});
+  const shade = material('Lamp shade', {baseColor: [.4, .35, .3], emissionColor: [1, .72, .42], emissionLuminance: 2.5, specularRoughness: .9});
+  const led = material('LED emission', {baseColor: [0, 0, 0], emissionColor: [1, 0, 0], emissionLuminance: 3});
+  const screen = material('Screen emission', {baseColor: [.02, .02, .02], emissionColor: [.2, .4, 1], emissionLuminance: 3, specularRoughness: .05});
+  const flame = material('Flame emission', {baseColor: [0, 0, 0], emissionColor: [1, .55, .18], emissionLuminance: 40});
 
   // Room: 6 × 2.8 × 5 m, window in the +X wall.
-  add(box(6.2, .1, 5.2), floor, translate([0, -.05, 0]));
-  add(box(6.2, .1, 5.2), plaster, translate([0, 2.85, 0]));
-  add(box(6.2, 2.8, .1), paper, translate([0, 1.4, -2.55]));
-  add(box(6.2, 2.8, .1), paper, translate([0, 1.4, 2.55]));
-  add(box(.1, 2.8, 5.2), paper, translate([-3.05, 1.4, 0]));
+  add(box(6.2, .1, 5.2), floor, translate([0, -.05, 0]), 'floor');
+  add(box(6.2, .1, 5.2), plaster, translate([0, 2.85, 0]), 'ceiling');
+  add(box(6.2, 2.8, .1), paper, translate([0, 1.4, -2.55]), 'back wall');
+  add(box(6.2, 2.8, .1), paper, translate([0, 1.4, 2.55]), 'front wall');
+  add(box(.1, 2.8, 5.2), paper, translate([-3.05, 1.4, 0]), 'left wall');
   const windowY = [1, 2.1], windowZ = [-1.1, .2];
-  add(box(.1, windowY[0], 5.2), plaster, translate([3.05, windowY[0] / 2, 0]));
-  add(box(.1, 2.8 - windowY[1], 5.2), plaster, translate([3.05, (2.8 + windowY[1]) / 2, 0]));
-  add(box(.1, windowY[1] - windowY[0], windowZ[0] + 2.6), plaster, translate([3.05, 1.55, (windowZ[0] - 2.6) / 2]));
-  add(box(.1, windowY[1] - windowY[0], 2.6 - windowZ[1]), plaster, translate([3.05, 1.55, (windowZ[1] + 2.6) / 2]));
+  add(box(.1, windowY[0], 5.2), plaster, translate([3.05, windowY[0] / 2, 0]), 'wall below window');
+  add(box(.1, 2.8 - windowY[1], 5.2), plaster, translate([3.05, (2.8 + windowY[1]) / 2, 0]), 'wall above window');
+  add(box(.1, windowY[1] - windowY[0], windowZ[0] + 2.6), plaster, translate([3.05, 1.55, (windowZ[0] - 2.6) / 2]), 'wall left of window');
+  add(box(.1, windowY[1] - windowY[0], 2.6 - windowZ[1]), plaster, translate([3.05, 1.55, (windowZ[1] + 2.6) / 2]), 'wall right of window');
   // Skirting along the back wall.
-  add(box(6, .1, .02), darkWood, translate([0, .05, -2.49]));
+  add(box(6, .1, .02), darkWood, translate([0, .05, -2.49]), 'skirting');
 
   // Blinds: thin tilted slats and two cords.
   const blinds = empty();
@@ -279,11 +280,11 @@ export function createTemporalStressShot(mt: MT): TemporalStressShot {
   add(box(2, 1.8, .02), mirror, translate([-1.3, 1.45, -2.49]), 'mirror');
   const frame = empty();
   for (const [w, h, x, y] of [[2.1, .05, -1.3, .525], [2.1, .05, -1.3, 2.375], [.05, 1.9, -2.325, 1.45], [.05, 1.9, -.275, 1.45]]) append(frame, box(w, h, .04), translate([x, y, -2.48]));
-  add(frame, darkWood);
+  add(frame, darkWood, undefined, 'mirror frame');
 
   // Cabinet and screen on the back wall.
-  add(box(1.6, .6, .4), darkWood, translate([1.6, .3, -2.3]));
-  add(box(1.26, .76, .04), blackPlastic, translate([1.6, 1.38, -2.46]));
+  add(box(1.6, .6, .4), darkWood, translate([1.6, .3, -2.3]), 'cabinet');
+  add(box(1.26, .76, .04), blackPlastic, translate([1.6, 1.38, -2.46]), 'screen bezel');
   add(box(1.2, .7, .01), screen, translate([1.6, 1.38, -2.435]), 'screen');
   // LED strip along the top of the back and left walls.
   const strip = empty();
@@ -296,7 +297,7 @@ export function createTemporalStressShot(mt: MT): TemporalStressShot {
   add(box(1.6, .04, .9), varnish, translate([.4, tableTop - .02, -.6]), 'table');
   const legs = empty();
   for (const x of [-.32, 1.12]) for (const z of [-.98, -.22]) append(legs, box(.05, tableTop - .04, .05), translate([x, (tableTop - .04) / 2, z]));
-  add(legs, darkWood);
+  add(legs, darkWood, undefined, 'table legs');
 
   // Chair with thin spindles.
   const chair = empty();
@@ -313,7 +314,7 @@ export function createTemporalStressShot(mt: MT): TemporalStressShot {
   const candlestickBase: V3 = [.75, tableTop, -.75];
   add(lathe([[0, 0], [.075, 0], [.075, 0], [.075, .012], [.06, .02], [.035, .03], [.02, .05], [.013, .08], [.022, .1], [.013, .12],
     [.011, .2], [.02, .23], [.012, .25], [.012, .28], [.034, .285], [.034, .285], [.034, .3], [.034, .3], [.011, .3], [0, .3]], 96), brass, translate(candlestickBase), 'candlestick');
-  add(cylinder(.011, .1, 24), wax, translate([candlestickBase[0], tableTop + .3, candlestickBase[2]]));
+  add(cylinder(.011, .1, 24), wax, translate([candlestickBase[0], tableTop + .3, candlestickBase[2]]), 'candle');
   const glassBase: V3 = [-.25, tableTop, -.5];
   const flameMesh = add(sphere(.008, 16), flame, undefined, 'flame');
   add(lathe([[0, 0], [.04, 0], [.04, 0], [.046, .13], [.046, .13], [.042, .13], [.042, .13], [.036, .014], [.036, .014], [0, .014]], 96), glass, translate(glassBase), 'glass');
@@ -327,7 +328,7 @@ export function createTemporalStressShot(mt: MT): TemporalStressShot {
   const lamp = empty();
   append(lamp, lathe([[0, 0], [.16, 0], [.16, 0], [.16, .02], [.02, .04], [0, .04]], 48));
   append(lamp, cylinder(.012, 1.45, 16));
-  add(lamp, blackPlastic, translate(lampBase));
+  add(lamp, blackPlastic, translate(lampBase), 'lamp stand');
   add(lathe([[.2, 0], [.12, .26], [.12, .26], [.115, .26], [.115, .26], [.195, 0]], 64), shade, translate([lampBase[0], 1.36, lampBase[2]]), 'lamp shade');
   const lampLight = new mt.SphereLight({color: [1, .78, .5], intensity: 50, radius: .045});
   lampLight.position = [lampBase[0], 1.5, lampBase[2]];
@@ -342,12 +343,15 @@ export function createTemporalStressShot(mt: MT): TemporalStressShot {
   const pendants: {mesh: MuTracer.Mesh; bulb: MuTracer.Mesh; pivot: V3; length: number}[] = [];
   for (const [x, length] of [[-.05, .85], [.4, .95], [.85, .8]] as [number, number][]) {
     const pivot: V3 = [x, 2.8, -.6];
-    pendants.push({mesh: add(pendant(length), blackPlastic), bulb: add(sphere(.035, 24), bulb), pivot, length});
+    const number = pendants.length + 1;
+    const mesh = add(pendant(length), blackPlastic, undefined, `pendant fixture ${number}`);
+    const light = add(sphere(.035, 24), bulb, undefined, `pendant bulb ${number}`);
+    pendants.push({mesh, bulb: light, pivot, length});
   }
 
   // Plant in the corner beside the window.
   const plantBase: V3 = [2.5, 0, -1.65];
-  add(lathe([[0, 0], [.12, 0], [.12, 0], [.16, .34], [.16, .34], [.145, .34], [.145, .34], [.13, .3], [0, .3]], 48), terracotta, translate(plantBase));
+  add(lathe([[0, 0], [.12, 0], [.12, 0], [.16, .34], [.16, .34], [.145, .34], [.145, .34], [.13, .3], [0, .3]], 48), terracotta, translate(plantBase), 'plant pot');
   const plant = empty();
   const plantRandom = rng(11);
   for (let stem = 0; stem < 5; stem++) {

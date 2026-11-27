@@ -27,18 +27,7 @@ let shot, lamp, shade, vase, bowl;
 
 export function setup({mutracer}) {
   shot = createTemporalStressShot(mutracer);
-  // These meshes are unnamed in the shared stress shot.
-  shot.scene.meshes[13].name = 'cabinet';
-  for (let i = 0; i < 3; i++) {
-    shot.scene.meshes[30 + 2 * i].name = `pendant fixture ${i + 1}`;
-    shot.scene.meshes[31 + 2 * i].name = `pendant bulb ${i + 1}`;
-  }
   const material = name => shot.scene.meshes.find(mesh => mesh.name === name).materials[0];
-  for (const [mesh, name] of [
-    ['cabinet', 'Dark wood'], ['chrome sphere', 'Chrome'], ['candlestick', 'Brass'],
-    ['table', 'Varnished wood'], ['bowl', 'Glazed ceramic'], ['glass', 'Clear glass'],
-    ['pendant bulb 1', 'Pendant emission'],
-  ]) material(mesh).name = name;
   lamp = shot.scene.lights[2];
   shade = material('lamp shade');
   vase = material('vase');
