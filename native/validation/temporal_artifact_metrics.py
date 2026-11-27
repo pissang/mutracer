@@ -99,7 +99,8 @@ class Measurements:
 
 
 class QuickMetrics:
-    def __init__(self):
+    def __init__(self, history=True):
+        self.history = history
         self.ring = []
         self.previous_changes = None
 
@@ -135,7 +136,7 @@ class QuickMetrics:
                 flicker = np.where(along_track, .65 * flicker + .35 * t_innovation, flicker)
                 spatial_change = np.where(along_track, .65 * spatial_change + .35 * s_innovation,
                                           spatial_change)
-            if len(self.ring) >= 2 and len(old_residuals) == 2:
+            if self.history and len(self.ring) >= 2 and len(old_residuals) == 2:
                 older_again = np.where(valid[..., None], old_residuals[1][warp.nearest], 0)
                 channel, sign = dominant_channel(residual)
                 persistent = np.minimum(signed_support(older, channel, sign),

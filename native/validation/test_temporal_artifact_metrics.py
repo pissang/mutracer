@@ -58,6 +58,7 @@ class MetricTests(unittest.TestCase):
 
     def test_reference_separates_trails_from_an_oscillating_error(self):
         quick, fine = QuickMetrics(), ReferenceMetrics()
+        no_history = QuickMetrics(history=False)
         self.motion[..., 0] = -1
         warp = Warp(self.grid, self.motion, self.ids, self.ids)
         for i in range(6):
@@ -69,7 +70,9 @@ class MetricTests(unittest.TestCase):
             temporal[:, 4:10, 0] += 10 * (-1) ** i
             m = quick.push(temporal, baseline, self.window, warp if i else None)
             exact = fine.push(temporal, baseline, baseline, warp if i else None)
+            no_history_result = no_history.push(temporal, baseline, self.window, warp if i else None)
         self.assertGreater(m.ghost[10, edge - 3], 10)
+        self.assertFalse(no_history_result.ghost.any())
         high, low, valid, _ = exact
         self.assertTrue(valid[10, edge - 3])
         self.assertGreater(high[10, 8], 5)

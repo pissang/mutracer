@@ -440,8 +440,12 @@ def analyze(temporal_dir, spatial_dir, out, thresholds, reference_dirs=(), refer
     shape = (h, w)
     scan = temporal['scan']
     events = validated_events(scan['events'], size)
+    options = temporal['settings'].get('temporal', {})
+    radius = options.get('historyRadius', 16)
+    has_history = bool((radius if isinstance(radius, int) else radius.get('max', 16))
+                       or options.get('postRadius', 3))
     cuts = set(scan['cuts'])
-    for cut in temporal['settings'].get('temporal', {}).get('cuts', ()):
+    for cut in options.get('cuts', ()):
         cuts.add(cut if isinstance(cut, int) else math.ceil(cut['time'] * temporal['fps']))
     reference_sources = {}
     reference_timing = 0.
@@ -468,8 +472,8 @@ def analyze(temporal_dir, spatial_dir, out, thresholds, reference_dirs=(), refer
     report = Report(scan, events)
     calibration = Calibration(thresholds) if reference_sources else None
     video = Video(out / 'heatmaps.mp4', size, temporal['fps']) if make_video else None
-    quick_metrics, fine_metrics = QuickMetrics(), ReferenceMetrics()
-    foreground_metrics = ForegroundTrails() if base_report is None else None
+    quick_metrics, fine_metrics = QuickMetrics(has_history), ReferenceMetrics()
+    foreground_metrics = ForegroundTrails() if base_report is None and has_history else None
     started = monotonic()
     reference_cpu = 0.
     frames = (range(first, last + 1) if base_report is None
@@ -504,6 +508,7 @@ def analyze(temporal_dir, spatial_dir, out, thresholds, reference_dirs=(), refer
             flicker_score = np.minimum(m.flicker / thresholds.flicker,
                                        m.flicker / np.maximum(.01, thresholds.oidn_ratio * m.oidn_change))
             ghost_score = m.ghost / thresholds.ghost
+            foreground_score = ghost_score
             if foreground_metrics is not None:
                 foreground, sources = foreground_metrics.push(signal, baseline, ids, warp)
                 foreground_score = foreground / thresholds.foreground_trail
@@ -522,8 +527,9 @@ def analyze(temporal_dir, spatial_dir, out, thresholds, reference_dirs=(), refer
                     (TYPES[2], m.switch / thresholds.switch, unstable),
                 ):
                     report.append(index, kind, score, mask, ids, window, sparkle, m, warp)
-                report.append(index, TYPES[1], foreground_score, m.valid & (foreground_score >= 1),
-                              ids, window, sparkle, m, warp, foreground=sources)
+                if foreground_metrics is not None:
+                    report.append(index, TYPES[1], foreground_score, m.valid & (foreground_score >= 1),
+                                  ids, window, sparkle, m, warp, foreground=sources)
                 report.advance(index)
             if video:
                 video.frame(rgb, flicker_score * m.valid, np.maximum(ghost_score, foreground_score) * m.valid)

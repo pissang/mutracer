@@ -406,7 +406,8 @@ positive result along the receiving surface for three frames. Bound its score by
 available from the old foreground. Require eight display codes and three
 pixels per tile to record the prior foreground ID. This corroborates
 contrasty trails that extend past an old silhouette. The reference threshold
-sweep evaluates the general trail measure.
+sweep evaluates the general trail measure. With both history and post radii
+set to zero, classify residual differences as spatial error or flicker.
 
 **Decisions.** Compare the surface and reflected acceptance masks at the same
 signed tap offsets across aligned frames. Count switches among offsets
