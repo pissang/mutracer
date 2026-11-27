@@ -422,7 +422,28 @@ fn silhouetteConfidence(x: vec2i, at: vec2i, pos: vec4f, rgb: vec3f) -> f32 {
 }
 `;
 
-const startWindowWGSL = (guides = false, reflections = false, sampleTileSize?: number) => /* wgsl */ `
+// The first 16 words keep the existing aggregate counters. Each diagnostic
+// pixel records signed-offset eligibility and acceptance, packed reason
+// counts, and the two resolved weight sums. Passes for a pixel run in order.
+const windowDiagnosticsWGSL = /* wgsl */ `
+fn diagnosticBase(index: u32) -> u32 { return 16u + 12u*index; }
+fn diagnosticTap(index: u32, kind: u32) {
+  let side = u32(p.delta > 0);
+  let bit = 1u << u32(abs(p.delta)-1);
+  atomicOr(&rejects[diagnosticBase(index)+side+2u*kind],bit);
+}
+fn diagnosticReason(index: u32, reason: u32, limited: bool) {
+  if (limited) {
+    atomicAdd(&rejects[diagnosticBase(index)+6u+reason/4u],1u << (8u*(reason%4u)));
+  }
+}
+fn observeConfidence(index: u32, reason: u32, confidence: f32) -> f32 {
+  diagnosticReason(index,reason,confidence<.95);
+  return confidence;
+}
+`;
+
+const startWindowWGSL = (guides = false, reflections = false, sampleTileSize?: number, diagnostics = false) => /* wgsl */ `
 @compute @workgroup_size(8,8) fn main(@builtin(global_invocation_id) g:vec3u) {
   if(any(g.xy>=p.size)){return;}
   let x=vec2i(g.xy); let index=g.y*p.size.x+g.x;
@@ -434,12 +455,14 @@ const startWindowWGSL = (guides = false, reflections = false, sampleTileSize?: n
     if ((p.mode&32u)!=0u) { reflectedTotal[index+p.size.x*p.size.y]=vec4f(0); reflectedTotal[index+2u*p.size.x*p.size.y]=vec4f(0); }` : ''}${sampleTileSize ? '\n    total[index] *= centerSampleWeight(x);' : ''}${guides ? `
     albedoSum[index]=vec4f(loadAlbedo(x,p.current)${sampleTileSize ? '*centerSampleWeight(x)' : ''},0.);
     normalSum[index]=vec4f(loadNormal(x,p.current)${sampleTileSize ? '*centerSampleWeight(x)' : ''},0.);` : ''}
-    return;
+${diagnostics ? '    for (var lane=0u; lane<12u; lane++) { atomicStore(&rejects[diagnosticBase(index)+lane],0u); }\n' : ''}    return;
   }
   if(p.stage==2u){ output[index]=vec4f(total[index].rgb/total[index].a,loadRadiance(x,p.current,p.size.x).a);${reflections ? `
     output[index] += vec4f(reflectedTotal[index].rgb/reflectedTotal[index].a,0.0);` : ''}${guides ? `
     albedoSum[index]/=total[index].a;
-    normalSum[index]/=total[index].a;` : ''} return; }
+    normalSum[index]/=total[index].a;` : ''}${diagnostics ? `
+    atomicStore(&rejects[diagnosticBase(index)+10u],bitcast<u32>(total[index].a));
+    ${reflections ? 'atomicStore(&rejects[diagnosticBase(index)+11u],bitcast<u32>(reflectedTotal[index].a));' : ''}` : ''} return; }
   if(overflowMissing(x,p.current)){return;}
   let pos=surface(x,p.current,0u);
   if(pos.w<=0.0001){return;}
@@ -450,10 +473,10 @@ const startWindowWGSL = (guides = false, reflections = false, sampleTileSize?: n
   let material = surfaceMaterial(x);
   // A camera cut is a correspondence check, independent of radiance weights.
   let surfaceWindow = select(radius, surfaceRadius(radius, material), (p.mode & 4u) != 0u);
-  ${reflections ? '' : 'if (distance > surfaceWindow) { return; }'}
+${diagnostics ? '  diagnosticTap(index,0u); diagnosticReason(index,3u,distance > surfaceWindow);\n' : ''}  ${reflections ? '' : 'if (distance > surfaceWindow) { return; }'}
   let path=traceMotion(vec2f(x),ident(x,p.current));
   let q=path.xyz;
-  if(path.w<=.5){${reflections ? ' countReflectionTap(index,1u);' : ''}return;}
+  if(path.w<=.5){${reflections ? ' countReflectionTap(index,1u);' : ''}${diagnostics ? ' diagnosticReason(index,0u,true);' : ''}return;}
   let nearest=clamp(vec2i(floor(q.xy+0.5)),vec2i(0),vec2i(p.size)-1);
   let partial=(p.mode & 2u)!=0u;
   let reason=rejection(x,q,nearest,partial);
@@ -485,8 +508,8 @@ fn loadNormal(at: vec2i, slot: u32) -> vec3f {
 }
 `;
 
-export const createMixedWindowWGSL = (guides: boolean, reflections = false, sampleTileSize?: number) => /* wgsl */ `${windowBindingsAndGeometry}
-${guides ? windowGuidesWGSL : ''}${recoverHistoryWGSL(!!sampleTileSize)}${silhouetteConfidenceWGSL}
+export const createMixedWindowWGSL = (guides: boolean, reflections = false, sampleTileSize?: number, diagnostics = false) => /* wgsl */ `${windowBindingsAndGeometry}
+${diagnostics ? windowDiagnosticsWGSL : ''}${guides ? windowGuidesWGSL : ''}${recoverHistoryWGSL(!!sampleTileSize)}${silhouetteConfidenceWGSL}
 ${sampleTileSize ? /* wgsl */ `
 @group(0) @binding(${11 + (guides ? 3 : 0) + (reflections ? 3 : 0)}) var<storage, read> sampleTiles: array<u32>;
 const SAMPLE_TILE_SIZE = ${sampleTileSize}u;
@@ -513,7 +536,7 @@ fn fullCoverage(x: vec2i, at: vec2i) -> bool {
 fn neighborSampleWeight(x: vec2i, tap: HistoryTap) -> f32 {
   return sampleWeight(tap.at,p.source,fullCoverage(x,tap.at) && tap.support>=1. && !tap.recovered);
 }
-` : ''}${reflections ? reflectionWindowWGSL(guides ? 14 : 11, !!sampleTileSize) : ''}${lightingConfidenceWGSL(reflections)}${startWindowWGSL(guides, reflections, sampleTileSize)}  var tap=HistoryTap(nearest,0.${sampleTileSize ? ',false' : ''});
+` : ''}${reflections ? reflectionWindowWGSL(guides ? 14 : 11, !!sampleTileSize, diagnostics) : ''}${lightingConfidenceWGSL(reflections)}${startWindowWGSL(guides, reflections, sampleTileSize, diagnostics)}  var tap=HistoryTap(nearest,0.${sampleTileSize ? ',false' : ''});
   if(reason==0u){
     tap.support=1.;
     if(partial){tap.support=footprintWeight(x,q.xy,nearest,q.z);}
@@ -521,23 +544,27 @@ fn neighborSampleWeight(x: vec2i, tap: HistoryTap) -> f32 {
   if(distance <= surfaceWindow && partial && abs(p.delta)<=3 && (reason>=5u || (reason==0u && tap.support<1.))){
     tap=recoverTap(x,pos,q,tap);
   }
-${reflections ? `  let accepted = distance <= surfaceWindow && tap.support>0. && !overflowMissing(tap.at,p.source);
+${diagnostics ? `
+  diagnosticReason(index,1u,distance <= surfaceWindow && tap.support<=0.);
+  diagnosticReason(index,2u,distance <= surfaceWindow && tap.support>0. && overflowMissing(tap.at,p.source));
+  diagnosticReason(index,11u,distance <= surfaceWindow && tap.support>0. && tap.support<.95);
+` : ''}${reflections ? `  let accepted = distance <= surfaceWindow && tap.support>0. && !overflowMissing(tap.at,p.source);
   if (distance <= surfaceWindow) { atomicAdd(&rejects[select(reason,0u,accepted)],1u); }
   let tent = (radius+1.-distance)/(radius+1.);
   var weight = 0.;
-  if (accepted) { weight = ((surfaceWindow+1.-distance)/(surfaceWindow+1.))*tap.support${sampleTileSize ? "*neighborSampleWeight(x,tap)" : ""}*lightingConfidence(x,tap.at,false); }
+  if (accepted) { weight = ((surfaceWindow+1.-distance)/(surfaceWindow+1.))*tap.support${sampleTileSize ? "*neighborSampleWeight(x,tap)" : ""}*${diagnostics ? 'observeConfidence(index,4u,lightingConfidence(x,tap.at,false))' : 'lightingConfidence(x,tap.at,false)'}; }
   let rgb = select(vec3f(0),skyCorrection(x,tap.at,pos,radiance(tap.at,p.source)),accepted);
   var surfaceConfidence = 1.;
   if (accepted) {
-    weight *= silhouetteConfidence(x,tap.at,pos,rgb);
+    weight *= ${diagnostics ? 'observeConfidence(index,5u,silhouetteConfidence(x,tap.at,pos,rgb))' : 'silhouetteConfidence(x,tap.at,pos,rgb)'};
     surfaceConfidence = dielectricSurfaceConfidence(x,q.xy,material);
   }
   accumulateReflection(x,index,tap,q,weight,rgb,tent,material.y,surfaceConfidence,hasGlossyDielectric(material));` : `  if(tap.support<=0. || overflowMissing(tap.at,p.source)){atomicAdd(&rejects[reason],1u);return;}
   atomicAdd(&rejects[0],1u);
-  var weight=(surfaceWindow+1.-distance)/(surfaceWindow+1.)*tap.support${sampleTileSize ? '*neighborSampleWeight(x,tap)' : ''}*lightingConfidence(x,tap.at,false);
+  var weight=(surfaceWindow+1.-distance)/(surfaceWindow+1.)*tap.support${sampleTileSize ? '*neighborSampleWeight(x,tap)' : ''}*${diagnostics ? 'observeConfidence(index,4u,lightingConfidence(x,tap.at,false))' : 'lightingConfidence(x,tap.at,false)'};
   let rgb=skyCorrection(x,tap.at,pos,radiance(tap.at,p.source));
-  weight *= silhouetteConfidence(x,tap.at,pos,rgb);
-  total[index]+=vec4f(rgb*weight,weight);` }${guides ? `
+  weight *= ${diagnostics ? 'observeConfidence(index,5u,silhouetteConfidence(x,tap.at,pos,rgb))' : 'silhouetteConfidence(x,tap.at,pos,rgb)'};
+${diagnostics ? '  if (weight>0.) { diagnosticTap(index,1u); }\n' : ''}  total[index]+=vec4f(rgb*weight,weight);` }${guides ? `
   if ((p.mode & 8u)!=0u) {
     albedoSum[index]+=vec4f(loadAlbedo(tap.at,p.source)*weight,0.);
     normalSum[index]+=vec4f(loadNormal(tap.at,p.source)*weight,0.);

@@ -32,6 +32,7 @@ pub(super) struct Passes {
     reflection_motion: bool,
     pub sample_tiles: bool,
     diagnostic: Option<std::path::PathBuf>,
+    scan: Option<std::path::PathBuf>,
     pipelines: HashMap<String, wgpu::ComputePipeline>,
     resources: HashMap<&'static str, Resource>,
 }
@@ -54,6 +55,12 @@ impl Passes {
         let pixels = u64::from(size[0]) * u64::from(size[1]);
         let diagnostic =
             std::env::var_os("MUTRACER_TEMPORAL_WINDOW_DUMP").map(std::path::PathBuf::from);
+        let scan = std::env::var_os("MUTRACER_TEMPORAL_SCAN").map(std::path::PathBuf::from);
+        if scan.is_some()
+            && 64 + pixels * 48 > u64::from(gpu.device.limits().max_storage_buffer_binding_size)
+        {
+            return Err("Temporal scan diagnostics exceed the GPU storage binding limit".into());
+        }
         let mut pass = Self {
             gpu,
             size,
@@ -64,6 +71,7 @@ impl Passes {
             reflection_motion,
             sample_tiles,
             diagnostic,
+            scan,
             pipelines: Default::default(),
             resources: Default::default(),
         };
@@ -89,7 +97,10 @@ impl Passes {
             ("overflow", u64::from(slots) * 4096 * 32),
             ("sum", pass.bytes),
             ("window", pass.bytes),
-            ("rejects", 64),
+            (
+                "rejects",
+                64 + if pass.scan.is_some() { pixels * 48 } else { 0 },
+            ),
             ("revision", u64::from(pass.material_capacity) * 8),
             ("coverage", pixels.div_ceil(64) * 4),
         ] {
@@ -148,7 +159,10 @@ impl Passes {
                 ("map", pass.bytes),
                 ("reverse", pass.bytes),
                 ("postSum", pass.bytes),
-                ("postOutput", pass.bytes),
+                (
+                    "postOutput",
+                    pass.bytes * if pass.scan.is_some() && sparkle { 2 } else { 1 },
+                ),
                 ("paths", pixels * 4),
                 ("counts", 80),
                 ("empty", 8),
@@ -187,6 +201,13 @@ impl Passes {
             if sparkle {
                 names.push("sparkle");
             }
+        }
+        if pass.scan.is_some() {
+            let variants = names
+                .iter()
+                .filter_map(|name| scan_kernel(name))
+                .collect::<Vec<_>>();
+            names.extend(variants);
         }
         for name in names {
             let source = if name == "resolve" {
@@ -407,7 +428,30 @@ impl Passes {
             ],
         );
     }
+    fn scan_frame(&self, frame: u32) -> Option<&std::path::Path> {
+        let path = self.scan.as_deref()?;
+        let range = std::env::var("MUTRACER_TEMPORAL_SCAN_FRAMES").ok();
+        let included = range
+            .as_deref()
+            .and_then(|value| value.split_once('-'))
+            .and_then(|(first, last)| Some(first.parse::<u32>().ok()?..=last.parse::<u32>().ok()?))
+            .is_none_or(|range| range.contains(&frame));
+        included.then_some(path)
+    }
+
+    fn scan_dump(&self, frame: u32, field: &str, resource: &str, offset: u64) -> Result<()> {
+        if let Some(path) = self.scan_frame(frame) {
+            let bytes = self
+                .gpu
+                .queue
+                .read_buffer(&self.gpu.device, self[resource].buffer().slice(offset..))?;
+            std::fs::write(path.join(format!("frame-{frame:04}.{field}")), &bytes)?;
+        }
+        Ok(())
+    }
+
     pub fn dump_window(&self, frame: u32) -> Result<()> {
+        self.scan_dump(frame, "window.bin", "rejects", 64)?;
         let Some(path) = &self.diagnostic else {
             return Ok(());
         };
@@ -500,6 +544,11 @@ impl Passes {
                 (true, false) => "windowGuides",
                 (false, false) => "window",
             }
+        };
+        let kernel = if self.scan.is_some() && revisions {
+            scan_kernel(kernel).unwrap_or(kernel)
+        } else {
+            kernel
         };
         self.image_pass(
             kernel,
@@ -620,7 +669,13 @@ impl Passes {
             );
         }
     }
-    pub fn post(&self, i: u32, neighbors: &[(u32, Vec<u32>)], sparkle: bool) -> Resource {
+    pub fn post(
+        &self,
+        i: u32,
+        neighbors: &[(u32, Vec<u32>)],
+        sparkle: bool,
+        frame: u32,
+    ) -> Result<Resource> {
         let [w, h] = self.size;
         let n = self.plan.post_slots();
         let stride = self.material_capacity + 1;
@@ -666,7 +721,11 @@ impl Passes {
         self.image_pass("accumulate", &self.post_params(i, i, 2, 0), &sum);
         if sparkle {
             self.image_pass(
-                "sparkle",
+                if self.scan.is_some() {
+                    "sparkleScan"
+                } else {
+                    "sparkle"
+                },
                 &[w, h, i % n, n, past, future, stride, i % self.plan.slots()],
                 &[
                     &self["surface"],
@@ -679,10 +738,11 @@ impl Passes {
                     &self["changes"],
                 ],
             );
+            self.scan_dump(frame, "sparkle.f32", "postOutput", self.bytes)?;
         }
         let output = self.alloc("Finished temporal frame", self.bytes);
         self.copy(&self["postOutput"], &output);
-        output
+        Ok(output)
     }
 }
 impl std::ops::Index<&str> for Passes {
@@ -690,6 +750,19 @@ impl std::ops::Index<&str> for Passes {
     fn index(&self, key: &str) -> &Resource {
         &self.resources[key]
     }
+}
+
+fn scan_kernel(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "window" => "windowScan",
+        "windowGuides" => "windowGuidesScan",
+        "windowReflections" => "windowReflectionsScan",
+        "windowGuidesReflections" => "windowGuidesReflectionsScan",
+        "windowTiles" => "windowTilesScan",
+        "windowReflectionsTiles" => "windowReflectionsTilesScan",
+        "sparkle" => "sparkleScan",
+        _ => return None,
+    })
 }
 
 fn post_layout(device: &wgpu::Device, name: &str) -> Option<wgpu::PipelineLayout> {

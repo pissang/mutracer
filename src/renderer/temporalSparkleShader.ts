@@ -74,7 +74,7 @@ const startPostWGSL = /* wgsl */ `
 `;
 
 // Compile the reference estimator separately for pixel-exact A/B comparisons.
-export const vetoShader = /* wgsl */ `${postBindings}
+export const createVetoShader = (diagnostics = false) => /* wgsl */ `${postBindings}
 fn glintSupport(q: vec2f, slot: u32, currentY: f32, contrast: f32) -> f32 {
   let near=vec2i(floor(q+.5));
   var peak=0.;
@@ -90,7 +90,7 @@ fn glintSupport(q: vec2f, slot: u32, currentY: f32, contrast: f32) -> f32 {
   return peak;
 }
 
-${startPostWGSL}
+${diagnostics ? startPostWGSL.replace('  let pos=', '  output[index+p.size.x*p.size.y]=vec4f(0);\n  let pos=') : startPostWGSL}
   let current=output[index];
   let currentY=luminance(current.rgb);
   let contrast=max(0.,currentY-luminance(low));
@@ -189,6 +189,8 @@ ${startPostWGSL}
   let strength=(1.-smoothstep(.5,2.,witnesses*reliability))*mass/(.30+mass)*clamp(excess/max(residual,.01),0.,1.)*
     smoothstep(0.,7.,local);
   let allowed=mix(strength,min(strength,.6/max(abs(residual),1.)),supported);
-  output[index]=vec4f(mix(current.rgb,mean,allowed),current.a);
+${diagnostics ? '  output[index+p.size.x*p.size.y]=vec4f(residual*allowed,supported,strength,f32(usable));\n' : ''}  output[index]=vec4f(mix(current.rgb,mean,allowed),current.a);
 }
 `;
+
+export const vetoShader = createVetoShader();

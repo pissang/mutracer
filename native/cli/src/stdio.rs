@@ -55,6 +55,8 @@ struct Overrides {
     #[serde(default)]
     experimental_capture: bool,
     #[serde(default)]
+    experimental_scan: bool,
+    #[serde(default)]
     experimental_planar: bool,
     #[serde(default)]
     experimental_geometry: bool,
@@ -80,6 +82,8 @@ enum Request {
     },
     Capture {
         id: u32,
+        #[serde(default)]
+        scan: bool,
     },
     Flush {
         id: u32,
@@ -224,6 +228,7 @@ struct Session {
     hello: bool,
     temporal: Option<Stream>,
     capture_ready: bool,
+    scan_ready: bool,
     fallback_reported: bool,
     scene: Option<Scene>,
     renderer: Option<(Settings, Renderer)>,
@@ -330,8 +335,8 @@ impl Session {
             self.capture_ready = false;
         }
         match request {
-            Request::Capture { id } => {
-                if !self.capture_ready {
+            Request::Capture { id, scan } => {
+                if !self.capture_ready || (scan && !self.scan_ready) {
                     return Err(invalid(
                         "/type",
                         "Render an experimental capture frame first",
@@ -339,7 +344,7 @@ impl Session {
                 }
                 self.capture_ready = false;
                 let renderer = &self.renderer.as_ref().unwrap().1;
-                let (size, bytes) = crate::temporal::capture_inputs(&renderer.render)?;
+                let (size, bytes) = crate::temporal::capture_inputs(&renderer.render, scan)?;
                 if bytes.len() > MAX_PAYLOAD {
                     return Err(Error::budget("Capture exceeds the stdio payload limit"));
                 }
@@ -396,7 +401,7 @@ impl Session {
                 reply(
                     writer,
                     json!({"type":"ok","id":id,"protocol":1,"shotVersion":1,"descriptorVersions":[8],
-                    "capabilities":["shot-json","descriptor-v8","asset-path","asset-bytes","shot-edit","png","oidn","image-decode","exr","render-settings","display-settings","frame-sample-sequence","check-settings","oidn-clean-aux-large","structured-warnings","temporal-offline","descriptor-camera","experimental-capture","experimental-sample-tiles"],
+                    "capabilities":["shot-json","descriptor-v8","asset-path","asset-bytes","shot-edit","png","oidn","image-decode","exr","render-settings","display-settings","frame-sample-sequence","check-settings","oidn-clean-aux-large","structured-warnings","temporal-offline","descriptor-camera","experimental-capture","experimental-sample-tiles","experimental-artifact-scan"],
                     "maxHeaderBytes":MAX_HEADER,"maxPayloadBytes":MAX_PAYLOAD,"build":env!("MUTRACER_CLI_BUILD_ID")}),
                     None,
                 )
@@ -820,9 +825,13 @@ impl Session {
                 config.configure_capture(&renderer.render, settings.denoise)?;
                 if overrides.experimental_capture {
                     let mut options = renderer.render.settings().map_err(crate::temporal::gpu)?;
-                    let id_mask = mutracer_native::api::PixelKind::Id.aov_mask();
-                    if options.aovs & id_mask == 0 {
-                        options.aovs |= id_mask;
+                    use mutracer_native::api::PixelKind;
+                    let mut mask = PixelKind::Id.aov_mask();
+                    if overrides.experimental_scan {
+                        mask |= PixelKind::Motion.aov_mask();
+                    }
+                    if options.aovs & mask != mask {
+                        options.aovs |= mask;
                         renderer
                             .render
                             .set_settings(options)
@@ -901,6 +910,7 @@ impl Session {
                     Some(renderer.capture(settings, frame)?)
                 };
                 self.capture_ready = overrides.experimental_capture;
+                self.scan_ready = overrides.experimental_scan;
                 let render_warnings = renderer.graph_warnings(&graph_targets);
                 for warning in render_warnings {
                     if seen_warnings.insert(warning.clone()) {

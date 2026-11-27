@@ -55,6 +55,7 @@ function args() {
       'reflection-motion': {type: 'string'}, 'history-radius': {type: 'string'},
       'post-radius': {type: 'string'}, 'timing-only': {type: 'boolean'},
       'context': {type: 'string'}, 'sample-budget': {type: 'string'},
+      'artifact-scan': {type: 'boolean'},
       'sample-floor': {type: 'string'}, 'save-geometry': {type: 'boolean'},
     },
   });
@@ -135,10 +136,13 @@ function options(input, command, values) {
   if (denoise === 'temporal' && (preview || sampleSequence !== 'frame')) {
     throw new Error('Temporal rendering requires stride 1 and output.sampleSequence set to frame.');
   }
-  const experimentalKeys = ['seed-value','sample-stride','reflection-motion','history-radius','post-radius','timing-only','context','sample-budget','sample-floor','save-geometry'];
+  const experimentalKeys = ['seed-value','sample-stride','reflection-motion','history-radius','post-radius','timing-only','context','sample-budget','sample-floor','save-geometry','artifact-scan'];
   const experimental = command === 'capture';
   if (!experimental && experimentalKeys.some(key => values[key] !== undefined)) {
     throw new Error('Experimental options require the capture command.');
+  }
+  if (values['artifact-scan'] && (values['timing-only'] || denoise !== 'temporal')) {
+    throw new Error('--artifact-scan requires temporal denoising and sidecar output.');
   }
   const temporal = denoise === 'temporal' && experimental ? {...input.temporal} : input.temporal && {...input.temporal};
   const projection = values['reflection-motion'];
@@ -174,6 +178,7 @@ function options(input, command, values) {
   return {duration, fps, first, last, time, sampleBudget, sampleFloor, stride: preview ? 2 : 1,
     settings: {size:[w,h], spp, seed, denoise, seedValue, sampleSequenceOffset:offset, tracer,
       sampleSequence, ...(experimental && {experimentalCapture:true}),
+      ...(values['artifact-scan'] && {experimentalScan:true}),
       ...(sequenceStride !== undefined && {experimentalSequenceStride: sequenceStride}),
       ...(projection === 'planar' && {experimentalPlanar:true}), ...(temporal && {temporal}), display: canonicalDisplay(display, command === 'validate'), format,
       render: values.bounces === undefined ? render : {...render, bounces:number(values.bounces, 'Bounces', 1, 20)}}};
@@ -254,10 +259,12 @@ async function prepare(module, url, worker, settings) {
   const sink = {};
   const legacy = new WeakMap();
   const graphMaterials = new WeakMap();
+  const materialNames = new WeakMap();
   const sync = threeScene ? new THREESync(sink, {
     scene, camera, convertMaterial:approximateLegacy,
     onMeshConverted(mesh, source, group) {
       const original = Array.isArray(source.material) ? source.material[group.materialIndex ?? 0] : source.material;
+      if (original?.name) materialNames.set(mesh.materials[0], original.name);
       const materialX = original?.userData.mutracerMaterialX;
       if (materialX === undefined) return;
       if (!materialX || typeof materialX !== 'object' || !materialX.values) {
@@ -271,11 +278,19 @@ async function prepare(module, url, worker, settings) {
       Object.assign(converted, base, materialX.values);
       converted.graph = materialX.graph;
       mesh.materials = [converted];
+      if (original.name) materialNames.set(converted, original.name);
     },
   }) : undefined;
   const encoder = new NativeSceneEncoder(async () => {throw new Error('Use a loaded HDR texture for the environment.');});
   return {
     geometryCuts: module.experimentalGeometryCuts ?? [],
+    artifactEvents: module.artifactEvents ?? [],
+    get aovNames() {
+      const meshes = (sync ? sink.scene : scene).meshes;
+      const materials = [...new Set(meshes.flatMap(mesh => mesh.materials))];
+      return {objects: meshes.map(mesh => mesh.name || null),
+        materials: materials.map(material => materialNames.get(material) || material.name || null)};
+    },
     get materialsByMeshName() {
       const meshes = (sync ? sink.scene : scene).meshes;
       const materials = [...new Set(meshes.flatMap(mesh => mesh.materials))];
@@ -343,11 +358,15 @@ async function lock(directory) {
   }
 }
 
-async function captureShot(worker, shot, replayShot, opts, values, directory) {
+async function captureShot(worker, shot, replayShot, opts, values, directory, denoiserWeights) {
   if (!worker.info.capabilities.includes('experimental-capture')) {
     throw new Error('Build the native worker with experimental capture support.');
   }
   const {settings, fps, duration, first, last} = opts;
+  const scan = !!values['artifact-scan'];
+  if (scan && !worker.info.capabilities.includes('experimental-artifact-scan')) {
+    throw new Error('Build the native worker with artifact scan support.');
+  }
   const radius = settings.temporal?.historyRadius;
   const latency = settings.denoise === 'temporal' ?
     (typeof radius === 'number' ? radius : radius?.max ?? 16) + (settings.temporal?.postRadius ?? 3) : 0;
@@ -377,15 +396,16 @@ async function captureShot(worker, shot, replayShot, opts, values, directory) {
     emit({event:'sample-plan', frames:planning.plans.length, elapsedMs:timing.pilotMs});
     shot = await replayShot();
   }
-  const materials = {}, cameras = {};
+  const materials = {}, cameras = {}, aovNames = {};
   async function saveInput(index) {
     if (!save(index) || values['timing-only']) return;
-    const {header,bytes} = await worker.request('capture', {});
+    const {header,bytes} = await worker.request('capture', scan ? {scan:true} : {});
     const length = settings.size[0] * settings.size[1] * 16;
     if (header.type !== 'capture' || bytes?.length !== length * 2) throw new NativeError('Invalid capture readback.');
     materials[index] = shot.materialsByMeshName;
+    if (scan) aovNames[index] = shot.aovNames;
     await Promise.all([
-      atomic(prefix(index) + '.hdr.f32', bytes.subarray(0,length)),
+      atomic(prefix(index) + (scan ? '.motion.f32' : '.hdr.f32'), bytes.subarray(0,length)),
       atomic(prefix(index) + '.id.u32', bytes.subarray(length)),
     ]);
   }
@@ -433,7 +453,9 @@ async function captureShot(worker, shot, replayShot, opts, values, directory) {
   }
   await atomic(resolve(directory,'capture.json'),JSON.stringify({
     backend:settings.tracer, build:worker.info.build, first:begin, last:end, saved:[[first,last]],
-    fps, settings, materials, cameras, sampleBudget:opts.sampleBudget, sampleFloor:planning && opts.sampleFloor,
+    fps, settings, materials, cameras,
+    ...(scan && {scan: {aovNames, events: shot.artifactEvents, cuts: shot.geometryCuts, denoiserWeights}}),
+    sampleBudget:opts.sampleBudget, sampleFloor:planning && opts.sampleFloor,
     samplePlanHashes:planning?.plans.map(plan => digest(Buffer.from(plan.targets.buffer))), seconds:(performance.now()-started)/1000, timing,
   },null,2) + '\n');
 }
@@ -454,6 +476,10 @@ async function main() {
   const extension = command === 'still' ? (opts.settings.format ?? 'png') : 'mp4';
   if (command !== 'capture' && values.output && !values.output.toLowerCase().endsWith('.' + extension)) {
     throw new Error(`Output must end in .${extension}.`);
+  }
+  if (values['artifact-scan']) {
+    process.env.MUTRACER_TEMPORAL_SCAN = resolve(values.output);
+    process.env.MUTRACER_TEMPORAL_SCAN_FRAMES = `${opts.first}-${opts.last}`;
   }
   let worker = await openWorker();
   let release;
@@ -535,7 +561,7 @@ async function main() {
         if (await checkReplay() !== early) throw new Error('Shot setup changed between pilot and render.');
         if (canCheck) await frame(timeA,indexA);
         return shot;
-      }, opts, values, output);
+      }, opts, values, output, denoiserWeights);
       return;
     }
     if (command === 'still' && settings.denoise === 'temporal') {

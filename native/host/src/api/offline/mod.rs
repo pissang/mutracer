@@ -547,7 +547,12 @@ impl TemporalDenoiser {
                         (j, changed)
                     })
                     .collect::<Vec<_>>();
-                p.post(i, &neighbors, self.options.stabilize_sparkle)
+                p.post(
+                    i,
+                    &neighbors,
+                    self.options.stabilize_sparkle,
+                    self.frames[&i].frame,
+                )?
             };
             let f = self.frames.get_mut(&i).unwrap();
             self.finished.push_back(OfflineFrame {

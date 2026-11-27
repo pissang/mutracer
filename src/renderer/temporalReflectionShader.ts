@@ -136,7 +136,7 @@ fn packReflectionMetadata(raw: vec4u) -> u32 {
 `;
 export const captureReflectionsWGSL = createCaptureReflectionsWGSL();
 
-export function reflectionWindowWGSL(binding: number, sampleTiles = false) {
+export function reflectionWindowWGSL(binding: number, sampleTiles = false, diagnostics = false) {
   return /* wgsl */ `
 @group(0) @binding(${binding}) var reflected: texture_2d_array<f32>;
 @group(0) @binding(${binding + 1}) var endpoints: texture_2d_array<u32>;
@@ -411,11 +411,28 @@ fn accumulateReflection(
   let fallback = select(1.,fade,isMetal || glossyDielectric);
   let geometricFallback = mix(1.,(1.-amount)*(1.-mismatch)*fallback,trust);
   var surfaceWeight = select(weight*min(surfaceConfidence,geometricFallback),0.,validation.y==OPTICAL_SILHOUETTE);
-  if (surfaceWeight > 0.) { surfaceWeight *= lightingConfidence(x,tap.at,true); }
+  ${diagnostics ? 'var reflectedLightingLimited = false;\n  ' : ''}if (surfaceWeight > 0.) { ${diagnostics ? `
+    let lighting = lightingConfidence(x,tap.at,true);
+    reflectedLightingLimited = lighting<.95;
+    surfaceWeight *= lighting;
+  ` : 'surfaceWeight *= lightingConfidence(x,tap.at,true);'} }
   var virtualW = tent*amount*trust;
-  if (virtualW > 0.) { virtualW *= lightingConfidence(x,virtualTap,true);${sampleTiles ?
+  if (virtualW > 0.) { ${diagnostics ? `
+    let lighting = lightingConfidence(x,virtualTap,true);
+    reflectedLightingLimited = reflectedLightingLimited || lighting<.95;
+    virtualW *= lighting;
+  ` : 'virtualW *= lightingConfidence(x,virtualTap,true);'}${sampleTiles ?
     ' virtualW *= sampleWeight(virtualTap,p.source,fullCoverage(x,virtualTap));' : ''} }
-  total[index] += vec4f((surfaceRgb-reflectedSurface)*weight,weight);
+${diagnostics ? `  if (weight>0.) { diagnosticTap(index,1u); }
+  let hasEndpoint = distanceCode(record)!=0u && dominant>.01;
+  if (hasEndpoint && surfaceWeight+virtualW>0.) { diagnosticTap(index,2u); }
+  diagnosticReason(index,6u,hasEndpoint && (isMetal || glossyDielectric) && fade<.95 && trust>.05);
+  diagnosticReason(index,7u,hasEndpoint && trust<.95);
+  diagnosticReason(index,8u,hasEndpoint && validation.x<=0. && validation.y!=OPTICAL_SILHOUETTE);
+  diagnosticReason(index,9u,validation.y==OPTICAL_SILHOUETTE);
+  diagnosticReason(index,10u,glossyDielectric && surfaceConfidence<.95);
+  diagnosticReason(index,12u,reflectedLightingLimited);
+` : ''}  total[index] += vec4f((surfaceRgb-reflectedSurface)*weight,weight);
   reflectedTotal[index] += vec4f(reflectedSurface*surfaceWeight +
     reflection(virtualTap,p.source)*virtualW,surfaceWeight+virtualW);
   if ((p.mode&32u)!=0u) {

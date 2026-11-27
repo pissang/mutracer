@@ -197,7 +197,7 @@ import aovTraceDisplayWGSL from '../../src/renderer/wgsl/aovTraceDisplay.wgsl.js
 import {captureWGSL} from '../../src/renderer/temporalCaptureShader.js';
 import {createMixedWindowWGSL, mixedWindowWGSL} from '../../src/renderer/temporalWindowShader.js';
 import {createCaptureReflectionsWGSL} from '../../src/renderer/temporalReflectionShader.js';
-import {vetoShader} from '../../src/renderer/temporalSparkleShader.js';
+import {createVetoShader, vetoShader} from '../../src/renderer/temporalSparkleShader.js';
 import {composePackWGSL, createComposePackWGSL, motionCoverageWGSL} from '../../src/renderer/temporalComposeShader.js';
 import {idSnapshot, snapshot, reproject, accumulate, blur} from '../../src/renderer/temporalKernels.js';
 import {combine, match, pyramid} from '../../src/renderer/temporalFlow.js';
@@ -210,6 +210,13 @@ export function postprocessParameters(): Uint8Array {
       windowReflectionsTiles: createMixedWindowWGSL(false, true, 4),
       windowGuidesReflections: createMixedWindowWGSL(true, true),
       windowGuides: createMixedWindowWGSL(true), packGuides: createComposePackWGSL(true),
+      windowScan: createMixedWindowWGSL(false, false, undefined, true),
+      windowReflectionsScan: createMixedWindowWGSL(false, true, undefined, true),
+      windowTilesScan: createMixedWindowWGSL(false, false, 4, true),
+      windowReflectionsTilesScan: createMixedWindowWGSL(false, true, 4, true),
+      windowGuidesReflectionsScan: createMixedWindowWGSL(true, true, undefined, true),
+      windowGuidesScan: createMixedWindowWGSL(true, false, undefined, true),
+      sparkleScan: createVetoShader(true),
       idSnapshot: idSnapshot, snapshot: snapshot, reproject: reproject, accumulate: accumulate, blur: blur, combine: combine, match: match, pyramid: pyramid},
     bloom: nativeBloomShader(), auxiliary: nativeOidnAuxiliaryShader(),
     normalize: nativeOidnNormalizeShader, frame_resolve: frameResolve,

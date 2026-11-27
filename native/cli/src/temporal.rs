@@ -178,8 +178,17 @@ pub fn geometry(render: &api::Render) -> Result<api::OfflineGeometry> {
     .map_err(gpu)
 }
 
-pub fn capture_inputs(render: &api::Render) -> Result<([u32; 2], Vec<u8>)> {
+pub fn capture_inputs(render: &api::Render, scan: bool) -> Result<([u32; 2], Vec<u8>)> {
     watched(TEMPORAL_TIMEOUT, "capture input readback", || {
+        if scan {
+            let motion = render.read_pixels(api::PixelKind::Motion).map_err(gpu)?;
+            let ids = render.read_pixels(api::PixelKind::Id).map_err(gpu)?;
+            let ids = ids.id_data.ok_or_else(|| gpu("Missing input IDs"))?;
+            let mut bytes = Vec::with_capacity((motion.data.len() + ids.len()) * 4);
+            bytes.extend(motion.data.iter().flat_map(|word| word.to_le_bytes()));
+            bytes.extend(ids.iter().flat_map(|word| word.to_le_bytes()));
+            return Ok(([motion.width, motion.height], bytes));
+        }
         let hdr = render.read_pixels(api::PixelKind::Hdr).map_err(gpu)?;
         let ids = render.read_pixels(api::PixelKind::Id).map_err(gpu)?;
         let ids = ids.id_data.ok_or_else(|| gpu("Missing input IDs"))?;
