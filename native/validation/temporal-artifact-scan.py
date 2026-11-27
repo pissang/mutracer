@@ -401,16 +401,22 @@ class Report:
 def review_list(issues, limit):
     if not limit or len(issues) <= limit:
         return issues
-    # A long, high-contrast surface can generate several spatially separate
-    # issues. Keep capacity for other surfaces and both artifact types.
+    # A long surface can produce several separate tracks. Reserve review
+    # capacity for different surfaces and rank repeated reference support first.
+    def reference_supported(issue):
+        evidence = issue.get('referenceEvidence', {})
+        supporting = len(evidence.get('supportingFrames', ()))
+        measured = len(evidence.get('measuredFrames', ()))
+        return supporting >= MIN_FRAMES and supporting * 2 >= measured
+
     seen = defaultdict(int)
     ranked = []
-    for issue in issues:
+    for issue in sorted(issues, key=reference_supported, reverse=True):
         key = issue['type'], issue['object']['id'], issue['object']['instance']
         priority = issue['severity'] / (1 + seen[key])
-        ranked.append((priority, issue))
+        ranked.append(((reference_supported(issue), priority), issue))
         seen[key] += 1
-    selected = {id(issue) for _, issue in sorted(ranked, key=lambda item: -item[0])[:limit]}
+    selected = {id(issue) for _, issue in sorted(ranked, key=lambda item: item[0], reverse=True)[:limit]}
     return [issue for issue in issues if id(issue) in selected]
 
 
@@ -712,6 +718,8 @@ def analyze(temporal_dir, spatial_dir, out, thresholds, reference_dirs=(), refer
     if base_report is not None:
         base_report['calibration'] = 'calibration.json'
         base_report['referenceSpp'] = reference_spp
+        for key in ('issues', 'authoredChanges'):
+            base_report[key] = review_list(base_report[key], issue_limit)
         base_report['cost']['reference capture'] = cost(reference_timing, len(reference_sources))
         base_report['cost']['reference analysis'] = cost(monotonic() - started, len(reference_sources))
         write_report(out, base_report)
@@ -879,10 +887,10 @@ def main():
                     args.fine_frames, make_video=False, calibration_only=True)
         else:
             report = analyze(args.temporal, args.spatial, args.output, thresholds, make_video=make_video,
-                             issue_limit=args.max_issues)
+                             issue_limit=0 if args.reference else args.max_issues)
             if args.reference:
                 analyze(args.temporal, args.spatial, args.output, thresholds, args.reference,
-                        args.fine_frames, make_video=False, base_report=report)
+                        args.fine_frames, make_video=False, base_report=report, issue_limit=args.max_issues)
         return
     if args.scratch:
         args.scratch.mkdir(parents=True, exist_ok=True)
@@ -898,7 +906,7 @@ def main():
             raise ValueError('Set MUTRACER_OIDN_WEIGHTS to the cleanAuxLarge model and its guide weights.')
         capture(args, spatial, args.frames, 'cleanAuxLarge', context=(metadata['first'], metadata['last']))
         report = analyze(temporal, spatial, args.output, thresholds, make_video=make_video,
-                         issue_limit=args.max_issues)
+                         issue_limit=0 if args.fine else args.max_issues)
         if args.fine:
             ranges = args.fine_frames or reference_selection(report)
             first = args.frames[0]
@@ -908,7 +916,7 @@ def main():
                 capture(args, folder, (start, stop), 'temporal', reference=True)
                 references.append(folder)
             analyze(temporal, spatial, args.output, thresholds, references, ranges,
-                    make_video=False, base_report=report)
+                    make_video=False, base_report=report, issue_limit=args.max_issues)
 
 
 if __name__ == '__main__':

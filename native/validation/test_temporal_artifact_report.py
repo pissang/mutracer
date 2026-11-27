@@ -49,6 +49,14 @@ class ReportTests(unittest.TestCase):
             report.advance(frame)
         self.assertEqual(len(report.complete()), 2)
 
+    def test_limited_review_prefers_repeated_reference_support(self):
+        noisy = {'type': 'ghost', 'object': {'id': 1, 'instance': 0}, 'severity': 10,
+                 'referenceEvidence': {'supportingFrames': [10], 'measuredFrames': [10, 11, 12]}}
+        supported = {'type': 'ghost', 'object': {'id': 2, 'instance': 0}, 'severity': 5,
+                     'referenceEvidence': {'supportingFrames': [10, 11, 12], 'measuredFrames': [10, 11, 12]}}
+        self.assertEqual(scan.review_list([noisy, supported], 1), [supported])
+        self.assertEqual(scan.review_list([noisy, supported], 0), [noisy, supported])
+
     def test_reference_support_requires_the_issue_identity(self):
         issue = {'type': 'ghost', 'frameBoxes': [[10, 0, 0, 8, 8], [11, 0, 0, 8, 8]],
                  'object': {'id': 1, 'instance': 0}, 'material': {'id': 2}}
