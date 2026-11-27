@@ -241,6 +241,11 @@ class Report:
         ys, xs = np.nonzero(pixels)
         if xs.size < minimum:
             return
+        tile_columns = (ids.shape[1] + TILE - 1) // TILE
+
+        def occupied_tiles(rows, columns):
+            return frozenset(np.unique((rows // TILE) * tile_columns + columns // TILE).tolist())
+
         active_keys = ids[ys, xs, :3]
         if foreground is not None:
             active_keys = np.column_stack((active_keys, foreground[ys, xs]))
@@ -279,8 +284,8 @@ class Report:
                 events = tuple(event['label'] for event in self.events if
                                matches_event(event, frame, box, name))
                 landed_y, landed_x = warp.nearest[0][yy, xx], warp.nearest[1][yy, xx]
-                landing = [int(landed_x.min()), int(landed_y.min()),
-                           int(landed_x.max()) + 1, int(landed_y.max()) + 1]
+                landing = occupied_tiles(landed_y, landed_x)
+                footprint = occupied_tiles(yy, xx)
                 identity = (kind, object_id, instance, material_id, name, mat, events, source, source_name)
                 weights = window[yy, xx, 10:12].copy().view('<f4')
                 reason_counts = window[yy, xx, 6:10].copy().view(np.uint8)[:, :len(REASONS)].sum(0)
@@ -289,16 +294,18 @@ class Report:
                     correction, support, strength, _ = sparkle[yy, xx].T
                     corrections = float((np.abs(correction) >= .5).mean())
                     vetoes = float(((support >= .5) & (strength >= .03)).mean())
-                self.track(frame, identity, box, landing, yy.size, float(np.percentile(score[yy, xx], 90)),
-                           reason_counts, weights.mean(0), corrections, vetoes,
-                           float(measurements.switch[yy, xx].mean()))
+                self.track(frame, identity, box, footprint, landing, yy.size,
+                           float(np.percentile(score[yy, xx], 90)), reason_counts, weights.mean(0),
+                           corrections, vetoes, float(measurements.switch[yy, xx].mean()))
 
-    def track(self, frame, identity, box, landing, area, peak, reasons, weights, sparkle, vetoes, switches):
+    def track(self, frame, identity, box, footprint, landing, area, peak, reasons, weights, sparkle,
+              vetoes, switches):
         def overlap(region):
-            if region['last'] == frame:
+            if region['last'] != frame - 1:
                 return 0
-            a, b, c, d = landing
-            return box_intersection(region['lastBox'], [a - TILE, b - TILE, c + TILE, d + TILE])
+            previous = region['lastTiles']
+            shared = len(landing & previous)
+            return shared if shared >= .25 * math.sqrt(len(landing) * len(previous)) else 0
 
         active = self.active[identity]
         overlaps = [(overlap(region), region) for region in active]
@@ -317,7 +324,7 @@ class Report:
                       'weights': np.zeros(2), 'sparkle': 0., 'sparkleVetoes': 0., 'switches': 0.}
             active.append(region)
         region['last'] = frame
-        region['lastBox'] = box
+        region['lastTiles'] = footprint
         region['boxes'].append([frame, *box])
         if peak > region['peak']:
             region['peak'], region['peakFrame'] = peak, frame
@@ -341,7 +348,7 @@ class Report:
         remaining = defaultdict(list)
         for identity, regions in self.active.items():
             for region in regions:
-                if frame - region['last'] <= 3:
+                if frame == region['last']:
                     remaining[identity].append(region)
                 elif len({box[0] for box in region['boxes']}) >= MIN_FRAMES:
                     self.finished.append(region)
