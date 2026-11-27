@@ -25,7 +25,7 @@ class Warp:
     def __init__(self, grid, motion, ids, previous_ids):
         h, w = ids.shape[:2]
         y, x = grid
-        mx, my, _, flags = np.moveaxis(motion, -1, 0)
+        mx, my, _, flags = np.ascontiguousarray(np.moveaxis(motion, -1, 0))
         finite = np.isfinite(mx) & np.isfinite(my)
         u, v = x + np.where(finite, mx, 0), y + np.where(finite, my, 0)
         inside = (u >= 0) & (u <= w - 1) & (v >= 0) & (v <= h - 1)
