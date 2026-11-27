@@ -374,82 +374,84 @@ with the next eligible plan after an out-of-memory error.
 
 [How to run the scan](../../native/CONTRIBUTING.md#offline-temporal-artifact-scan)
 
-The quick scan compares the temporal output with a same-settings, same-sequence
-per-frame cleanAuxLarge OIDN capture. It measures the displayed sRGB codes in
+The quick scan compares temporal output with a same-sequence, same-seed
+per-frame cleanAuxLarge OIDN capture. It measures displayed sRGB codes in
 luminance and two half-scale opponent channels, using the largest absolute
-component and a local 3×3 RMS. Backward motion lands in the previous frame.
-Require valid motion, a matching object, instance and material at the nearest
-pixel and at least 60% bilinear support from the same IDs. Only those
-correspondences contribute to the measurements.
+component and a local 3×3 RMS.
 
-**Flicker.** For each output, blend the aligned difference with half the change
-in that difference, using weights of 0.65 and 0.35 wherever three frames agree
-on the trajectory. Use the first difference on shorter tracks. Compare the
-temporal measurement with the OIDN measurement. The initial thresholds require
-two display codes and at least 80% of the per-frame OIDN change. The absolute
-floor suppresses quantization-level activity. The relative threshold treats
-weak improvement over independent filtering as evidence for review.
+Backward motion lands in the previous frame. Require valid motion, matching
+object, instance and material at the nearest pixel and at least 60% bilinear
+support from those IDs. Carry the visibility count along this trajectory.
+The fifth consecutive observation can contribute to the scan. A missing match
+resets the count, so an entering or newly uncovered surface first needs
+comparable history.
 
-**Trails.** Subtract OIDN from the temporal result. The strongest residual
-component must carry the same sign over three aligned frames. Its sign must
-also agree with an older image at that screen position. Subtract signal that
-the old motion-aligned OIDN image already explains. Require at least 0.35 px of
-surface motion or a nearby change in screen-space identity. The initial
-three-code floor and cross-frame sign test reduce isolated OIDN outliers.
-Persistent spatial-filter bias and reflected features without a visible
-surface trajectory can still confuse this comparison.
+**Flicker.** Blend the aligned difference with half the change in that
+difference. Use weights of 0.65 and 0.35 when three observations agree on
+the trajectory. Keep a moving estimate of OIDN innovation energy with a
+one-quarter update per frame. The threshold combines a two-code floor,
+65% of the current OIDN change and the local OIDN noise estimate.
+Use a higher noise threshold on stationary surfaces, where OIDN variation
+more directly estimates sampling noise.
 
-A bright silhouette has additional evidence when a different foreground ID
-occupied the screen position within the last ten frames. Subtract a 10-pixel
-Gaussian from a 1.1-pixel Gaussian of the luminance residual and seek a
-positive result along the receiving surface for three frames. Bound its score by one tenth of the contrast
-available from the old foreground. Require eight display codes and three
-pixels per tile to record the prior foreground ID. This corroborates
-contrasty trails that extend past an old silhouette. The reference threshold
-sweep evaluates the general trail measure. With both history and post radii
-set to zero, classify residual differences as spatial error or flicker.
+**Trails.** Compare temporal with per-frame OIDN. A candidate must have
+three aligned residuals of the same sign, agree with an older image at
+that screen position and exceed the change explained by aligned OIDN.
+Check for a same-sign difference from the previous aligned OIDN image,
+which provides a second observation of the current surface. Give this
+corroborated score a quarter of the weight. Use a three-code floor and
+require at least 0.35 px of surface motion or a nearby screen-space
+identity change. Persistent spatial-filter bias and optical detail that
+moves independently of the center surface can still produce false positives.
 
-**Decisions.** Compare the surface and reflected acceptance masks at the same
-signed tap offsets across aligned frames. Count switches among offsets
-considered in both windows. Measure the fraction of comparable pixels with
-any switch and count offset reversals across three frames. Highlight regions
-when at least 20% of their comparable offsets switch and the local frame
-change exceeds the flicker floor. Window histograms count tap restrictions
-independently, including partial confidence reductions. Where the surface
-window is effectively closed and reflected history remains, prioritize
-reflection checks for the main evidence. Sparkle readback measures the local
-correction and glint veto after post stabilization.
-These observations identify candidate causes for an A/B test. A busy check may
-also be correctly rejecting an unstable signal.
+A bright silhouette can be corroborated by a different foreground ID at the
+screen position in one of the last ten frames. Seek a positive local luminance
+residual along the receiving surface for three frames and bound the score by
+one tenth of the old foreground contrast. Eight display codes and three
+pixels per tile are needed to name the prior foreground. With both history
+and post radii zero, report flicker and omit trail detection.
 
-Eight-pixel tiles need at least six qualifying pixels of the same center
-identity. Join adjacent tiles and track them by motion-projected overlap for
-at least three observations. Severity combines the strongest frame's 90th
-percentile score relative to the thresholds with the logarithm of affected
-pixel-frames. Authored events intersect both the frame range and spatial
-selector. Explicit cuts end trajectories. Annotations cover known changes
-only where the shot author describes their effect. Indirect light and
-reflections can extend past those regions and times.
+**Window evidence.** Compare surface and reflected acceptance masks at the
+same signed offsets across aligned frames. Only offsets considered in both
+windows contribute. Diagnostics count switches, repeated reversals and tap
+restrictions, including partial confidence reductions. When surface history
+is effectively closed and reflected history remains, prioritize reflection
+checks in the evidence. Tap counts and sparkle corrections localize checks
+for a controlled comparison. Compare the paired crops to identify the
+affected feature and the direction of the error.
 
-**Reference calibration.** Use a fixed-seed 256-spp reference with the same
-OIDN weights and display path. The zero-radius, zero-post capture isolates
-each reference frame. Along a valid trajectory, subtract the reference
-signal from the temporal output. The five-frame trailing mean is the
-low-frequency error. Subtract that mean from the current error to obtain
-the high-frequency error. Five frames cover about 210 ms at 24 fps, enough
-for several reversals while limiting drift across motion and local changes.
-A low-frequency trail additionally needs a majority of sign-consistent
-errors, past reference appearance consistent with the trail and a larger
-current error than the OIDN arm. Other low-frequency errors are bias.
+**Grouping.** Eight-pixel tiles need six qualifying pixels of the same
+center identity for general trails and flicker. Join adjacent tiles and link
+regions by occupied tile overlap along consecutive projected observations.
+Merge tracks when a later region overlaps both. Retain tracks with at least
+three observations. Rank severity using the peak per-frame 90th percentile
+relative to the threshold and the logarithm of affected pixel-frames. A limited review list gives some of its
+capacity to different surfaces. Explicit cuts end trajectories. Authored
+events intersect both the frame range and the spatial selector. Indirect
+light and reflected motion can extend beyond both.
 
-Use the same tile size and minimum pixel count to compare quick and reference
-masks on covered frames. Precision is the fraction of quick-positive tiles
-also positive with reference. Recall is the fraction of reference-positive
-tiles also found by quick scan. The search varies amplitude and OIDN ratio
-thresholds and reports the best F1 on those frames. These are frame-tile
-measurements, so a long track can contribute many observations. Verify tuned
-thresholds on held-out footage before using them as review gates. A
-candidate-selected reference range can give an optimistic coverage estimate.
+**Reference calibration.** Render per-frame reference images with the same
+OIDN weights and display path, using zero history and post radii. Subtract
+the reference from the temporal output along a valid center trajectory.
+The five-frame trailing mean is the low-frequency error. Subtract it from
+the current error to measure high-frequency error. A trail needs a majority
+of sign-consistent errors, an older reference feature with the right sign
+and a larger current error in the temporal arm than in per-frame OIDN.
+Other persistent differences can be bias.
+
+Compare quick and reference masks by frame-tile overlap, excluding authored
+events. Precision is the fraction of quick-positive tiles also positive with
+the reference. Recall is the fraction of reference-positive tiles found by
+the quick scan. Train thresholds on designated intervals, then freeze them
+for separate holdout intervals and several low-spp seeds. Include quiet
+footage and use an independent reference seed. Candidate-selected intervals
+can overstate coverage.
+
+For issue review, count reference-positive frames within the object's
+tracked boxes. Inspect the reference, temporal and OIDN crops to confirm the
+same feature, especially when a box contains several overlapping signals.
+A lower-spp reference can reduce review time. Its own residual noise limits
+the errors it can resolve.
 
 [ColorVideoVDP v0.5.7](https://github.com/gfxdisp/ColorVideoVDP/tree/v0.5.7) is
 [MIT-licensed](https://github.com/gfxdisp/ColorVideoVDP/blob/v0.5.7/LICENSE).

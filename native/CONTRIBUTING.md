@@ -848,51 +848,62 @@ independent double-precision brute-force oracle over transformed triangles.
 ## Offline temporal artifact scan
 
 Build the native worker and run `npm run build --prefix cli`. Set
-`MUTRACER_BIN` to that worker and `MUTRACER_OIDN_WEIGHTS` to the three
-[cleanAuxLarge weights](docs/denoising.md). The scanner uses Python 3.10 or later,
-NumPy, SciPy, Pillow and FFmpeg with libx264. Set
-`MUTRACER_SCAN_FFMPEG` if the encoder is outside your PATH.
+`MUTRACER_BIN` to the worker and `MUTRACER_OIDN_WEIGHTS` to the three
+[cleanAuxLarge weights](docs/denoising.md). The scan uses Python 3.10 or later,
+NumPy, SciPy, Pillow and FFmpeg with libx264. Set `MUTRACER_SCAN_FFMPEG` if
+FFmpeg is outside your PATH.
 
 ```sh
 python3 native/validation/temporal-artifact-scan.py run native/validation/temporal-promo.shot.mjs \
   --frames 0-399 --spp 3 --size 1280x720 -o /tmp/promo-scan
 ```
 
-Use a zero-based inclusive frame range. The command uses hardware traversal and
-the shot's display and temporal settings. It accepts `--history-radius`,
-`--post-radius`, `--reflection-motion` and `--sample-stride` for paired trials.
-Use `--gpu-lock PATH` when a shared GPU lock is available. `--fine` adds a
-256-spp reference for up to three short intervals. Pass `--fine-frames A-B`
-repeatedly to choose the intervals. Include uneventful footage to measure misses
-and false positives outside the flagged regions.
+Use a zero-based inclusive frame range. The scan uses hardware traversal and
+the shot's display and temporal settings. Use `--gpu-lock PATH` for a shared
+GPU and `--history-radius`, `--post-radius`, `--reflection-motion` or
+`--sample-stride` for paired trials. `--fine` renders up to three short
+reference intervals by default. Use repeated `--fine-frames A-B` to choose
+intervals, including quiet footage. The reference defaults to 256 spp.
+`--fine-spp 64` and `--fine-spp 128` trade reference quality for render time.
 
-- `heatmaps.mp4` overlays flicker on the left and trail evidence on the right.
-- `issues.json` and `issues.md` rank tracked regions by severity. JSON includes
-  per-frame pixel bounds, object and material IDs, window weights, tap evidence
-  and measured cost per frame. A corroborated bright silhouette trail includes
-  the prior foreground object. Regions overlapping authored changes have their
-  own section.
-- `calibration.json` reports precision, recall and threshold candidates over
-  frames with reference coverage. Use `--thresholds FILE` with numeric
-  `flicker`, `oidn_ratio`, `ghost` or `switch` overrides to check a new setting.
+- `issues.md` and `issues.json` show grouped flicker and trails with object
+  and material names, ranked by severity. `--max-issues` defaults to 40
+  per section. A limited report prioritizes distinct surfaces and gives
+  the full group count. A fine report prioritizes repeated reference support
+  when limiting the list. Use `--max-issues 0` for every group. JSON includes
+  the per-frame bounds, original IDs, window weights, accepted-tap changes
+  and any identified prior foreground object.
+- `heatmaps.mp4` shows flicker on the left and trail evidence on the right.
+- Fine reports show how often the reference supports each issue in measured
+  frames. `calibration.json` reports frame-tile precision, recall and a
+  threshold sweep. Use `--thresholds FILE` for JSON overrides such as
+  `flicker`, `oidn_ratio`, `ghost`, `reference_flicker` and `reference_ghost`.
 
-A shot can export `artifactEvents` with entries such as
+For existing paired captures, use `analyze TEMPORAL OIDN` with repeated
+`--reference DIR` options. Add `--calibration-only` to score reference
+intervals without rebuilding the issue list or heatmap. Captures in each
+low-spp pair must share a seed. Use an independent fixed-seed reference to
+compare several pairs against the same target.
+
+Provide mesh and material names in the shot for readable reports. A shot
+can export `artifactEvents` with entries like
 `{label: 'Screen changes color', first: 30, last: 32, objects: ['screen']}`.
-Each entry can also have a top-left, half-open pixel `box: [x0, y0, x1, y1]`.
-A missing spatial selector applies the event to the entire frame. Include
+An entry can include a top-left, half-open pixel `box: [x0, y0, x1, y1]`.
+Without a spatial selector, the event applies to the whole frame. Include
 receivers of known lighting changes when they matter to the review.
 
 Quick scan costs two low-spp captures plus readback and analysis. At 720p,
 allow roughly 85 MiB of temporary storage per saved frame before PNGs. Use
-`--scratch DIR` on a volume with enough space. The command removes its
-temporary captures on exit. Reference capture costs a 256-spp render and OIDN
-for each selected frame plus up to four preceding frames of analysis context.
-The output reports actual seconds per saved frame, including render context.
+`--scratch DIR` to choose the volume. The command removes temporary captures
+on exit. A reference render adds the selected sample count and OIDN per frame,
+plus up to four context frames per interval. Reports give measured seconds
+per saved frame for each stage.
 
-The heatmaps mark candidates in the SDR preview. Center AOVs lose
-correspondence at disocclusions and can follow a different trajectory from
-reflections and transparency. Small regions, brief glitches and changes
-outside the annotated regions can escape classification. See the
+Quick results need visual review on reflective and transparent surfaces.
+Center motion can follow a different trajectory from reflected or refracted
+detail. Newly visible surfaces need five consecutive observations, and small
+regions or brief glitches can be missed. Reference support covers only the
+measured frames. See the
 [measurement method](../docs/technical/temporal-denoising.md#offline-artifact-scan).
 
 ## AOV integration checks
