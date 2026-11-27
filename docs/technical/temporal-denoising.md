@@ -369,3 +369,79 @@ with the next eligible plan after an out-of-memory error.
 - Test scenes with static lighting cannot reveal lighting-change failures.
   Keep a deforming and a lighting-change fixture beside the camera-move
   archive.
+
+
+### Offline artifact scan
+
+[How to run the scan](../../native/CONTRIBUTING.md#offline-temporal-artifact-scan)
+
+The quick scan compares the temporal output with a same-settings, same-sequence
+per-frame cleanAuxLarge OIDN capture. It measures the displayed sRGB codes in
+luminance and two half-scale opponent channels, using the largest absolute
+component and a local 3×3 RMS. Backward motion lands in the previous frame.
+Require valid motion, a matching object, instance and material at the nearest
+pixel and at least 60% bilinear support from the same IDs. Only those
+correspondences contribute to the measurements.
+
+**Flicker.** For each output, blend the aligned difference with half the change
+in that difference, using weights of 0.65 and 0.35 wherever three frames agree
+on the trajectory. Use the first difference on shorter tracks. Compare the
+temporal measurement with the OIDN measurement. The initial thresholds require
+two display codes and at least 80% of the per-frame OIDN change. The absolute
+floor suppresses quantization-level activity. The relative threshold treats
+weak improvement over independent filtering as evidence for review.
+
+**Trails.** Subtract OIDN from the temporal result. The strongest residual
+component must carry the same sign over three aligned frames. Its sign must
+also agree with an older image at that screen position. Subtract signal that
+the old motion-aligned OIDN image already explains. Require at least 0.35 px of
+surface motion or a nearby change in screen-space identity. The initial
+three-code floor and cross-frame sign test reduce isolated OIDN outliers.
+Persistent spatial-filter bias and reflected features without a visible
+surface trajectory can still confuse this comparison.
+
+**Decisions.** Compare the surface and reflected acceptance masks at the same
+signed tap offsets across aligned frames. Count switches among offsets
+considered in both windows. Measure the fraction of comparable pixels with
+any switch and count offset reversals across three frames. Highlight regions when at least 20% of their comparable offsets
+switch and the local frame change exceeds the flicker floor. Window histograms
+count tap restrictions independently, including partial confidence reductions.
+Sparkle readback measures the local correction after post stabilization.
+These observations identify candidate causes for an A/B test. A busy check may
+also be correctly rejecting an unstable signal.
+
+Eight-pixel tiles need at least six qualifying pixels of the same center
+identity. Join adjacent tiles and track them by motion-projected overlap for
+at least three observations. Severity combines the strongest frame's 90th
+percentile score relative to the thresholds with the logarithm of affected
+pixel-frames. Authored events intersect both the frame range and spatial
+selector. Explicit cuts end trajectories. Annotations cover known changes
+only where the shot author describes their effect. Indirect light and
+reflections can extend past those regions and times.
+
+**Reference calibration.** Use a fixed-seed 256-spp reference with the same
+OIDN weights and display path. The zero-radius, zero-post capture isolates
+each reference frame. Along a valid trajectory, subtract the reference
+signal from the temporal output. The five-frame trailing mean is the
+low-frequency error. Subtract that mean from the current error to obtain
+the high-frequency error. Five frames cover about 210 ms at 24 fps, enough
+for several reversals while limiting drift across motion and local changes.
+A low-frequency trail additionally needs a majority of sign-consistent
+errors, past reference appearance consistent with the trail and a larger
+current error than the OIDN arm. Other low-frequency errors are bias.
+
+Use the same tile size and minimum pixel count to compare quick and reference
+masks on covered frames. Precision is the fraction of quick-positive tiles
+also positive with reference. Recall is the fraction of reference-positive
+tiles also found by quick scan. The search varies amplitude and OIDN ratio
+thresholds and reports the best F1 on those frames. These are frame-tile
+measurements, so a long track can contribute many observations. Verify tuned
+thresholds on held-out footage before using them as review gates. A
+candidate-selected reference range can give an optimistic coverage estimate.
+
+[ColorVideoVDP v0.5.7](https://github.com/gfxdisp/ColorVideoVDP/tree/v0.5.7) is
+[MIT-licensed](https://github.com/gfxdisp/ColorVideoVDP/blob/v0.5.7/LICENSE).
+It can supply display-dependent full-reference visibility estimates as an
+external tool. The scan uses display codes so it can run without a calibrated
+viewing model and keep distinct measurements for flicker, trails and history
+decisions.

@@ -845,6 +845,55 @@ uses the fixture from `gltf_browser_reference_fixture` to check glTF C import an
 picking together. Rust picking tests additionally compare 500 rays with an
 independent double-precision brute-force oracle over transformed triangles.
 
+## Offline temporal artifact scan
+
+Build the native worker and run `npm run build --prefix cli`. Set
+`MUTRACER_BIN` to that worker and `MUTRACER_OIDN_WEIGHTS` to the three
+[cleanAuxLarge weights](docs/denoising.md). The scanner uses Python 3.10 or later,
+NumPy, SciPy, Pillow and FFmpeg with libx264. Set
+`MUTRACER_SCAN_FFMPEG` if the encoder is outside your PATH.
+
+```sh
+python3 native/validation/temporal-artifact-scan.py run native/validation/temporal-promo.shot.mjs \
+  --frames 0-399 --spp 3 --size 1280x720 -o /tmp/promo-scan
+```
+
+Use a zero-based inclusive frame range. The command uses hardware traversal and
+the shot's display and temporal settings. It accepts `--history-radius`,
+`--post-radius`, `--reflection-motion` and `--sample-stride` for paired trials.
+Use `--gpu-lock PATH` when a shared GPU lock is available. `--fine` adds a
+256-spp reference for up to three short intervals. Pass `--fine-frames A-B`
+repeatedly to choose the intervals. Include uneventful footage to measure misses
+and false positives outside the flagged regions.
+
+- `heatmaps.mp4` overlays flicker on the left and trail evidence on the right.
+- `issues.json` and `issues.md` rank tracked regions by severity. JSON includes
+  per-frame pixel bounds, object and material IDs, window weights, tap evidence
+  and measured cost per frame. Regions overlapping authored changes have their
+  own section.
+- `calibration.json` reports precision, recall and threshold candidates over
+  frames with reference coverage. Use `--thresholds FILE` with numeric
+  `flicker`, `oidn_ratio`, `ghost` or `switch` overrides to check a new setting.
+
+A shot can export `artifactEvents` with entries such as
+`{label: 'Screen changes color', first: 30, last: 32, objects: ['screen']}`.
+Each entry can also have a top-left, half-open pixel `box: [x0, y0, x1, y1]`.
+A missing spatial selector applies the event to the entire frame. Include
+receivers of known lighting changes when they matter to the review.
+
+Quick scan costs two low-spp captures plus readback and analysis. At 720p,
+allow roughly 85 MiB of temporary storage per saved frame before PNGs. Use
+`--scratch DIR` on a volume with enough space. The command removes its
+temporary captures on exit. Reference capture costs a 256-spp render and OIDN
+for each selected frame plus up to four preceding frames of analysis context.
+The output reports actual seconds per saved frame, including render context.
+
+The heatmaps mark candidates in the SDR preview. Center AOVs lose
+correspondence at disocclusions and can follow a different trajectory from
+reflections and transparency. Small regions, brief glitches and changes
+outside the annotated regions can escape classification. See the
+[measurement method](../docs/technical/temporal-denoising.md#offline-artifact-scan).
+
 ## AOV integration checks
 
 The scene API C host in `native:ci:hosts` compares explicit descriptor IDs with
