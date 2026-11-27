@@ -25,6 +25,7 @@ TILE = 8
 MIN_PIXELS = 6
 MIN_FRAMES = 3
 DEFAULT_ISSUE_LIMIT = 40
+REFERENCE_SAMPLES = (64, 128, 256)
 TYPES = ('flicker', 'ghost')
 REASONS = (
     'surface correspondence', 'surface geometry', 'missing radiance',
@@ -433,7 +434,9 @@ class ReferenceReview:
         for item, boxes in self.by_frame.get(frame, ()):
             identity = (item['object']['id'], item['object']['instance'], item['material']['id'])
             measured = supported = False
-            positive = evidence[item['type']]
+            positive = evidence.get(item['type'])
+            if positive is None:
+                continue
             for x0, y0, x1, y1 in boxes:
                 rows = np.s_[y0:y1, x0:x1]
                 surface = valid[rows] & np.all(ids[rows][..., :3] == identity, axis=-1)
@@ -538,7 +541,8 @@ def write_report(out, result):
         if values:
             lines.append(f"| {label} | {values['seconds']:.3f} | {values['secondsPerFrame']:.3f} |")
     if result['calibration']:
-        lines.extend(['', 'Reference precision, recall and threshold sweep are in `calibration.json`.'])
+        lines.extend(['', f"{result.get('referenceSpp', 256)}-spp reference precision, recall "
+                          'and threshold sweep are in `calibration.json`.'])
     (out / 'issues.md').write_text('\n'.join(lines) + '\n')
 
 
@@ -565,14 +569,19 @@ def analyze(temporal_dir, spatial_dir, out, thresholds, reference_dirs=(), refer
         cuts.add(cut if isinstance(cut, int) else math.ceil(cut['time'] * temporal['fps']))
     reference_sources = {}
     reference_seeds = set()
+    reference_spp = None
     reference_timing = 0.
     for folder in reference_dirs:
         data = load_metadata(folder)
         ref_settings = data['settings']
         comparable = ('size', 'tracer', 'display', 'render')
-        if (ref_settings['spp'] != 256 or ref_settings['seed'] != 'fixed' or data['fps'] != temporal['fps']
+        spp = ref_settings['spp']
+        if (spp not in REFERENCE_SAMPLES or (reference_spp is not None and reference_spp != spp)
+                or ref_settings['seed'] != 'fixed' or data['fps'] != temporal['fps']
                 or any(ref_settings.get(k) != temporal['settings'].get(k) for k in comparable)):
-            raise ValueError(f'Reference {folder} must use 256 spp, a fixed seed and the same view settings.')
+            raise ValueError(f'Reference {folder} must use a consistent sample count '
+                             f'{REFERENCE_SAMPLES}, a fixed seed and the same view settings.')
+        reference_spp = spp
         reference_seeds.add(ref_settings['seedValue'])
         reference_timing += data['seconds']
         for start, stop in data['saved']:
@@ -588,8 +597,8 @@ def analyze(temporal_dir, spatial_dir, out, thresholds, reference_dirs=(), refer
                     raise ValueError(f'Reference camera differs at frame {index}.')
                 reference_sources[index] = folder
     evaluated = {frame for start, stop in reference_ranges for frame in range(start, stop + 1)}
-    if evaluated.difference(reference_sources):
-        raise ValueError('Reference images do not cover every requested evaluation frame.')
+    if evaluated.difference(reference_sources) or any(not first <= index <= last for index in evaluated):
+        raise ValueError('Paired captures and reference must cover every requested evaluation frame.')
     grid = np.indices(shape, dtype=np.float32)
     track_issues = base_report is None and not calibration_only
     if calibration_only and not reference_sources:
@@ -695,11 +704,13 @@ def analyze(temporal_dir, spatial_dir, out, thresholds, reference_dirs=(), refer
         report_data = calibration.report()
         report_data['seedValue'] = temporal['settings']['seedValue']
         report_data['referenceSeedValues'] = sorted(reference_seeds)
+        report_data['referenceSpp'] = reference_spp
         dump_json(out / 'calibration.json', report_data)
     if calibration_only:
         return
     if base_report is not None:
         base_report['calibration'] = 'calibration.json'
+        base_report['referenceSpp'] = reference_spp
         base_report['cost']['reference capture'] = cost(reference_timing, len(reference_sources))
         base_report['cost']['reference analysis'] = cost(monotonic() - started, len(reference_sources))
         write_report(out, base_report)
@@ -721,6 +732,7 @@ def analyze(temporal_dir, spatial_dir, out, thresholds, reference_dirs=(), refer
         'settings': temporal['settings'], 'denoiserWeights': scan.get('denoiserWeights'),
         'heatmaps': 'heatmaps.mp4' if make_video else None,
         'calibration': 'calibration.json' if calibration else None,
+        'referenceSpp': reference_spp,
         'cost': {
             'temporal capture': cost(temporal['seconds'], count),
             'spatial capture': cost(spatial['seconds'], count),
@@ -782,7 +794,8 @@ def capture(args, folder, frames, mode, reference=False, context=None):
     if reference:
         # A zero-radius window takes the same OIDN and presentation path as the
         # filtered arm while preserving the reference frame's independent samples.
-        command.extend(('--timing-only', '--spp', '256', '--sample-stride', '256',
+        spp = str(args.fine_spp)
+        command.extend(('--timing-only', '--spp', spp, '--sample-stride', spp,
                         '--reflection-motion', 'off', '--history-radius', '0', '--post-radius', '0'))
     else:
         for key in ('spp', 'sample_stride'):
@@ -822,7 +835,9 @@ def command_line():
     run.add_argument('shot', type=Path)
     run.add_argument('--frames', type=frame_range, required=True)
     run.add_argument('--context', type=frame_range)
-    run.add_argument('--fine', action='store_true', help='Render 256-spp reference intervals')
+    run.add_argument('--fine', action='store_true', help='Render reference intervals')
+    run.add_argument('--fine-spp', type=int, choices=REFERENCE_SAMPLES, default=256,
+                     help='Reference samples per pixel (default 256)')
     run.add_argument('--cli', type=Path, default=ROOT / 'cli/dist/main.mjs')
     run.add_argument('--gpu-lock', type=Path, default=os.environ.get('MUTRACER_SCAN_GPU_LOCK'))
     run.add_argument('--scratch', type=Path, help='Parent directory for temporary captures')
@@ -841,9 +856,9 @@ def command_line():
     if args.command == 'analyze' and args.calibration_only and not args.reference:
         parser.error('--calibration-only requires --reference.')
     args.output = args.output.resolve()
-    if args.command == 'run' and args.fine_frames:
-        if not args.fine:
-            parser.error('--fine-frames requires --fine.')
+    if args.command == 'run':
+        if (args.fine_frames or args.fine_spp != 256) and not args.fine:
+            parser.error('--fine-frames and --fine-spp require --fine.')
         if any(start < args.frames[0] or stop > args.frames[1] for start, stop in args.fine_frames):
             parser.error('Fine intervals must fit within --frames.')
     return args
