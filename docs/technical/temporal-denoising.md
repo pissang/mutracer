@@ -86,6 +86,70 @@ uses its requested count everywhere. Tune supplemental sampling and
 offline temporal quality on native before synchronizing stable results to
 WebGPU.
 
+### Status and rejected allocators
+
+Development is paused with the geometry predictor, a 4×4 pilot and 4×4
+allocation. On smooth reflective metals it clearly lowers error at the same
+total budget. Elsewhere it moves samples away from surfaces with adequate
+predicted history. Their error then follows their reduced local sample count.
+Its ghosting scores stay close to those of uniform sampling at the same local
+sample count. Compare allocators at equal total budget, and judge each
+region against uniform sampling at that region's actual sample count.
+
+These variants were tested on native and not adopted. Their branches were
+removed, so each entry records enough to rebuild it.
+
+- **Two-stage sampling.** The variants below share this setup. Each frame first
+  renders its base count while a reduction keeps per-tile luminance mean and
+  variance. After the CPU allocation, rendering resumes on the same
+  accumulation up to each tile's target. No base sample is discarded.
+- **Measured variance.** Let `s` be the geometric support of a tile, `μ` and
+  `σ²` its base-pass luminance moments, and `n` its current count. The
+  display-scaled variance is `v = min(4, σ² / (0.04 + μ)^1.25)`. Each
+  increment from `n` to `n+1` gets the benefit
+  `p / (n(n+1))`, with `p = (prior + v) / s^1.3`. The prior is 0.25 where
+  the geometry plan found weak history (`s < 1.5` and at least three extra
+  samples), and 0.04 elsewhere. Once `s·n` meets the floor, a tile stops if
+  `v < 0.12`. Otherwise its benefit is scaled by 0.3. Tiles that meet the
+  floor at the base count may receive their first extra sample on at most
+  1.5% of such pixels. Gains on lighting noise were small, and the second
+  sampling stage added a noticeable per-frame cost. Reprojecting the previous
+  frame's variance instead of pooling within the frame did not help.
+- **Lighting rejection forecast.** The window's paired-patch lighting test
+  compares the current base pass with up to four earlier frames and yields a
+  per-tile rejected fraction `r`. Support becomes `1 + (s − 1)(1 − r)`,
+  assuming the same loss on both sides, before the variance ranking. Its
+  gain held only on the forecast's own mask. On masks built from the window's
+  actual rejections, it raised error and diverted samples from reflections.
+- **2×2 allocation.** Pilot and allocation ran on 2×2 tiles with the same
+  ranking. Splitting the two grids showed the loss came from the finer
+  allocation grid, not from the pilot resolution. Allocation also became
+  several times slower. The sample texture accepts one-pixel tiles.
+- **Ghost-risk ranking.** For each tile, compare the base-pass mean `μ` with
+  the previous frame's tile `μ′` reached through the pilot links. Let
+  `d = |μ − μ′|`, `e` the standard error of the difference and `j = μ + μ′`.
+  Changes larger than the noise, `√(d² − e²)` beyond `0.015 j`, add risk.
+  Changes whose normalized evidence `(d − 0.75e) / j` lies near the lighting
+  test's 0.015–0.055 transition add a further boundary term. The risk is
+  scaled by the history fraction `(s − 1) / s`. The ranking spends the geometry
+  plan's extra budget. The variance benefit counts only up to the geometry
+  plan's target, and tiles with risk may continue to the cap. The window also
+  required stronger brightness support for same-surface taps next to nearer
+  geometry. The fourth-brightest matching pixel in the 3×3 neighborhood had to
+  corroborate them. Ghosting rose above both uniform and geometry allocation. In
+  the segment examined, forcing every `nⱼ` to one removed more than half of the
+  gap. A sampled frame is also history for its neighbors, so its extra samples
+  raise `nⱼ` on taps that may be mismatched there. Revisit the count weighting
+  before an allocator targets pixels that neighboring frames reuse as history.
+
+More samples lower the ghosting scores mostly through the sampled radiance
+itself, not through stricter rejection decisions.
+
+The planner needs only `R` frames of lookahead, where `R` is the window
+radius. Replaying the pilot with a rolling link buffer of `2R+1` frames gives
+the same support and plans as the whole-shot pilot. A streaming `push()` path
+would need pilot state separate from the beauty scene. It does not exist yet.
+
 ## Why this design
 
 The target is offline animation at a low fixed sample count (32 spp in the
@@ -275,6 +339,15 @@ with the next eligible plan after an out-of-memory error.
 - A deterministic renderer repeats bit-exactly, so zero run-to-run spread does
   not bound noise. Judge drift changes per frame pair with a paired sign test,
   and pair it with a regional PSNR limit.
+- Native live renders with Metal hardware traversal are not bit-exact. The
+  same build and seed can differ at isolated raw HDR pixels, reproducible at
+  one sample per pixel with two bounces. Frozen replay is the byte-for-byte
+  check. Same-seed repeats measure only this build noise, not sampling noise.
+  A signed ghosting projection on one fixed seed can change sign between
+  sample counts. Small differences need several seeds before they can gate
+  a change.
+- Build evaluation masks independently of the method under test. A mask
+  produced by an allocator's own forecast rewards that forecast.
 - Localize a regression by stage before tuning: OIDN input, post-only, and the
   full output, each against the baseline. Here a sideboard drift change looked
   like a post-stage problem, but it was already present in the window's OIDN
