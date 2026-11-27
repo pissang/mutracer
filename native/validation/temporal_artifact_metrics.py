@@ -206,3 +206,45 @@ class ReferenceMetrics:
         self.history = errors, depth
         self.previous = (([] if self.previous is None else self.previous[-2:]) + [reference])
         return result
+
+
+class ForegroundTrails:
+    """Corroborate a bright trail with an earlier foreground footprint."""
+
+    def __init__(self):
+        self.history = []
+        self.previous_residual = None
+        self.older_residual = None
+
+    def reset(self):
+        self.history.clear()
+        self.previous_residual = None
+        self.older_residual = None
+
+    def push(self, temporal, spatial, ids, warp):
+        y = spatial[..., 0].copy()
+        objects = ids[..., 0].copy()
+        error = temporal[..., 0] - y
+        local = ndimage.gaussian_filter(error, 1.1) - ndimage.gaussian_filter(error, 10.)
+        score = np.zeros_like(y)
+        sources = np.zeros_like(objects)
+        older = None
+        if warp is not None and self.previous_residual is not None:
+            older = np.where(warp.valid, self.previous_residual[warp.nearest], 0)
+            if len(self.history) >= 3 and self.older_residual is not None:
+                oldest = np.where(warp.valid, self.older_residual[warp.nearest], 0)
+                old_y = self.history[-1][0]
+                aligned = warp.sample(old_y[..., None])[..., 0]
+                footprint = np.zeros_like(y)
+                for previous_y, previous_ids in self.history:
+                    delta = previous_y - y
+                    prefer = (previous_ids != objects) & (delta > footprint)
+                    footprint = np.where(prefer, delta, footprint)
+                    sources = np.where(prefer, previous_ids, sources)
+                evidence = np.maximum(0, footprint - np.maximum(0, aligned - y))
+                score = np.maximum(0, np.minimum.reduce((local, 1.25 * older, 1.5 * oldest, .1 * evidence)))
+                score *= warp.valid
+        self.history.append((y, objects))
+        self.history = self.history[-10:]
+        self.previous_residual, self.older_residual = local, older
+        return score, sources

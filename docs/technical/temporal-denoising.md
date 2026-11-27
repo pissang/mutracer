@@ -399,6 +399,15 @@ three-code floor and cross-frame sign test reduce isolated OIDN outliers.
 Persistent spatial-filter bias and reflected features without a visible
 surface trajectory can still confuse this comparison.
 
+A bright silhouette has additional evidence when a different foreground ID
+occupied the screen position within the last ten frames. Subtract a 10-pixel
+Gaussian from a 1.1-pixel Gaussian of the luminance residual and seek a
+positive result along the receiving surface for three frames. Bound its score by one tenth of the contrast
+available from the old foreground. Require eight display codes and three
+pixels per tile to record the prior foreground ID. This corroborates
+contrasty trails that extend past an old silhouette. The reference threshold
+sweep evaluates the general trail measure.
+
 **Decisions.** Compare the surface and reflected acceptance masks at the same
 signed tap offsets across aligned frames. Count switches among offsets
 considered in both windows. Measure the fraction of comparable pixels with

@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-from temporal_artifact_metrics import QuickMetrics, ReferenceMetrics, Warp, tap_switches
+from temporal_artifact_metrics import ForegroundTrails, QuickMetrics, ReferenceMetrics, Warp, tap_switches
 
 
 class MetricTests(unittest.TestCase):
@@ -75,6 +75,28 @@ class MetricTests(unittest.TestCase):
         self.assertGreater(high[10, 8], 5)
         self.assertGreater(low[10, edge - 2], 3)
         self.assertEqual(low[10, 8], 0)
+
+    def test_foreground_trail_identifies_the_old_bright_object(self):
+        detector = ForegroundTrails()
+        self.motion[..., 0] = -1
+        previous = None
+        for i in range(7):
+            edge = 9 + 3 * i
+            ids = self.ids.copy()
+            ids[:, edge:edge + 8, 0] = 2
+            spatial = self.frame(20)
+            spatial[:, edge:edge + 8, 0] = 230
+            temporal = spatial.copy()
+            temporal[:, edge - 9:edge, 0] += 45
+            warp = None if previous is None else Warp(self.grid, self.motion, ids, previous)
+            score, sources = detector.push(temporal, spatial, ids, warp)
+            previous = ids
+        self.assertGreater(score[12, edge - 6], 8)
+        self.assertEqual(sources[12, edge - 6], 2)
+        self.assertEqual(score[12, edge + 2], 0)
+        detector.reset()
+        score, _ = detector.push(spatial, spatial, ids, None)
+        self.assertFalse(score.any())
 
     def test_static_bias_is_not_a_trail(self):
         quick, fine = QuickMetrics(), ReferenceMetrics()

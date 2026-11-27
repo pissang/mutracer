@@ -869,7 +869,8 @@ and false positives outside the flagged regions.
 - `heatmaps.mp4` overlays flicker on the left and trail evidence on the right.
 - `issues.json` and `issues.md` rank tracked regions by severity. JSON includes
   per-frame pixel bounds, object and material IDs, window weights, tap evidence
-  and measured cost per frame. Regions overlapping authored changes have their
+  and measured cost per frame. A corroborated bright silhouette trail includes
+  the prior foreground object. Regions overlapping authored changes have their
   own section.
 - `calibration.json` reports precision, recall and threshold candidates over
   frames with reference coverage. Use `--thresholds FILE` with numeric

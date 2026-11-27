@@ -17,7 +17,7 @@ import numpy as np
 from PIL import Image
 from scipy import ndimage
 
-from temporal_artifact_metrics import QuickMetrics, ReferenceMetrics, Warp, display_signal
+from temporal_artifact_metrics import ForegroundTrails, QuickMetrics, ReferenceMetrics, Warp, display_signal
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -40,6 +40,7 @@ class Thresholds:
     flicker: float = 2.0
     oidn_ratio: float = .8
     ghost: float = 3.0
+    foreground_trail: float = 8.0
     switch: float = .2
     reference_flicker: float = 2.0
     reference_ghost: float = 3.0
@@ -197,6 +198,7 @@ class Calibration:
                 if kind == 'flicker':
                     recommendation[kind]['oidn_ratio'] = best['oidn_ratio']
         return {'frames': self.frames, 'cellSize': TILE, 'minimumPixels': MIN_PIXELS,
+                'thresholds': asdict(self.thresholds),
                 'comparison': 'Per-frame tile overlap on valid five-frame tracks. Authored events excluded.',
                 'referenceError': self.reference_error, 'rows': rows, 'recommendation': recommendation}
 
@@ -208,11 +210,15 @@ class Report:
         self.names = scan.get('aovNames', {})
         self.events = events
 
-    def append(self, frame, kind, score, pixels, ids, window, sparkle, measurements, warp):
+    def append(self, frame, kind, score, pixels, ids, window, sparkle, measurements, warp,
+               foreground=None):
+        minimum = MIN_PIXELS if foreground is None else 3
         ys, xs = np.nonzero(pixels)
-        if xs.size < MIN_PIXELS:
+        if xs.size < minimum:
             return
         active_keys = ids[ys, xs, :3]
+        if foreground is not None:
+            active_keys = np.column_stack((active_keys, foreground[ys, xs]))
         keys, inverse = np.unique(active_keys, axis=0, return_inverse=True)
         names = self.names.get(str(frame), {})
 
@@ -222,16 +228,18 @@ class Report:
 
         for label, key in enumerate(keys):
             select = inverse == label
-            if np.count_nonzero(select) < MIN_PIXELS:
+            if np.count_nonzero(select) < minimum:
                 continue
             y, x = ys[select], xs[select]
             y0, x0 = (y.min() // TILE) * TILE, (x.min() // TILE) * TILE
             local_y, local_x = (y - y0) // TILE, (x - x0) // TILE
             tiles = np.zeros((local_y.max() + 1, local_x.max() + 1), dtype=np.uint16)
             np.add.at(tiles, (local_y, local_x), 1)
-            components, _ = ndimage.label(tiles >= MIN_PIXELS, np.ones((3, 3)))
+            components, _ = ndimage.label(tiles >= minimum, np.ones((3, 3)))
             component_ids = components[local_y, local_x]
-            object_id, instance, material_id = map(int, key)
+            object_id, instance, material_id = map(int, key[:3])
+            source = int(key[3]) if foreground is not None else None
+            source_name = name_for(source, 'objects') if source is not None else None
             name = name_for(object_id, 'objects')
             mat = name_for(material_id, 'materials')
             for component in np.unique(component_ids):
@@ -245,7 +253,7 @@ class Report:
                 landed_y, landed_x = warp.nearest[0][yy, xx], warp.nearest[1][yy, xx]
                 landing = [int(landed_x.min()), int(landed_y.min()),
                            int(landed_x.max()) + 1, int(landed_y.max()) + 1]
-                identity = (kind, object_id, instance, material_id, name, mat, events)
+                identity = (kind, object_id, instance, material_id, name, mat, events, source, source_name)
                 weights = window[yy, xx, 10:12].copy().view('<f4')
                 reason_counts = window[yy, xx, 6:10].copy().view(np.uint8)[:, :len(REASONS)].sum(0)
                 corrections = vetoes = 0.
@@ -297,7 +305,7 @@ class Report:
         self.advance(math.inf)
         result = []
         for region in self.finished:
-            kind, obj, instance, mat, name, material, events = region['identity']
+            kind, obj, instance, mat, name, material, events, source, source_name = region['identity']
             frames = region['boxes']
             pixel_frames = region['pixelFrames']
             bounds = [min(x[1] for x in frames), min(x[2] for x in frames),
@@ -325,6 +333,7 @@ class Report:
                 'severity': round(region['peak'] * math.log2(1 + pixel_frames / TILE ** 2), 3),
                 'peakSignal': round(region['peak'], 3), 'peakFrame': region['peakFrame'], 'primaryCheck': check,
                 'tapReasons': reasons,
+                **({'priorForeground': {'id': source, 'name': source_name}} if source is not None else {}),
                 'meanWindowWeight': weights.round(3).tolist(),
                 'sparkleCorrectedFraction': round(region['sparkle'] / pixel_frames, 4),
                 'sparkleVetoFraction': round(region['sparkleVetoes'] / pixel_frames, 4),
@@ -395,6 +404,10 @@ def write_report(out, result):
             mat_name = mat['name'] or f"ID {mat['id']}"
             frame_text = '–'.join(map(str, item['frames']))
             check = item['primaryCheck']
+            if 'priorForeground' in item:
+                source = item['priorForeground']
+                source_name = source['name'] or f"ID {source['id']}"
+                check += f" · Prior foreground {source_name}"
             if item['events']:
                 check += ' · ' + ', '.join(item['events'])
             values = [item['severity'], item['type'], frame_text, ', '.join(map(str, item['box'])),
@@ -456,6 +469,7 @@ def analyze(temporal_dir, spatial_dir, out, thresholds, reference_dirs=(), refer
     calibration = Calibration(thresholds) if reference_sources else None
     video = Video(out / 'heatmaps.mp4', size, temporal['fps']) if make_video else None
     quick_metrics, fine_metrics = QuickMetrics(), ReferenceMetrics()
+    foreground_metrics = ForegroundTrails() if base_report is None else None
     started = monotonic()
     reference_cpu = 0.
     frames = (range(first, last + 1) if base_report is None
@@ -478,6 +492,8 @@ def analyze(temporal_dir, spatial_dir, out, thresholds, reference_dirs=(), refer
                 quick_metrics.reset()
                 fine_metrics.reset()
                 report.advance(math.inf)
+                if foreground_metrics is not None:
+                    foreground_metrics.reset()
             warp = None
             if previous_ids is not None:
                 motion = sidecar(temporal_dir, index, (*shape, 4), 'motion.f32', '<f4')
@@ -488,6 +504,9 @@ def analyze(temporal_dir, spatial_dir, out, thresholds, reference_dirs=(), refer
             flicker_score = np.minimum(m.flicker / thresholds.flicker,
                                        m.flicker / np.maximum(.01, thresholds.oidn_ratio * m.oidn_change))
             ghost_score = m.ghost / thresholds.ghost
+            if foreground_metrics is not None:
+                foreground, sources = foreground_metrics.push(signal, baseline, ids, warp)
+                foreground_score = foreground / thresholds.foreground_trail
             unstable = (m.switch >= thresholds.switch) & (m.flicker >= thresholds.flicker)
             global_counts[0] += int(m.valid.sum())
             change_energy += (np.square(m.flicker, where=m.valid, out=np.zeros_like(m.flicker)).sum(dtype=np.float64),
@@ -503,9 +522,11 @@ def analyze(temporal_dir, spatial_dir, out, thresholds, reference_dirs=(), refer
                     (TYPES[2], m.switch / thresholds.switch, unstable),
                 ):
                     report.append(index, kind, score, mask, ids, window, sparkle, m, warp)
+                report.append(index, TYPES[1], foreground_score, m.valid & (foreground_score >= 1),
+                              ids, window, sparkle, m, warp, foreground=sources)
                 report.advance(index)
             if video:
-                video.frame(rgb, flicker_score * m.valid, ghost_score * m.valid)
+                video.frame(rgb, flicker_score * m.valid, np.maximum(ghost_score, foreground_score) * m.valid)
             if index in reference_sources:
                 tick = monotonic()
                 reference = display_signal(image(reference_sources[index], index, size))
