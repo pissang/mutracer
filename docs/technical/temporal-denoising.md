@@ -12,8 +12,13 @@
    The offline default increases radius from 8 to 16 as the circle of confusion
    grows above 2 pixels. The interactive default uses 17 past frames.
 2. Run one spatial filter on the accumulation with the current frame's albedo
-   and normal guides. OIDN receives composed display-linear color, matching
-   per-frame OIDN. A custom denoiser receives accumulated native HDR.
+   and normal guides. The built-in OIDN models filter scene-linear HDR before
+   display composition. A 3×3 input guard scales RGB only when its peak channel
+   exceeds both 8 and 16 times the largest neighboring peak. This limits how
+   much an isolated outlier can spread during inference while preserving hue.
+   Raw accumulation is available for HDR readback. Custom denoisers receive
+   the accumulated HDR directly. Custom browser LDR weights receive composed
+   display-linear color.
 3. Stabilize the denoised display image with radius-3 image matching. A motion
    prior initializes the search. The three-level match and low-frequency
    difference test determine the blend.

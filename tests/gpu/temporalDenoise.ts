@@ -134,6 +134,7 @@ async function run() {
     const builtIn = (await oidnRender.readPixels('denoised')).data;
     const baseline=await blobPixels(await engine.display.toBlob(oidnRender)); await oidnTemporal.push(oidnRender);
     let temporalOIDN: Float32Array | undefined, presentationIdentity=0, vignetteChange=0;
+    let presentationDifference = '';
     for await (const frame of oidnTemporal.flush()) {
       const read = await frame.readPixels();
       check(frame.width === 57 && frame.height === 51 && read.width === 57 && read.height === 51 &&
@@ -141,11 +142,19 @@ async function run() {
       temporalOIDN=read.data; check(engine.display.present(frame)===frame,'OIDN temporal frame was not presented');
       const clean=await blobPixels(await engine.display.toBlob(frame)); engine.display.vignette=.8;
       const vignette=await blobPixels(await engine.display.toBlob(frame)); engine.display.vignette=0;
-      for(let i=0;i<clean.length;i++){presentationIdentity=Math.max(presentationIdentity,Math.abs(clean[i]-baseline[i]));vignetteChange=Math.max(vignetteChange,Math.abs(clean[i]-vignette[i]));}
+      for(let i=0;i<clean.length;i++){
+        const delta = Math.abs(clean[i]-baseline[i]);
+        if (delta > presentationIdentity) {
+          presentationIdentity = delta;
+          const pixel = i & ~3;
+          presentationDifference = `${pixel / 4} channel ${i % 4}: ${[...baseline.slice(pixel,pixel+4)]} vs ${[...clean.slice(pixel,pixel+4)]}`;
+        }
+        vignetteChange=Math.max(vignetteChange,Math.abs(clean[i]-vignette[i]));
+      }
     }
     let oidnMax = 0; for (let i = 0; i < builtIn.length; i++) if (i % 4 !== 3) oidnMax = Math.max(oidnMax, Math.abs(builtIn[i] - temporalOIDN![i]));
     check(oidnMax <= 1e-6, `OIDN identity failed: ${oidnMax}`);
-    check(presentationIdentity<=1,`OIDN presentation identity failed: ${presentationIdentity}`);check(vignetteChange>0,'Vignette did not affect temporal presentation');
+    check(presentationIdentity<=1,`OIDN presentation identity failed: ${presentationIdentity} at ${presentationDifference}`);check(vignetteChange>0,'Vignette did not affect temporal presentation');
     oidnTemporal.dispose();
     const postReadTemporal = new TemporalDenoiser(engine, {historyRadius: 0, postRadius: 1, stabilizeSparkle: false,
       denoiser: {type: 'oidn', model: 'standard', weightsBaseUrl: '/oidn/weights/'}});

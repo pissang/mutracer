@@ -2,10 +2,10 @@
 thread_local! {
     static ORDER: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
 }
-pub(super) fn record_order(node: &str) {
+pub(crate) fn record_order(node: &str) {
     ORDER.with(|v| v.borrow_mut().push(node.into()));
 }
-fn take_order() -> Vec<String> {
+pub(crate) fn take_order() -> Vec<String> {
     ORDER.with(|v| std::mem::take(&mut *v.borrow_mut()))
 }
 

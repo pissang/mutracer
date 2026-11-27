@@ -86,8 +86,9 @@ Other renderer and OIDN allocations are additional.
   bindless textures. Glass reflections can fall back to surface motion.
   Transmission uses surface motion.
 - `frame.readPixels('denoised')` returns final RGBA float32 pixels in the
-  spatial denoiser's color representation. `frame.readPixels('accumulated')`
-  returns the windowed linear HDR before the spatial filter.
+  captured display's linear color space with OIDN, or in scene-linear HDR with
+  a custom filter or no spatial filter. `frame.readPixels('accumulated')`
+  returns the windowed scene-linear HDR before spatial filtering.
 - History needs valid correspondence across the frames it traverses. Surfaces
   that become hidden can have fewer usable samples and retain more noise.
 - Moving shadows, reflections and refraction can leave trails. Use per-frame

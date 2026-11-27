@@ -180,7 +180,9 @@ scene, converge with a fresh sample range, and call `push(index, &render)`.
 Drain ready frames after each push. At the end, call `flush()` until it
 returns `None`. Each `OfflineFrame` keeps its original index. Read the
 denoised image with `read_pixels(false)` or pre-spatial HDR with
-`read_pixels(true)`.
+`read_pixels(true)`. Offline OIDN filters scene-linear HDR and limits isolated
+bright outliers before applying exposure, tone mapping and bloom. Its denoised
+readback contains the resulting display-linear colors.
 
 Call `cut()` before the first input of a new segment or at a known lighting
 jump that must share no history. Automatic history invalidation can reduce

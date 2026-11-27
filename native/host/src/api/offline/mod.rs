@@ -493,15 +493,16 @@ impl TemporalDenoiser {
                         Default::default(),
                         f.samples,
                     );
-                    let [c, a] = display.oidn_display_inputs(&f.display.composition())?;
-                    Resource::Buffer(self.oidn.as_mut().unwrap().submit_display(
+                    #[cfg(test)]
+                    crate::display::effects_tests::record_order("Denoise:SceneLinear");
+                    let (_, preview) = self.oidn.as_mut().unwrap().submit_offline(
                         &p.gpu,
-                        &c,
-                        &a,
-                        normal.buffer(),
+                        [color.buffer(), albedo.buffer(), normal.buffer()],
                         f.samples,
-                        true,
-                    )?)
+                    )?;
+                    let composed = p.alloc("Display-linear temporal OIDN", p.bytes);
+                    display.compose_oidn_output(&f.display.composition(), &preview, composed.buffer())?;
+                    composed
                 }
             };
             f.accumulated = Some(acc);

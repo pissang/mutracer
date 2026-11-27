@@ -28,6 +28,8 @@ try{
   const capture=resolve(out,'frozen-native');
   run('native frozen highlight', 'cargo',['test','--locked','--manifest-path','native/host/Cargo.toml','--lib',
    'viewer_display_oidn_contains_firefly_spread_and_preserves_sdk_hdr','--','--ignored','--test-threads=1','--nocapture'],{MUTRACER_TEST_CAPTURE:capture});
+  run('native guarded HDR highlight', 'cargo',['test','--locked','--manifest-path','native/host/Cargo.toml','--lib',
+   'protected_scene_oidn_filters_before_composition_without_firefly_spread','--','--ignored','--test-threads=1','--nocapture'],{MUTRACER_TEST_CAPTURE:capture});
   run('frozen browser/native comparison',process.execPath,['scripts/display-frozen.mjs'],
    {MUTRACER_PARITY_OUTPUT:resolve(out,'frozen'),MUTRACER_NATIVE_DISPLAY_PNG:resolve(capture,'after-display-oidn.png')});
   frozen={status:'passed'};

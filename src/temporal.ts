@@ -97,11 +97,13 @@ export class TemporalFrame {
   /** @internal */ _withPresentation<T>(callback: (render: Render) => T): T {
     if (!this.valid) throw new Error('This temporal frame is no longer borrowed.');
     // Captured buffers include padding even when the exported image is cropped.
-    this.presentation.engine.display._withSettings(this.source.settings, () =>
+    const display = this.presentation.engine.display;
+    const changed = JSON.stringify(display._snapshotSettings()) !== JSON.stringify(this.source.settings);
+    display._withSettings(this.source.settings, () =>
       this.presentation._composeExternalDenoiseInput({width:this.storageWidth,height:this.storageHeight,samples:this.source.samples,
         color:this.source.color,albedo:this.source.albedo,normal:this.source.normal}));
-    this.presentation.engine.display._configure(this.presentation);
-    this.presentation._setExternalDenoisedOutput(this.buffers.denoised,this.displayLinear,this.encodedCodes,this.source.baseline);
+    display._configure(this.presentation);
+    this.presentation._setExternalDenoisedOutput(this.buffers.denoised,this.displayLinear,this.encodedCodes,changed ? this.source.baseline : undefined);
     return callback(this.presentation);
   }
   /** @internal */ _release() {
@@ -446,8 +448,23 @@ export class TemporalDenoiser {
     const output = device.createBuffer({label: 'Temporal spatial output', size: bytes,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST});
     if (this.oidn) {
-      const input = this.composeForOIDN(frame);
-      await this.oidn.denoise({width: this.history!.width, height: this.history!.height, ...input, output});
+      const settings = this.activeOptions.denoiser;
+      const sceneLinear = settings?.type === 'oidn' && settings.hdr !== false;
+      const input = this.composeForOIDN(frame, sceneLinear);
+      const size = {width: this.history!.width, height: this.history!.height};
+      if (sceneLinear) {
+        const filtered = device.createBuffer({label: 'Temporal OIDN HDR output', size: bytes,
+          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST});
+        try {
+          await this.oidn.denoise({...size, ...input, output: filtered});
+          this.engine.display._withSettings(this.displaySettings[frame], () =>
+            this.replay!._composeExternalHDRDenoisedOutput(filtered, input.color, output));
+        } finally {
+          filtered.destroy();
+        }
+      } else {
+        await this.oidn.denoise({...size, ...input, output});
+      }
     }
     else if (this.activeOptions.denoiser?.type === 'custom') {
       const guides = this.history!.getCustomGuides(frame);
@@ -514,11 +531,11 @@ export class TemporalDenoiser {
     device.queue.submit([encoder.finish()]);
   }
 
-  private composeForOIDN(frame: number) {
+  private composeForOIDN(frame: number, sceneLinear: boolean) {
     const buffers = this.presentationInputs.get(frame)!;
     const samples = this.sampleCounts[frame];
     return this.engine.display._withSettings(this.displaySettings[frame], () =>
-      this.replay!._composeExternalDenoiseInput({width: this.history!.width, height: this.history!.height, samples, ...buffers}));
+      this.replay!._composeExternalDenoiseInput({width: this.history!.width, height: this.history!.height, samples, ...buffers}, sceneLinear));
   }
 
   private async process(flush: boolean) {

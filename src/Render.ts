@@ -351,10 +351,15 @@ export default class Render {
     await this._target.captureTemporalInput(this._temporalAovs ?? [], capture);
   }
   /** @internal Compose caller-owned HDR and guides through this render's captured display settings. */
-  _composeExternalDenoiseInput(input: {width: number; height: number; samples: number; color: GPUBuffer; albedo: GPUBuffer; normal: GPUBuffer}) {
+  _composeExternalDenoiseInput(input: {width: number; height: number; samples: number; color: GPUBuffer; albedo: GPUBuffer; normal: GPUBuffer}, sceneLinear = false) {
     if (!this._target?.composeExternalDenoiseInput) throw new Error('External HDR composition requires WebGPU.');
     this._target.activate(); this._engine.display._configure(this);
-    return this._target.composeExternalDenoiseInput(input);
+    return this._target.composeExternalDenoiseInput(input, sceneLinear);
+  }
+  /** @internal Compose the scene-linear temporal result for display-space stabilization. */
+  _composeExternalHDRDenoisedOutput(input: GPUBuffer, original: GPUBuffer, output: GPUBuffer) {
+    if (!this._target?.composeExternalHDRDenoisedOutput) throw new Error('External HDR composition requires WebGPU.');
+    this._target.composeExternalHDRDenoisedOutput(input, original, output);
   }
   /** @internal Install a temporal result at the renderer's denoiser slot. */
   _setExternalDenoisedOutput(input: GPUBuffer, displayLinear: boolean, encodedCodes: boolean, capturedBaseline?: GPUBuffer) {
@@ -725,7 +730,7 @@ export default class Render {
       if (revision !== this._filterRevision || this._disposed) return;
       if (options.type === 'custom') { this._filter = {kind: 'custom', denoiser: options.denoiser, aovs: options.aovs}; return; }
       const {loadOIDNNetwork} = await loadOIDN();
-      const filter = await this._engine._acquireDenoiser(key as string, async () => ({kind: 'oidn', denoiser: await loadOIDNNetwork(this._engine, options)}));
+      const filter = await this._engine._acquireDenoiser(key as string, async () => ({kind: 'oidn', denoiser: await loadOIDNNetwork(this._engine, options), sceneLinear: options.hdr !== false}));
       if (revision !== this._filterRevision || this._disposed) { this._engine._releaseDenoiser(filter); return; }
       this._filter = filter; this._warmDenoiser();
     })();

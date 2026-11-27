@@ -11,7 +11,8 @@ export interface TemporalCaptureInput extends DenoiseInput {
 /** Backend-owned execution and outputs of one resident accumulation. */
 export interface TargetPipeline extends RenderPasses {
   captureTemporalInput?(aovs: readonly import('./aov.js').AovKind[], capture: (input: TemporalCaptureInput) => Promise<void>): Promise<void>;
-  composeExternalDenoiseInput?(input: {width: number; height: number; samples: number; color: GPUBuffer; albedo: GPUBuffer; normal: GPUBuffer}): {color: GPUBuffer; albedo: GPUBuffer; normal: GPUBuffer};
+  composeExternalDenoiseInput?(input: {width: number; height: number; samples: number; color: GPUBuffer; albedo: GPUBuffer; normal: GPUBuffer}, sceneLinear?: boolean): {color: GPUBuffer; albedo: GPUBuffer; normal: GPUBuffer};
+  composeExternalHDRDenoisedOutput?(input: GPUBuffer, original: GPUBuffer, output: GPUBuffer): void;
   setExternalDenoisedOutput?(input: GPUBuffer, displayLinear: boolean, encodedCodes: boolean, capturedBaseline?: GPUBuffer): void;
   readOfflineGeometry?(): Promise<ArrayBuffer>;
   setTemporalReflections?(enabled: boolean): void;

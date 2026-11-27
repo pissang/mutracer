@@ -237,6 +237,66 @@ fn viewer_display_oidn_contains_firefly_spread_and_preserves_sdk_hdr() {
 
 #[test]
 #[ignore = "requires real GPU inference with oidn-webgpu-native"]
+fn protected_scene_oidn_filters_before_composition_without_firefly_spread() {
+    let _test = crate::abi_test_lock();
+    let (size, images, center) = fixture();
+    let engine = Engine::new(EngineOptions {
+        backend: crate::api::aov_tests::aov_test_backend(),
+    })
+    .unwrap();
+    let gpu = &engine.inner.gpu;
+    let bytes = u64::from(size[0]) * u64::from(size[1]) * 16;
+    let buffer = || {
+        gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Frozen scene OIDN fixture"),
+            size: bytes,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        })
+    };
+    let [raw, albedo, normal] = images.each_ref().map(|image| {
+        let buffer = buffer();
+        let bottom = flip_rows(image, size[0], size[1]);
+        gpu.queue
+            .write_buffer(&buffer, 0, bytemuck::cast_slice(&bottom));
+        buffer
+    });
+    let mut filter = crate::oidn_webgpu::Denoiser::new(gpu, size, None, 512).unwrap();
+    let mut display = crate::display::Display::new(gpu.clone(), size);
+    display.capture(&raw, &normal, &albedo, &raw, Default::default(), 1);
+    let composed = buffer();
+    let _ = crate::display::effects_tests::take_order();
+    crate::display::effects_tests::record_order("Denoise:SceneLinear");
+    let (_, preview) = filter
+        .submit_hdr(gpu, [&raw, &albedo, &normal], 1, false, true)
+        .unwrap();
+    let settings = DisplaySettings::default().composition();
+    display
+        .compose_oidn_output(&settings, &preview, &composed)
+        .unwrap();
+    let table: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../tests/fixtures/display-order.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        serde_json::json!(crate::display::effects_tests::take_order()),
+        table["hdrOidn"]["nativeTrace"]
+    );
+    let read = gpu
+        .queue
+        .read_buffer(&gpu.device, composed.slice(..))
+        .unwrap();
+    let values: Vec<f32> = bytemuck::pod_collect_to_vec(&read);
+    assert!(values.iter().all(|v| v.is_finite()));
+    let pixels = display.read_rgba(&settings).unwrap();
+    assert_eq!(bright_near(&pixels, size, center), 0);
+    save("protected-hdr-oidn", &pixels, size, &values);
+}
+
+#[test]
+#[ignore = "requires real GPU inference with oidn-webgpu-native"]
 fn viewer_display_oidn_models_keep_alpha_and_reject_stale_color_settings() {
     let _test = crate::abi_test_lock();
     let size = [65, 33];

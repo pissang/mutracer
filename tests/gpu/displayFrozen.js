@@ -1,9 +1,13 @@
+import {getRecommendedDeviceDescriptor} from '/src/main.ts';
+import {makeWGPURenderTargets} from '/src/renderer/WGPURenderingPipeline.ts';
+import {initOpenPbrEnergyLut} from '/src/renderer/openPbrEnergyLut.browser.ts';
+import displayOrder from '/tests/fixtures/display-order.json';
 import{initUNetFromBuffer}from'/node_modules/oidn-webgpu/dist/oidn.js';
 import{composeDefine,createComposeMain,compositeDenoiseOutputMain,createCompositeDenoiseDisplayMain}from'/src/renderer/wgsl/compose.frag.wgsl.ts';
 const root=new URLSearchParams(location.search).get('input');
 const save=(name,body)=>fetch('/evidence/frozen-'+name,{method:'POST',body});
 async function run(){
- const adapter=await navigator.gpu.requestAdapter();if(!adapter)throw Error('No WebGPU');const device=await adapter.requestDevice({requiredFeatures:adapter.features.has('shader-f16')?['shader-f16']:[]});
+ const adapter=await navigator.gpu.requestAdapter();if(!adapter)throw Error('No WebGPU');const device=await adapter.requestDevice(getRecommendedDeviceDescriptor(adapter));
  const size=[827,767],bytes=size[0]*size[1]*16;
  const images=await Promise.all(['hdr','albedo','normal'].map(async n=>new Float32Array(await(await fetch(root+'/'+n+'.f32')).arrayBuffer())));
  const upload=v=>{const b=device.createBuffer({size:bytes,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST|GPUBufferUsage.COPY_SRC});device.queue.writeBuffer(b,0,v);return b;};
@@ -43,7 +47,44 @@ fn load_colorTex(p:vec2i,l:i32)->vec4f{return color[u32(p.y)*827u+u32(p.x)];}fn 
  const final=await read(output);await save('display.f32',final);const rgba=Uint8ClampedArray.from(final,x=>Math.round(Math.min(1,Math.max(0,x))*255));
  const canvas=document.createElement('canvas');canvas.width=size[0];canvas.height=size[1];canvas.getContext('2d').putImageData(new ImageData(rgba,...size),0,0);await save('display.png',await new Promise(resolve=>canvas.toBlob(resolve)));
  let bright=0;for(let i=0;i<rgba.length;i+=4){const x=(i/4)%827-644,y=Math.floor(i/4/827)-463;if(x*x+y*y>4&&x*x+y*y<3600&&rgba[i]>=240&&rgba[i+1]>=240&&rgba[i+2]>=240)bright++;}
- const result={passed:values.every(Number.isFinite)&&bright===0,size,adapter:adapter.info,precision:'auto',tile:512,model:'standard',brightNeighbourhoodPixels:bright,records:actual,expected:['Compose:DisplayLinear','Denoise:DisplayLinear','Encode:DisplayEncoded']};
+ // Use the production WebGPU target as well as the original display-space control.
+ await initOpenPbrEnergyLut();
+ const guardedCanvas=document.createElement('canvas');
+ const [width,height]=size.map(edge=>Math.ceil(edge/16)*16);
+ guardedCanvas.width=width;guardedCanvas.height=height;
+ const targets=makeWGPURenderTargets(guardedCanvas,device);
+ const target=targets.createTarget('Frozen HDR highlight');
+ const bottomUp=source=>{
+  const data=new Float32Array(width*height*4);
+  for(let y=0;y<size[1];y++)data.set(source.subarray(y*size[0]*4,(y+1)*size[0]*4),(height-1-y)*width*4);
+  return data;
+ };
+ const diagnostics=target._displayParity();const trace=[];
+ target.activate();
+ target.setToneMappingParams({exposure:1,toneMapping:'agx'});
+ target.setBloomParams({intensity:0,threshold:1,radius:0.6});
+ diagnostics.load({width,height,samples:1,catcher:false,color:bottomUp(images[0]),albedo:bottomUp(images[1]),
+  normal:bottomUp(images[2]),moments:new Float32Array(width*height*4),shadow:new Float32Array(width*height*8)});
+ target.drawPostProcess();
+ diagnostics.record(trace);
+ await target.performDenoise({kind:'oidn',sceneLinear:true,denoiser:network});
+ const guarded=await target.readPresentation();
+ const protectedRgba=new Uint8ClampedArray(rgba.length);
+ for(let y=0;y<size[1];y++)for(let x=0;x<size[0]*4;x++)protectedRgba[y*size[0]*4+x]=Math.round(guarded.data[y*width*4+x]*255);
+ let guardedBright=0;
+ for(let i=0;i<protectedRgba.length;i+=4){
+  const x=(i/4)%827-644,y=Math.floor(i/4/827)-463;
+  if(x*x+y*y>4&&x*x+y*y<3600&&protectedRgba[i]>=240&&protectedRgba[i+1]>=240&&protectedRgba[i+2]>=240)guardedBright++;
+ }
+ canvas.getContext('2d').putImageData(new ImageData(protectedRgba,...size),0,0);
+ await save('protected-hdr.png',await new Promise(resolve=>canvas.toBlob(resolve)));
+ const expectedHDR=displayOrder.hdrOidn.webgpuTrace;
+ const guardedOrder=trace.indexOf(expectedHDR[0])>=0&&trace.indexOf(expectedHDR[0])<trace.lastIndexOf(expectedHDR[1]);
+ const result={passed:values.every(Number.isFinite)&&bright===0&&guarded.data.every(Number.isFinite)&&guardedBright===0&&guardedOrder,
+  size,adapter:adapter.info,precision:'auto',tile:512,model:'standard',brightNeighbourhoodPixels:bright,
+  guardedBrightNeighbourhoodPixels:guardedBright,guardedTrace:trace,records:actual,
+  expected:['Compose:DisplayLinear','Denoise:DisplayLinear','Encode:DisplayEncoded']};
+ targets.dispose();
  await save('result.json',JSON.stringify(result));network.dispose();device.destroy();return result;
 }
 document.querySelector('#run').onclick=()=>{document.querySelector('#result').textContent='Running';run().then(r=>document.querySelector('#result').textContent=JSON.stringify(r)).catch(async e=>{const r={passed:false,error:String(e.stack??e)};document.querySelector('#result').textContent=JSON.stringify(r);await save('error.json',JSON.stringify(r));});};

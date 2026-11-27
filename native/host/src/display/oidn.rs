@@ -6,6 +6,7 @@ pub(super) struct Filter {
     composed: wgpu::Texture,
     albedo: wgpu::Texture,
     encode: wgpu::ComputePipeline,
+    collect: wgpu::ComputePipeline,
     hdr_encode: std::sync::OnceLock<wgpu::ComputePipeline>,
     pub(super) result: Option<(wgpu::Buffer, Settings)>,
 }
@@ -25,6 +26,14 @@ impl Filter {
                 layout: None,
                 module: &module,
                 entry_point: Some("present"),
+                compilation_options: Default::default(),
+                cache: None,
+            }),
+            collect: device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Collect OIDN display-linear output"),
+                layout: None,
+                module: &module,
+                entry_point: Some("collect"),
                 compilation_options: Default::default(),
                 cache: None,
             }),
@@ -115,6 +124,54 @@ impl Display {
         effects.compose_guide(self, settings, &filter.albedo);
         self.using_denoised = shown;
         Ok([filter.composed.clone(), filter.albedo.clone()])
+    }
+    pub(crate) fn compose_oidn_output(
+        &mut self,
+        settings: &Settings,
+        preview: &wgpu::Buffer,
+        target: &wgpu::Buffer,
+    ) -> Result<()> {
+        if self.oidn.is_none() {
+            self.oidn = Some(Filter::new(self)?);
+        }
+        // The offline frame keeps its capture only for this composition.
+        // Use the same coverage and layers without retaining a viewer snapshot.
+        let mut resolved = self.gpu.device.create_command_encoder(&Default::default());
+        resolved.copy_buffer_to_buffer(preview, 0, &self.linear, 0, self.linear.size());
+        self.gpu.queue.submit([resolved.finish()]);
+        self.samples = 1;
+        self.using_denoised = true;
+        self.denoise_revision += 1;
+        let filter = self.oidn.as_ref().unwrap();
+        let device = &self.gpu.device;
+        let mut effects = self.effects.lock().unwrap_or_else(|e| e.into_inner());
+        let effects = effects.get_or_insert_with(|| Effects::new(device));
+        effects.prepare_composition(device, &postprocess::sources()?.oidn_composition, false);
+        effects.compose(self, settings, false, &filter.composed);
+        let view = filter.composed.create_view(&Default::default());
+        let inputs = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Collect OIDN display-linear output"),
+            layout: &filter.collect.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: target.as_entire_binding(),
+                },
+            ],
+        });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&filter.collect);
+            pass.set_bind_group(0, &inputs, &[]);
+            pass.dispatch_workgroups(self.size[0].div_ceil(8), self.size[1].div_ceil(8), 1);
+        }
+        self.gpu.queue.submit([encoder.finish()]);
+        Ok(())
     }
     pub(crate) fn upload_display_oidn(
         &mut self,

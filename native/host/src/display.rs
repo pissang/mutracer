@@ -3,7 +3,7 @@ use crate::{GpuDevice, Result};
 mod bloom;
 mod effects;
 #[cfg(test)]
-mod effects_tests;
+pub(crate) mod effects_tests;
 pub(crate) mod jnlm;
 mod oidn;
 #[derive(Clone, Copy, Default)]

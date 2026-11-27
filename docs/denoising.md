@@ -1,15 +1,17 @@
 # Denoising
 
-MuTracer has two built-in denoisers. Both filter the complete composed image using
-albedo and normal guides.
+MuTracer has two built-in denoisers that use albedo and normal guides.
 
 - **JNLM**: a built-in joint non-local means filter, on WebGPU and
   WebGL 2. It needs no weight download. WebGPU downloads the filter on first use,
-  which can delay the first denoised result; loading failures report an engine error.
+  which can delay the first denoised result. JNLM filters the composed image.
 - **OIDN**: [Intel Open Image Denoise](https://www.openimagedenoise.org/)
   networks, run through [`oidn-webgpu`](https://github.com/pissang/oidn-webgpu),
   WebGPU only. They take longer and need weights, but are cleaner at one or
   two samples per pixel, for example for denoising while the camera moves.
+  The included models filter scene-linear HDR before exposure, tone mapping and
+  bloom. This helps resolve glass detail and limits the spread of fireflies.
+  Custom LDR weights filter the composed display-linear image.
 
 ```ts
 const engine = new Engine({canvas});
@@ -211,10 +213,9 @@ for fixed tiles. For a color-only custom network, set `aux: false` and omit both
 guides. All other models require both guides.
 
 Buffers use the [custom denoiser layout](#custom-denoisers). Use linear RGB
-with HDR networks, linear albedo and encoded world-space normals. The supplied
-RGB determines the input color space. Built-in Render OIDN receives a composed
-display-linear image, so filtering raw HDR from a custom denoiser can give a
-different result. Use the output's RGB and retain coverage separately.
+with HDR networks, linear albedo and encoded world-space normals. This filter
+preserves the supplied color space. Use the output's RGB and retain coverage
+separately.
 
 Inside a custom denoiser pass the callback's own `context.signal` to `denoise`
 so the call runs within the active filter. Omitting it or passing a derived

@@ -91,7 +91,7 @@ export async function createBufferFilter(engine: Engine, options: OIDNFilterOpti
       filter = undefined;
       const current = engine._deviceGeneration;
       filter = await engine._acquireDenoiser(key, async () => ({
-        kind: 'oidn', denoiser: await loadOIDNNetwork(engine, {...settings, signal: weightSignal})
+        kind: 'oidn', denoiser: await loadOIDNNetwork(engine, {...settings, signal: weightSignal}), sceneLinear: settings.hdr !== false
       }));
       generation = current;
     }

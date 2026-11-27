@@ -1,3 +1,4 @@
+import displayOrder from '../fixtures/display-order.json';
 import {initOpenPbrEnergyLut} from '../../src/renderer/openPbrEnergyLut.browser';
 await initOpenPbrEnergyLut();
 import Engine from '../../src/Engine';
@@ -477,11 +478,31 @@ function displayedTexture() {
 async function denoisedPipeline() {
   const pipeline = createPipeline(false);
   pipeline.activate(); pipeline.trace(new Camera({projection: 'perspective'}), 1); pipeline.present();
-  await pipeline.performDenoise!({kind: 'oidn', denoiser: completedDenoiser()}, undefined, 'progressive'); pipeline.present();
+  await pipeline.performDenoise!({kind: 'oidn', sceneLinear: false, denoiser: completedDenoiser()}, undefined, 'progressive'); pipeline.present();
   return pipeline;
 }
 
 describe('WebGPU denoised presentation transitions', () => {
+  it('filters guarded scene radiance before composing with the original coverage', async () => {
+    const pipeline = createPipeline(false);
+    pipeline.activate(); pipeline.trace(new Camera({projection: 'perspective'}), 1); pipeline.present();
+    const trace: string[] = [];
+    const diagnostics = (pipeline as typeof pipeline & {_displayParity(): {record(nodes: string[]): void}})._displayParity();
+    diagnostics.record(trace);
+    const denoiser = completedDenoiser();
+    const execute = vi.spyOn(denoiser, 'tileExecute');
+    await pipeline.performDenoise!({kind: 'oidn', sceneLinear: true, denoiser});
+    const guard = mocks.Pass.instances.get('OIDN HDR color')!;
+    const input = guard.createPass.mock.lastCall![2].color;
+    expect(execute.mock.lastCall![0].color.data).toBe(input);
+    const coverage = mocks.Pass.instances.get('Denoised coverage')!;
+    expect(coverage.createPass.mock.lastCall![1].original.buffer).toBe(input);
+    expect(trace).toEqual(expect.arrayContaining(displayOrder.hdrOidn.webgpuTrace));
+    expect(trace.indexOf(displayOrder.hdrOidn.webgpuTrace[0])).toBeLessThan(trace.lastIndexOf(displayOrder.hdrOidn.webgpuTrace[1]));
+    expect(trace).not.toContain('Encode:DisplayEncoded');
+    pipeline.dispose();
+  });
+
   it('denoises the whole composition once and keeps raw coverage for presentation', async () => {
     const pipeline = createPipeline(false);
     vi.spyOn(mocks.TracePass.latest, 'hasShadowCatcher').mockReturnValue(true);
@@ -490,7 +511,7 @@ describe('WebGPU denoised presentation transitions', () => {
     const rawInputs = compose.createPass.mock.lastCall![1];
     const denoiser = completedDenoiser();
     const execute = vi.spyOn(denoiser, 'tileExecute');
-    await pipeline.performDenoise!({kind: 'oidn', denoiser}, undefined, 'progressive');
+    await pipeline.performDenoise!({kind: 'oidn', sceneLinear: false, denoiser}, undefined, 'progressive');
     expect(execute).toHaveBeenCalledTimes(1);
     expect(compose.createPass.mock.lastCall![1]).toEqual(rawInputs);
     expect(execute.mock.lastCall![0].color.data).toMatchObject({size: 80 * 64 * 16});
@@ -511,7 +532,7 @@ describe('WebGPU denoised presentation transitions', () => {
     pipeline.activate(); pipeline.trace(new Camera({projection: 'perspective'}), 1); pipeline.present();
     const alpha = completedDenoiser();
     const execute = vi.spyOn(alpha, 'tileExecute');
-    await pipeline.performDenoise!({kind: 'oidn', denoiser: completedDenoiser()}, alpha);
+    await pipeline.performDenoise!({kind: 'oidn', sceneLinear: false, denoiser: completedDenoiser()}, alpha);
     expect(execute).toHaveBeenCalledOnce();
     expect(execute.mock.lastCall![0]).toMatchObject({
       color: {data: expect.objectContaining({size: 80 * 64 * 16})},
@@ -526,7 +547,7 @@ describe('WebGPU denoised presentation transitions', () => {
     const denoiser = {...completedDenoiser(), auxiliaryDenoisers: {
       albedo: completedDenoiser(), normal: completedDenoiser()
     }};
-    await pipeline.performDenoise!({kind: 'oidn', denoiser}, undefined);
+    await pipeline.performDenoise!({kind: 'oidn', sceneLinear: false, denoiser}, undefined);
     const albedo = mocks.Pass.instances.get('compose')!.getOutput('denoiseAlbedo');
     expect(mocks.Pass.instances.get('OIDN albedo sRGB encode')!.createPass.mock.lastCall![1].albedo.texture).toBe(albedo);
     expect(mocks.Pass.instances.get('OIDN albedo sRGB decode')!.createPass.mock.lastCall![1].rawAlbedo.texture).toBe(albedo);
@@ -547,7 +568,7 @@ describe('WebGPU denoised presentation transitions', () => {
       albedo: stage === 'albedo' ? held : completedDenoiser(),
       normal: stage === 'normal' ? held : completedDenoiser()
     };
-    const pending = pipeline.performDenoise!({kind: 'oidn', denoiser: {...beauty, auxiliaryDenoisers}}, undefined);
+    const pending = pipeline.performDenoise!({kind: 'oidn', sceneLinear: false, denoiser: {...beauty, auxiliaryDenoisers}}, undefined);
     await ready;
     // Display._configure invalidates the target before changing compose uniforms.
     pipeline.invalidateDenoisedOutput();
@@ -575,7 +596,7 @@ describe('WebGPU denoised presentation transitions', () => {
   it('publishes a completed composite when OIDN omits progress callbacks', async () => {
     const pipeline = createPipeline(false);
     pipeline.activate(); pipeline.trace(new Camera({projection: 'perspective'}), 1); pipeline.present();
-    await pipeline.performDenoise!({kind: 'oidn', denoiser: { tileExecute(opts: Parameters<OIDNWeb['tileExecute']>[0]) {
+    await pipeline.performDenoise!({kind: 'oidn', sceneLinear: false, denoiser: { tileExecute(opts: Parameters<OIDNWeb['tileExecute']>[0]) {
       opts.done({ data: { size: 80 * 64 * 16 } as GPUBuffer, width: 80, height: 64 });
       return () => {};
     } }}, undefined);
@@ -613,7 +634,7 @@ describe('WebGPU denoised presentation transitions', () => {
     let options: Parameters<OIDNWeb['tileExecute']>[0];
     let started!: () => void;
     const ready = new Promise<void>((resolve) => { started = resolve; });
-    const pending = pipeline.performDenoise!({kind: 'oidn', denoiser: {
+    const pending = pipeline.performDenoise!({kind: 'oidn', sceneLinear: false, denoiser: {
       tileExecute(opts: Parameters<OIDNWeb['tileExecute']>[0]) {
         options = opts;
         started();
@@ -639,7 +660,7 @@ describe('WebGPU denoised presentation transitions', () => {
     pipeline.restartSamples();
     pipeline.activate(); pipeline.trace(new Camera({projection: 'perspective'}), 1); pipeline.present();
     expect(displayedTexture()).not.toBe(snapshot);
-    await pipeline.performDenoise!({kind: 'oidn', denoiser: completedDenoiser()}, undefined, 'progressive');
+    await pipeline.performDenoise!({kind: 'oidn', sceneLinear: false, denoiser: completedDenoiser()}, undefined, 'progressive');
     pipeline.setSize(240, 128); pipeline.present();
     const nextSnapshot = displayedTexture();
     pipeline.activate(); pipeline.trace(new Camera({projection: 'perspective'}), 1); pipeline.present();
@@ -803,7 +824,7 @@ it.each(['normal', 'albedo', 'shadowCatcher', 'depth'] as const)('keeps %s diagn
   pipeline.trace(new Camera({projection: 'perspective'}), 1);
   pipeline.setOutput(output);
   const denoiser = completedDenoiser(), execute = vi.spyOn(denoiser, 'tileExecute');
-  await pipeline.performDenoise!({kind:'oidn',denoiser},undefined).catch(()=>false);
+  await pipeline.performDenoise!({kind:'oidn',sceneLinear:false,denoiser},undefined).catch(()=>false);
   expect(execute).not.toHaveBeenCalled();
   pipeline.dispose();
 });

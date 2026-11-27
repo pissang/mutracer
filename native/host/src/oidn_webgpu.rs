@@ -243,11 +243,35 @@ impl Denoiser {
         samples: u32,
         flat: bool,
     ) -> Result<(wgpu::Buffer, wgpu::Buffer)> {
+        self.submit_hdr(gpu, sources, samples, flat, false)
+    }
+
+    pub(crate) fn submit_offline(
+        &mut self,
+        gpu: &GpuDevice,
+        sources: [&wgpu::Buffer; 3],
+        samples: u32,
+    ) -> Result<(wgpu::Buffer, wgpu::Buffer)> {
+        if gpu.info.backend == wgpu::Backend::Metal {
+            wait_for_temporal_inputs(gpu, std::time::Duration::from_secs(30))?;
+        }
+        self.submit_hdr(gpu, sources, samples, false, true)
+    }
+
+    pub(crate) fn submit_hdr(
+        &mut self,
+        gpu: &GpuDevice,
+        sources: [&wgpu::Buffer; 3],
+        samples: u32,
+        flat: bool,
+        guard_highlights: bool,
+    ) -> Result<(wgpu::Buffer, wgpu::Buffer)> {
         if samples == 0 {
             return Err("OIDN needs complete samples".into());
         }
         gpu.loss.check()?;
-        let params = [self.size[0], self.size[1], samples, u32::from(flat)];
+        let flags = u32::from(flat) | (u32::from(guard_highlights) << 1);
+        let params = [self.size[0], self.size[1], samples, flags];
         let params = gpu
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {

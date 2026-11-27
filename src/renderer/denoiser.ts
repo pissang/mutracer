@@ -52,5 +52,5 @@ export interface OIDNWeb {
 /** Explicit private dispatch; built-ins do not implement the public custom interface. */
 export type DenoiserHandle =
   | {kind: 'jnlm'; denoiser: JNLMDenoiser}
-  | {kind: 'oidn'; denoiser: OIDNWeb}
+  | {kind: 'oidn'; denoiser: OIDNWeb; sceneLinear: boolean}
   | {kind: 'custom'; denoiser: Denoiser; aovs?: readonly import('./aov.js').AovKind[]};

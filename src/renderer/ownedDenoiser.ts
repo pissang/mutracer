@@ -5,4 +5,4 @@ import type {OIDNDenoiser} from './oidnNetwork.js';
 // depend on denoiser.ts, but only Engine/Render own network implementations.
 export type OwnedDenoiser =
   | {kind: 'jnlm'; denoiser: JNLMDenoiser}
-  | {kind: 'oidn'; denoiser: OIDNDenoiser};
+  | {kind: 'oidn'; denoiser: OIDNDenoiser; sceneLinear: boolean};

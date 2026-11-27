@@ -1,5 +1,6 @@
 import {BLOOM_LEVELS, BLOOM_PLAN, bloomBlurSize, bloomBlendWeight, bloomBrightDefine, bloomBrightMain, bloomDownDefine, bloomDownMain,
   bloomBlurDefine, bloomBlurMain, bloomBlendMain} from '../../src/renderer/wgsl/bloom.wgsl.js';
+import {oidnHighlightWGSL} from '../../src/renderer/wgsl/oidnHighlight.wgsl.js';
 import {oidnAuxiliaryDefine} from '../../src/renderer/wgsl/oidnAuxiliary.wgsl.js';
 
 // Only compute entry points and texture access differ from WGPUFullQuadPass.
@@ -86,6 +87,7 @@ import {nativeDisplayEffectsShader} from './display-shader.js';
 import {composeDefine, createCompositeDenoiseDisplayMain, hdrResolveWGSL} from '../../src/renderer/wgsl/compose.frag.wgsl.js';
 const nativeOidnNormalizeShader = `// Generated native bindings around the shared HDR resolve equations.
 ${hdrResolveWGSL}
+${oidnHighlightWGSL}
 struct Params { size: vec2u, samples: u32, flat: u32 }
 @group(0) @binding(0) var<storage, read> color: array<vec4f>;
 @group(0) @binding(1) var<storage, read> albedo: array<vec4f>;
@@ -95,29 +97,43 @@ struct Params { size: vec2u, samples: u32, flat: u32 }
 @group(0) @binding(5) var<storage, read_write> guide: array<vec4f>;
 @group(0) @binding(6) var<uniform> params: Params;
 
+fn resolveColor(i: u32, samples: f32) -> vec4f {
+    let col = color[i] / samples;
+    let nor = normal[i] / samples;
+    let alb = albedo[i] / samples;
+    if (nor.a <= 0.0) { return vec4f(0.0); }
+    let total = max(nor.a, 1.0 / samples);
+    let minimum = 1.0 / samples;
+    let coverage = clamp(alb.a / total, 0.0, 1.0);
+    let flat = (params.flat & 1u) != 0u;
+    return vec4f(
+      hdr_flat_component(hdr_resolve_component(col.r,nor.a,alb.a,minimum,true), coverage, flat, true),
+      hdr_flat_component(hdr_resolve_component(col.g,nor.a,alb.a,minimum,true), coverage, flat, true),
+      hdr_flat_component(hdr_resolve_component(col.b,nor.a,alb.a,minimum,true), coverage, flat, true),
+      hdr_resolve_component(col.a,nor.a,alb.a,minimum,false));
+}
+
 @compute @workgroup_size(8, 8)
 fn normalize(@builtin(global_invocation_id) id: vec3u) {
     if (any(id.xy >= params.size)) { return; }
     let i = id.y * params.size.x + id.x;
     let samples = f32(params.samples);
-    let col = color[i] / samples;
-    let nor = normal[i] / samples;
-    let alb = albedo[i] / samples;
-    var result = vec4f(0.0);
-    if (nor.a > 0.0) {
-        let total = max(nor.a, 1.0 / samples);
-        let minimum = 1.0 / samples;
-        let coverage = clamp(alb.a / total, 0.0, 1.0);
-        let flat = params.flat != 0u;
-        result = vec4f(
-          hdr_flat_component(hdr_resolve_component(col.r,nor.a,alb.a,minimum,true), coverage, flat, true),
-          hdr_flat_component(hdr_resolve_component(col.g,nor.a,alb.a,minimum,true), coverage, flat, true),
-          hdr_flat_component(hdr_resolve_component(col.b,nor.a,alb.a,minimum,true), coverage, flat, true),
-          hdr_resolve_component(col.a,nor.a,alb.a,minimum,false));
+    var result = resolveColor(i, samples);
+    if ((params.flat & 2u) != 0u && oidnRadiancePeak(result.rgb) > 8.0) {
+        var peak = 0.0;
+        for (var y = -1; y <= 1; y++) {
+            for (var x = -1; x <= 1; x++) {
+                let at = vec2i(id.xy) + vec2i(x, y);
+                if ((x == 0 && y == 0) || any(at < vec2i(0)) || any(at >= vec2i(params.size))) { continue; }
+                let index = u32(at.y) * params.size.x + u32(at.x);
+                peak = max(peak, oidnRadiancePeak(resolveColor(index, samples).rgb));
+            }
+        }
+        result = vec4f(oidnHighlightLimit(result.rgb, peak), result.a);
     }
     resolved[i] = result;
-    preview[i] = alb;
-    guide[i] = nor;
+    preview[i] = albedo[i] / samples;
+    guide[i] = normal[i] / samples;
 }
 
 // Separate entry point: the planner's output is resolved HDR. Undo only its
@@ -132,7 +148,7 @@ fn restore(@builtin(global_invocation_id) id: vec3u) {
     let samples = f32(displayParams.samples);
     let total = max(normal[i].a / samples, 1.0 / samples);
     let hit = albedo[i].a / samples;
-    let divisor = select(total, hit, hit > 0.0 && displayParams.flat == 0u);
+    let divisor = select(total, hit, hit > 0.0 && (displayParams.flat & 1u) == 0u);
     displayColor[i] = vec4f(filtered[i].rgb * divisor, filtered[i].a);
 }
 `;
@@ -163,6 +179,12 @@ fn prepare(@builtin(global_invocation_id) id: vec3u) {
     normal[i] = vec4f(unpack4x8unorm(pack4x8unorm(vec4f(encoded, 1.0))).rgb * 2.0 - 1.0, 1.0);
     albedo[i] = unpack4x8unorm(pack4x8unorm(albedo[i]));
   }
+}
+@compute @workgroup_size(8,8)
+fn collect(@builtin(global_invocation_id) id: vec3u) {
+  let size = textureDimensions(colorImage);
+  if (any(id.xy >= size)) { return; }
+  color[id.y * size.x + id.x] = textureLoad(colorImage, id.xy, 0);
 }
 @group(0) @binding(0) var<storage, read> filtered: array<vec4f>;
 @group(0) @binding(1) var outputImage: texture_storage_2d<rgba8unorm, write>;
