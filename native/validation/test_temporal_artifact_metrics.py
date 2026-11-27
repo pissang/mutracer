@@ -31,6 +31,43 @@ class MetricTests(unittest.TestCase):
         self.assertTrue(warp.valid[:, 5:].all())
         np.testing.assert_allclose(warp.sample(signal)[:, 5:, 0], signal[:, 5:, 0] - .75)
 
+    def test_visibility_follows_the_surface_and_resets_on_occlusion(self):
+        self.motion[..., 0] = 1
+        warp = Warp(self.grid, self.motion, self.ids, self.ids)
+        detector = QuickMetrics()
+        signal = self.frame(5)
+        for index in range(8):
+            m = detector.push(signal, signal, self.window, warp if index else None)
+        self.assertTrue(m.established[:, :-4].all())
+        self.assertFalse(m.established[:, -4:].any())
+        self.assertTrue(m.valid[:, -4:-1].all())
+
+        previous = self.ids.copy()
+        previous[:, 17, 1] = 2
+        occlusion = Warp(self.grid, self.motion, self.ids, previous)
+        m = detector.push(signal, signal, self.window, occlusion)
+        self.assertFalse(m.established[:, 16].any())
+        m = detector.push(signal, signal, self.window, warp)
+        self.assertTrue(m.valid[:, 15].all())
+        self.assertFalse(m.established[:, 15].any())
+        detector.reset()
+        m = detector.push(signal, signal, self.window, None)
+        self.assertFalse(m.established.any())
+
+    def test_stationary_baseline_noise_tracks_the_oidn_arm(self):
+        detector = QuickMetrics()
+        warp = Warp(self.grid, self.motion, self.ids, self.ids)
+        for index in range(10):
+            spatial = self.frame(50 + (-1) ** index * 12)
+            m = detector.push(self.frame(50), spatial, self.window, warp if index else None)
+        self.assertTrue(m.established.all())
+        self.assertTrue((m.oidn_noise > 20).all())
+        self.assertFalse(m.moving.any())
+        self.assertFalse(m.flicker.any())
+        detector.reset()
+        m = detector.push(self.frame(50), spatial, self.window, None)
+        self.assertFalse(m.oidn_noise.any())
+
     def test_zero_history_matches_the_spatial_flicker_baseline(self):
         quick = QuickMetrics()
         warp = Warp(self.grid, self.motion, self.ids, self.ids)
@@ -72,6 +109,7 @@ class MetricTests(unittest.TestCase):
             exact = fine.push(temporal, baseline, baseline, warp if i else None)
             no_history_result = no_history.push(temporal, baseline, self.window, warp if i else None)
         self.assertGreater(m.ghost[10, edge - 3], 10)
+        self.assertGreater(m.corroborated_ghost[10, edge - 3], 10)
         self.assertFalse(no_history_result.ghost.any())
         high, low, valid, _ = exact
         self.assertTrue(valid[10, edge - 3])

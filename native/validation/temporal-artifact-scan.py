@@ -24,7 +24,8 @@ ROOT = Path(__file__).resolve().parents[2]
 TILE = 8
 MIN_PIXELS = 6
 MIN_FRAMES = 3
-TYPES = ('flicker', 'ghost', 'unstable decisions')
+DEFAULT_ISSUE_LIMIT = 40
+TYPES = ('flicker', 'ghost')
 REASONS = (
     'surface correspondence', 'surface geometry', 'missing radiance',
     'roughness-limited radius', 'local lighting', 'bright foreground silhouette',
@@ -140,17 +141,45 @@ def count_tiles(mask):
     return padded.reshape(padded.shape[0] // TILE, TILE, padded.shape[1] // TILE, TILE).sum((1, 3))
 
 
+def detector_scores(m, thresholds, scale=1., ratio=None, stage='corroboration'):
+    ratio = thresholds.oidn_ratio if ratio is None else ratio
+    flicker_floor = np.maximum(thresholds.flicker * scale, ratio * m.oidn_change)
+    ghost_floor = thresholds.ghost * scale
+    ghost = m.ghost
+    eligible = m.valid if stage == 'baseline' else m.established
+    if stage in ('noise', 'corroboration'):
+        # On a moving surface, OIDN innovations also include legitimate view
+        # changes. Use them as a stronger noise control on stationary surfaces.
+        noise_floor = np.where(m.moving, .65 * m.oidn_noise,
+                               np.maximum(2.8 * m.oidn_noise, 1.35 * m.oidn_change))
+        flicker_floor = np.maximum(flicker_floor, noise_floor)
+        ghost_floor = np.maximum(ghost_floor, .85 * m.oidn_noise)
+    if stage == 'corroboration':
+        ghost = m.corroborated_ghost
+    return np.where(eligible, m.flicker / flicker_floor, 0), np.where(eligible, ghost / ghost_floor, 0)
+
+
+def confusion(found, truth):
+    return np.array((np.count_nonzero(found & truth), np.count_nonzero(found & ~truth),
+                     np.count_nonzero(~found & truth)), dtype=np.int64)
+
+
+def summarize(counts):
+    tp, fp, fn = map(int, counts)
+    return {'tp': tp, 'fp': fp, 'fn': fn,
+            'precision': tp / (tp + fp) if tp + fp else None,
+            'recall': tp / (tp + fn) if tp + fn else None,
+            'f1': 2 * tp / (2 * tp + fp + fn) if tp + fn else None}
+
+
 class Calibration:
     def __init__(self, thresholds):
         self.candidates = [(scale, ratio) for scale in (.75, 1., 1.25, 1.5)
                            for ratio in sorted(set((.65, .8, .95, thresholds.oidn_ratio)))]
         self.thresholds = thresholds
-        self.tallies = {
-            pair: dict.fromkeys(TYPES[:2]) for pair in self.candidates
-        }
-        for tallies in self.tallies.values():
-            for kind in tallies:
-                tallies[kind] = np.zeros(3, dtype=np.int64)
+        self.tallies = {pair: np.zeros((len(TYPES), 3), dtype=np.int64) for pair in self.candidates}
+        self.stages = {stage: np.zeros((len(TYPES), 3), dtype=np.int64)
+                       for stage in ('baseline', 'visibility', 'noise', 'corroboration')}
         self.frames = []
         self.reference_error = []
 
@@ -166,30 +195,24 @@ class Calibration:
             'lowFrequencyRms': float(np.sqrt(np.mean(low[valid] ** 2))) if valid.any() else None,
         })
         self.frames.append(frame)
-        for scale, ratio in self.candidates:
-            flicker = valid & (m.flicker >= t.flicker * scale) & (m.flicker >= ratio * m.oidn_change)
-            ghost = valid & (m.ghost >= t.ghost * scale)
-            for kind, mask, truth in zip(TYPES, (flicker, ghost), (flicker_truth, ghost_truth)):
-                found = count_tiles(mask) >= MIN_PIXELS
-                self.tallies[scale, ratio][kind] += (
-                    np.count_nonzero(found & truth),
-                    np.count_nonzero(found & ~truth),
-                    np.count_nonzero(~found & truth),
-                )
+        def tally(scores):
+            return np.stack([confusion(count_tiles(valid & (score >= 1)) >= MIN_PIXELS, truth)
+                             for score, truth in zip(scores, (flicker_truth, ghost_truth))])
+
+        defaults = Thresholds()
+        for stage, counts in self.stages.items():
+            counts += tally(detector_scores(m, defaults, stage=stage))
+        for (scale, ratio), counts in self.tallies.items():
+            counts += tally(detector_scores(m, t, scale, ratio))
 
     def report(self):
-        def summarize(counts):
-            tp, fp, fn = map(int, counts)
-            return {'tp': tp, 'fp': fp, 'fn': fn,
-                    'precision': tp / (tp + fp) if tp + fp else None,
-                    'recall': tp / (tp + fn) if tp + fn else None,
-                    'f1': 2 * tp / (2 * tp + fp + fn) if tp + fn else None}
+        def metrics(counts):
+            return {kind: summarize(row) for kind, row in zip(TYPES, counts)}
 
-        rows = [{'scale': scale, 'oidn_ratio': ratio,
-                 **{kind: summarize(counts) for kind, counts in values.items()}}
-                for (scale, ratio), values in self.tallies.items()]
+        rows = [{'scale': scale, 'oidn_ratio': ratio, **metrics(counts)}
+                for (scale, ratio), counts in self.tallies.items()]
         recommendation = {}
-        for kind in TYPES[:2]:
+        for kind in TYPES:
             eligible = [row for row in rows if row[kind]['f1'] is not None]
             if eligible:
                 best = max(eligible, key=lambda row: (row[kind]['f1'], -abs(row['scale'] - 1),
@@ -200,14 +223,16 @@ class Calibration:
         return {'frames': self.frames, 'cellSize': TILE, 'minimumPixels': MIN_PIXELS,
                 'thresholds': asdict(self.thresholds),
                 'comparison': 'Per-frame tile overlap on valid five-frame tracks. Authored events excluded.',
-                'referenceError': self.reference_error, 'rows': rows, 'recommendation': recommendation}
+                'referenceError': self.reference_error, 'rows': rows, 'recommendation': recommendation,
+                'ablations': {stage: metrics(counts) for stage, counts in self.stages.items()}}
 
 
 class Report:
-    def __init__(self, scan, events):
+    def __init__(self, scan, events, materials):
         self.active = defaultdict(list)
         self.finished = []
         self.names = scan.get('aovNames', {})
+        self.materials = materials
         self.events = events
 
     def append(self, frame, kind, score, pixels, ids, window, sparkle, measurements, warp,
@@ -221,6 +246,7 @@ class Report:
             active_keys = np.column_stack((active_keys, foreground[ys, xs]))
         keys, inverse = np.unique(active_keys, axis=0, return_inverse=True)
         names = self.names.get(str(frame), {})
+        material_slots = self.materials.get(str(frame), {})
 
         def name_for(key, category):
             entries = names.get(category, [])
@@ -242,6 +268,8 @@ class Report:
             source_name = name_for(source, 'objects') if source is not None else None
             name = name_for(object_id, 'objects')
             mat = name_for(material_id, 'materials')
+            if mat is None and material_id in material_slots.get(name, ()):
+                mat = f'Material on {name}'
             for component in np.unique(component_ids):
                 if component == 0:
                     continue
@@ -273,8 +301,17 @@ class Report:
             return box_intersection(region['lastBox'], [a - TILE, b - TILE, c + TILE, d + TILE])
 
         active = self.active[identity]
-        region = max(active, key=overlap, default=None)
-        if region is None or not overlap(region):
+        overlaps = [(overlap(region), region) for region in active]
+        matches = sorted((pair for pair in overlaps if pair[0]), key=lambda pair: -pair[0])
+        if matches:
+            region = matches[0][1]
+            for _, other in matches[1:]:
+                # Join tracks when a component bridges their projected boxes.
+                self.merge_tracks(region, other)
+            if len(matches) > 1:
+                merged = {id(other) for _, other in matches[1:]}
+                self.active[identity] = [item for item in active if id(item) not in merged]
+        else:
             region = {'identity': identity, 'first': frame, 'last': frame, 'boxes': [],
                       'pixelFrames': 0, 'peak': 0., 'peakFrame': frame, 'reasons': np.zeros(len(REASONS)),
                       'weights': np.zeros(2), 'sparkle': 0., 'sparkleVetoes': 0., 'switches': 0.}
@@ -291,13 +328,22 @@ class Report:
         region['sparkleVetoes'] += vetoes * area
         region['switches'] += switches * area
 
+    @staticmethod
+    def merge_tracks(region, other):
+        region['first'] = min(region['first'], other['first'])
+        region['boxes'].extend(other['boxes'])
+        if other['peak'] > region['peak']:
+            region['peak'], region['peakFrame'] = other['peak'], other['peakFrame']
+        for field in ('pixelFrames', 'reasons', 'weights', 'sparkle', 'sparkleVetoes', 'switches'):
+            region[field] += other[field]
+
     def advance(self, frame):
         remaining = defaultdict(list)
         for identity, regions in self.active.items():
             for region in regions:
                 if frame - region['last'] <= 3:
                     remaining[identity].append(region)
-                elif len(region['boxes']) >= MIN_FRAMES:
+                elif len({box[0] for box in region['boxes']}) >= MIN_FRAMES:
                     self.finished.append(region)
         self.active = remaining
 
@@ -306,7 +352,7 @@ class Report:
         result = []
         for region in self.finished:
             kind, obj, instance, mat, name, material, events, source, source_name = region['identity']
-            frames = region['boxes']
+            frames = sorted(region['boxes'])
             pixel_frames = region['pixelFrames']
             bounds = [min(x[1] for x in frames), min(x[2] for x in frames),
                       max(x[3] for x in frames), max(x[4] for x in frames)]
@@ -328,18 +374,69 @@ class Report:
             result.append({
                 'type': kind, 'frames': [region['first'], region['last']], 'box': bounds,
                 'frameBoxes': frames, 'pixelFrames': pixel_frames,
-                'object': {'id': obj, 'instance': instance, 'name': name},
-                'material': {'id': mat, 'name': material}, 'events': list(events),
+                'object': {'id': obj, 'instance': instance,
+                           'name': name or ('Background' if obj == 0 else f'Unnamed mesh {obj}')},
+                'material': {'id': mat, 'name': material or f'Unnamed material {mat}'},
+                'events': list(events),
                 'severity': round(region['peak'] * math.log2(1 + pixel_frames / TILE ** 2), 3),
                 'peakSignal': round(region['peak'], 3), 'peakFrame': region['peakFrame'], 'primaryCheck': check,
                 'tapReasons': reasons,
-                **({'priorForeground': {'id': source, 'name': source_name}} if source is not None else {}),
+                **({'priorForeground': {'id': source, 'name': source_name or f'Unnamed mesh {source}'}} if source is not None else {}),
                 'meanWindowWeight': weights.round(3).tolist(),
                 'sparkleCorrectedFraction': round(region['sparkle'] / pixel_frames, 4),
                 'sparkleVetoFraction': round(region['sparkleVetoes'] / pixel_frames, 4),
                 'meanTapSwitchFraction': round(region['switches'] / pixel_frames, 4),
             })
         return sorted(result, key=lambda issue: -issue['severity'])
+
+
+def review_list(issues, limit):
+    if not limit or len(issues) <= limit:
+        return issues
+    # A long, high-contrast surface can generate several spatially separate
+    # issues. Keep capacity for other surfaces and both artifact types.
+    seen = defaultdict(int)
+    ranked = []
+    for issue in issues:
+        key = issue['type'], issue['object']['id'], issue['object']['instance']
+        priority = issue['severity'] / (1 + seen[key])
+        ranked.append((priority, issue))
+        seen[key] += 1
+    selected = {id(issue) for _, issue in sorted(ranked, key=lambda item: -item[0])[:limit]}
+    return [issue for issue in issues if id(issue) in selected]
+
+
+class ReferenceReview:
+    def __init__(self, report):
+        self.by_frame = defaultdict(list)
+        self.entries = report['issues'] + report['authoredChanges']
+        for item in self.entries:
+            boxes = defaultdict(list)
+            for frame, *box in item['frameBoxes']:
+                boxes[frame].append(box)
+            item['referenceEvidence'] = {'measuredFrames': [], 'supportingFrames': []}
+            for frame, frame_boxes in boxes.items():
+                self.by_frame[frame].append((item, frame_boxes))
+
+    def add(self, frame, ids, reference, events, thresholds):
+        high, trail, valid, _ = reference
+        valid = valid & ~events
+        evidence = {'flicker': high >= thresholds.reference_flicker,
+                    'ghost': trail >= thresholds.reference_ghost}
+        for item, boxes in self.by_frame.get(frame, ()):
+            identity = (item['object']['id'], item['object']['instance'], item['material']['id'])
+            measured = supported = False
+            positive = evidence[item['type']]
+            for x0, y0, x1, y1 in boxes:
+                rows = np.s_[y0:y1, x0:x1]
+                surface = valid[rows] & np.all(ids[rows][..., :3] == identity, axis=-1)
+                measured |= surface.sum() >= MIN_PIXELS
+                supported |= (surface & positive[rows]).sum() >= MIN_PIXELS
+            result = item['referenceEvidence']
+            if measured:
+                result['measuredFrames'].append(frame)
+            if supported:
+                result['supportingFrames'].append(frame)
 
 
 class Video:
@@ -391,27 +488,38 @@ def write_report(out, result):
              '', 'Coordinates are top-left pixel bounds with exclusive right and bottom edges.', '']
     if result['heatmaps']:
         lines.extend(['The heatmap video shows flicker on the left and trail candidates on the right.', ''])
-    for title, key in [('Candidates', 'issues'), ('Overlapping authored changes', 'authoredChanges')]:
+    for title, key in [('Review issues', 'issues'), ('Overlapping authored changes', 'authoredChanges')]:
         lines.extend([f'## {title}', ''])
+        group_count = result.get('issueGroups', {}).get(key, len(result[key]))
+        if group_count > len(result[key]):
+            lines.extend([f'Showing {len(result[key])} of {group_count} qualifying groups.', ''])
         if not result[key]:
             lines.extend(['None.', ''])
             continue
-        lines.extend(['| Severity | Type | Frames | Bounds | Object | Material | Main window evidence |',
-                      '| ---: | --- | --- | --- | --- | --- | --- |'])
+        columns = ['Severity', 'Type', 'Frames', 'Bounds', 'Object', 'Material', 'Main window evidence']
+        review = any('referenceEvidence' in row for row in result[key])
+        if review:
+            columns.append('Reference support')
+        lines.append('| ' + ' | '.join(columns) + ' |')
+        lines.append('| ---: | ' + ' | '.join(['---'] * (len(columns) - 1)) + ' |')
         for item in result[key]:
             obj, mat = item['object'], item['material']
-            obj_name = obj['name'] or f"ID {obj['id']}"
-            mat_name = mat['name'] or f"ID {mat['id']}"
+            obj_name, mat_name = obj['name'], mat['name']
             frame_text = '–'.join(map(str, item['frames']))
             check = item['primaryCheck']
             if 'priorForeground' in item:
                 source = item['priorForeground']
-                source_name = source['name'] or f"ID {source['id']}"
+                source_name = source['name']
                 check += f" · Prior foreground {source_name}"
             if item['events']:
                 check += ' · ' + ', '.join(item['events'])
             values = [item['severity'], item['type'], frame_text, ', '.join(map(str, item['box'])),
                       obj_name, mat_name, check]
+            if review:
+                evidence = item.get('referenceEvidence', {})
+                measured = len(evidence.get('measuredFrames', ()))
+                supported = len(evidence.get('supportingFrames', ()))
+                values.append(f'{supported}/{measured} frames' if measured else 'Unmeasured')
             lines.append('| ' + ' | '.join(str(value).replace('|', '\\|').replace('\n', ' ')
                                            for value in values) + ' |')
         lines.append('')
@@ -432,7 +540,8 @@ def cost(seconds, count):
 
 
 def analyze(temporal_dir, spatial_dir, out, thresholds, reference_dirs=(), reference_ranges=(),
-            make_video=True, base_report=None):
+            make_video=True, base_report=None, issue_limit=DEFAULT_ISSUE_LIMIT,
+            calibration_only=False):
     temporal, spatial = load_metadata(temporal_dir), load_metadata(spatial_dir)
     first, last = checkout_settings(temporal, spatial)
     size = tuple(temporal['settings']['size'])
@@ -448,14 +557,16 @@ def analyze(temporal_dir, spatial_dir, out, thresholds, reference_dirs=(), refer
     for cut in options.get('cuts', ()):
         cuts.add(cut if isinstance(cut, int) else math.ceil(cut['time'] * temporal['fps']))
     reference_sources = {}
+    reference_seeds = set()
     reference_timing = 0.
     for folder in reference_dirs:
         data = load_metadata(folder)
         ref_settings = data['settings']
-        comparable = ('size', 'seedValue', 'tracer', 'display', 'render')
+        comparable = ('size', 'tracer', 'display', 'render')
         if (ref_settings['spp'] != 256 or ref_settings['seed'] != 'fixed' or data['fps'] != temporal['fps']
                 or any(ref_settings.get(k) != temporal['settings'].get(k) for k in comparable)):
-            raise ValueError(f'Reference {folder} must use 256 spp, the fixed seed and the same view settings.')
+            raise ValueError(f'Reference {folder} must use 256 spp, a fixed seed and the same view settings.')
+        reference_seeds.add(ref_settings['seedValue'])
         reference_timing += data['seconds']
         for start, stop in data['saved']:
             for index in range(start, stop + 1):
@@ -473,18 +584,22 @@ def analyze(temporal_dir, spatial_dir, out, thresholds, reference_dirs=(), refer
     if evaluated.difference(reference_sources):
         raise ValueError('Reference images do not cover every requested evaluation frame.')
     grid = np.indices(shape, dtype=np.float32)
-    report = Report(scan, events)
+    track_issues = base_report is None and not calibration_only
+    if calibration_only and not reference_sources:
+        raise ValueError('Calibration requires a reference capture.')
+    report = Report(scan, events, temporal.get('materials', {})) if track_issues else None
+    review = ReferenceReview(base_report) if base_report is not None else None
     calibration = Calibration(thresholds) if reference_sources else None
     video = Video(out / 'heatmaps.mp4', size, temporal['fps']) if make_video else None
     quick_metrics, fine_metrics = QuickMetrics(has_history), ReferenceMetrics()
-    foreground_metrics = ForegroundTrails() if base_report is None and has_history else None
+    foreground_metrics = ForegroundTrails() if track_issues and has_history else None
     started = monotonic()
     reference_cpu = 0.
-    frames = (range(first, last + 1) if base_report is None
+    frames = (range(first, last + 1) if track_issues
               else sorted(index for index in reference_sources if first <= index <= last))
     previous_ids = None
     previous_frame = None
-    global_counts = [0, 0, 0, 0]
+    global_counts = [0, 0, 0, 0, 0, 0]
     change_energy = np.zeros(2, dtype=np.float64)
     try:
         for index in frames:
@@ -499,7 +614,8 @@ def analyze(temporal_dir, spatial_dir, out, thresholds, reference_dirs=(), refer
                 previous_ids = None
                 quick_metrics.reset()
                 fine_metrics.reset()
-                report.advance(math.inf)
+                if report is not None:
+                    report.advance(math.inf)
                 if foreground_metrics is not None:
                     foreground_metrics.reset()
             warp = None
@@ -509,30 +625,29 @@ def analyze(temporal_dir, spatial_dir, out, thresholds, reference_dirs=(), refer
             m = quick_metrics.push(signal, baseline, window, warp)
             previous_ids = ids
             previous_frame = index
-            flicker_score = np.minimum(m.flicker / thresholds.flicker,
-                                       m.flicker / np.maximum(.01, thresholds.oidn_ratio * m.oidn_change))
-            ghost_score = m.ghost / thresholds.ghost
+            flicker_score, ghost_score = detector_scores(m, thresholds)
             foreground_score = ghost_score
             if foreground_metrics is not None:
                 foreground, sources = foreground_metrics.push(signal, baseline, ids, warp)
                 foreground_score = foreground / thresholds.foreground_trail
-            unstable = (m.switch >= thresholds.switch) & (m.flicker >= thresholds.flicker)
             global_counts[0] += int(m.valid.sum())
+            global_counts[4] += int(m.established.sum())
+            global_counts[5] += int((m.switch_comparable & (m.switch >= thresholds.switch)).sum())
             change_energy += (np.square(m.flicker, where=m.valid, out=np.zeros_like(m.flicker)).sum(dtype=np.float64),
                               np.square(m.oidn_change, where=m.valid, out=np.zeros_like(m.oidn_change)).sum(dtype=np.float64))
             global_counts[1] += int(m.switch_comparable.sum())
             global_counts[2] += int((m.switch_comparable & (m.switch > 0)).sum())
             if m.reversals is not None:
                 global_counts[3] += int(m.reversals.sum())
-            if warp is not None and base_report is None:
+            if warp is not None and report is not None:
                 for kind, score, mask in (
-                    (TYPES[0], flicker_score, m.valid & (flicker_score >= 1)),
-                    (TYPES[1], ghost_score, m.valid & (ghost_score >= 1)),
-                    (TYPES[2], m.switch / thresholds.switch, unstable),
+                    (TYPES[0], flicker_score, flicker_score >= 1),
+                    (TYPES[1], ghost_score, ghost_score >= 1),
                 ):
                     report.append(index, kind, score, mask, ids, window, sparkle, m, warp)
                 if foreground_metrics is not None:
-                    report.append(index, TYPES[1], foreground_score, m.valid & (foreground_score >= 1),
+                    foreground_score *= m.established
+                    report.append(index, TYPES[1], foreground_score, foreground_score >= 1,
                                   ids, window, sparkle, m, warp, foreground=sources)
                 report.advance(index)
             if video:
@@ -555,6 +670,8 @@ def analyze(temporal_dir, spatial_dir, out, thresholds, reference_dirs=(), refer
                             event_ids = [i for i, name in enumerate(names, 1) if name in event['objects']]
                             exclude[y0:y1, x0:x1] |= np.isin(ids[y0:y1, x0:x1, 0], event_ids)
                     calibration.add(index, m, exact, exclude)
+                    if review is not None:
+                        review.add(index, ids, exact, exclude, thresholds)
                 reference_cpu += monotonic() - tick
             else:
                 fine_metrics.reset()
@@ -568,7 +685,12 @@ def analyze(temporal_dir, spatial_dir, out, thresholds, reference_dirs=(), refer
         raise
 
     if calibration is not None:
-        dump_json(out / 'calibration.json', calibration.report())
+        report_data = calibration.report()
+        report_data['seedValue'] = temporal['settings']['seedValue']
+        report_data['referenceSeedValues'] = sorted(reference_seeds)
+        dump_json(out / 'calibration.json', report_data)
+    if calibration_only:
+        return
     if base_report is not None:
         base_report['calibration'] = 'calibration.json'
         base_report['cost']['reference capture'] = cost(reference_timing, len(reference_sources))
@@ -576,14 +698,17 @@ def analyze(temporal_dir, spatial_dir, out, thresholds, reference_dirs=(), refer
         write_report(out, base_report)
         return base_report
     issues = report.complete()
-    valid, comparable, switches, reversals = global_counts
+    plain = [issue for issue in issues if not issue['events']]
+    authored = [issue for issue in issues if issue['events']]
+    valid, comparable, switches, reversals, established, large_switches = global_counts
     count = last - first + 1
     run_info = {
         'frames': [first, last], 'fps': temporal['fps'], 'size': size, 'backend': temporal['backend'],
         'thresholds': asdict(thresholds), 'cuts': sorted(cuts), 'events': events,
-        'counts': {'validMotionPixels': valid, 'switchComparablePixels': comparable,
+        'counts': {'validMotionPixels': valid, 'establishedSurfacePixels': established,
+                   'switchComparablePixels': comparable,
                    'pixelsWithTapSwitches': switches, 'tapSwitchPixelFraction': switches / comparable if comparable else None,
-                   'pixelsWithRepeatedTapSwitches': reversals},
+                   'pixelsWithRepeatedTapSwitches': reversals, 'pixelsOverTapSwitchThreshold': large_switches},
         'alignedChangeRms': dict(zip(('temporal', 'oidn'), np.sqrt(change_energy / valid).tolist()))
         if valid else None,
         'settings': temporal['settings'], 'denoiserWeights': scan.get('denoiserWeights'),
@@ -596,8 +721,9 @@ def analyze(temporal_dir, spatial_dir, out, thresholds, reference_dirs=(), refer
             'reference capture': cost(reference_timing, len(reference_sources)) if reference_sources else None,
             'reference analysis': cost(reference_cpu, len(reference_sources)) if reference_sources else None,
         },
-        'issues': [issue for issue in issues if not issue['events']],
-        'authoredChanges': [issue for issue in issues if issue['events']],
+        'issueGroups': {'issues': len(plain), 'authoredChanges': len(authored)},
+        'issues': review_list(plain, issue_limit),
+        'authoredChanges': review_list(authored, issue_limit),
     }
     write_report(out, run_info)
     return run_info
@@ -614,7 +740,7 @@ def reference_selection(report):
         if all(end < a or start > b for a, b in ranges):
             ranges.append((start, end))
 
-    for kind in TYPES[:2]:
+    for kind in TYPES:
         for issue in report['issues']:
             if issue['type'] == kind:
                 add(issue['peakFrame'])
@@ -681,6 +807,8 @@ def command_line():
     common.add_argument('-o', '--output', type=Path, required=True)
     common.add_argument('--thresholds', type=Path, help='JSON overrides for the scan thresholds')
     common.add_argument('--no-video', action='store_true')
+    common.add_argument('--max-issues', type=int, default=DEFAULT_ISSUE_LIMIT,
+                        help='Maximum issues per report section (0 keeps all qualifying groups)')
     common.add_argument('--fine-frames', type=frame_range, action='append', default=[])
     commands = parser.add_subparsers(dest='command', required=True)
     run = commands.add_parser('run', parents=[common], help='Render a shot and analyze it')
@@ -698,7 +826,13 @@ def command_line():
     existing.add_argument('temporal', type=Path)
     existing.add_argument('spatial', type=Path)
     existing.add_argument('--reference', type=Path, action='append', default=[])
+    existing.add_argument('--calibration-only', action='store_true',
+                          help='Score covered reference frames without tracking issues or encoding video')
     args = parser.parse_args()
+    if args.max_issues < 0:
+        parser.error('--max-issues must be nonnegative.')
+    if args.command == 'analyze' and args.calibration_only and not args.reference:
+        parser.error('--calibration-only requires --reference.')
     args.output = args.output.resolve()
     if args.command == 'run' and args.fine_frames:
         if not args.fine:
@@ -712,12 +846,20 @@ def main():
     args = command_line()
     thresholds = Thresholds(**(json.loads(args.thresholds.read_text()) if args.thresholds else {}))
     thresholds.check()
-    if not args.no_video:
+    make_video = not args.no_video and not getattr(args, 'calibration_only', False)
+    if make_video:
         Video.check()
     args.output.mkdir(parents=True, exist_ok=True)
     if args.command == 'analyze':
-        analyze(args.temporal, args.spatial, args.output, thresholds, args.reference,
-                args.fine_frames, not args.no_video)
+        if args.calibration_only:
+            analyze(args.temporal, args.spatial, args.output, thresholds, args.reference,
+                    args.fine_frames, make_video=False, calibration_only=True)
+        else:
+            report = analyze(args.temporal, args.spatial, args.output, thresholds, make_video=make_video,
+                             issue_limit=args.max_issues)
+            if args.reference:
+                analyze(args.temporal, args.spatial, args.output, thresholds, args.reference,
+                        args.fine_frames, make_video=False, base_report=report)
         return
     if args.scratch:
         args.scratch.mkdir(parents=True, exist_ok=True)
@@ -732,7 +874,8 @@ def main():
         if not metadata['scan']['denoiserWeights']:
             raise ValueError('Set MUTRACER_OIDN_WEIGHTS to the cleanAuxLarge model and its guide weights.')
         capture(args, spatial, args.frames, 'cleanAuxLarge', context=(metadata['first'], metadata['last']))
-        report = analyze(temporal, spatial, args.output, thresholds, make_video=not args.no_video)
+        report = analyze(temporal, spatial, args.output, thresholds, make_video=make_video,
+                         issue_limit=args.max_issues)
         if args.fine:
             ranges = args.fine_frames or reference_selection(report)
             first = args.frames[0]

@@ -6,6 +6,9 @@ import numpy as np
 from scipy import ndimage
 
 
+SURFACE_OBSERVATIONS = 5
+
+
 def display_signal(rgb):
     r, g, b = np.moveaxis(rgb.astype(np.float32), -1, 0)
     return np.stack((.2126 * r + .7152 * g + .0722 * b, .5 * (r - g), .5 * (b - g)), -1)
@@ -96,6 +99,10 @@ class Measurements:
     switch_comparable: np.ndarray
     valid: np.ndarray
     reversals: np.ndarray | None
+    established: np.ndarray
+    moving: np.ndarray
+    oidn_noise: np.ndarray
+    corroborated_ghost: np.ndarray
 
 
 class QuickMetrics:
@@ -103,21 +110,31 @@ class QuickMetrics:
         self.history = history
         self.ring = []
         self.previous_changes = None
+        self.surface_age = None
+        self.spatial_variance = None
 
     def reset(self):
         self.ring.clear()
         self.previous_changes = None
+        self.surface_age = None
+        self.spatial_variance = None
 
     def push(self, temporal, spatial, window, warp):
         residual = temporal - spatial
         zeros = np.zeros(temporal.shape[:2], dtype=np.float32)
         invalid = np.zeros(zeros.shape, dtype=bool)
         valid = invalid if warp is None else warp.valid
-        flicker, spatial_change, ghost, switch = (zeros,) * 4
+        flicker, spatial_change, ghost, corroborated_ghost, switch = (zeros,) * 5
+        variance = zeros
+        age = np.ones(zeros.shape, dtype=np.uint8)
+        moving = invalid
         comparable = invalid
         older = None
         reversals = None
         if self.ring and warp is not None:
+            age += np.where(valid, self.surface_age[warp.nearest], 0)
+            np.minimum(age, SURFACE_OBSERVATIONS, out=age)
+            moving = (warp.travel >= .35) | ndimage.maximum_filter(warp.changed_screen_id, 5)
             previous_t, previous_s, previous_window, old_residuals, deltas = self.ring[-1]
             t_s, s_s = np.split(warp.sample(np.concatenate((previous_t, previous_s), axis=-1)), 2, axis=-1)
             dt = (temporal - t_s) * valid[..., None]
@@ -133,6 +150,8 @@ class QuickMetrics:
                 along_track = valid & old_valid[warp.nearest]
                 t_innovation = patch_rms(magnitude(dt - old_t[warp.nearest]) * .5 * along_track)
                 s_innovation = patch_rms(magnitude(ds - old_s[warp.nearest]) * .5 * along_track)
+                prior = self.spatial_variance[warp.nearest]
+                variance = np.where(along_track, .25 * s_innovation ** 2 + .75 * prior, 0)
                 flicker = np.where(along_track, .65 * flicker + .35 * t_innovation, flicker)
                 spatial_change = np.where(along_track, .65 * spatial_change + .35 * s_innovation,
                                           spatial_change)
@@ -152,14 +171,21 @@ class QuickMetrics:
                 same_surface_change = signed_support(s_s, channel, sign) - current
                 excess = np.maximum(0, lag - np.maximum(0, same_surface_change))
                 ghost = np.minimum(magnitude(residual), np.minimum(persistent, 2 * excess))
-                moving = (warp.travel >= .35) | ndimage.maximum_filter(warp.changed_screen_id, 5)
+                # The lag hypothesis should survive an independent observation of the
+                # current surface. An OIDN-only error can make a stable temporal output
+                # disagree with the current OIDN image while matching its aligned neighbor.
+                independent_error = signed_support(temporal - s_s, channel, sign)
+                corroborated = np.minimum(ghost, 1.5 * independent_error)
+                corroborated_ghost = patch_rms(np.maximum(0, corroborated) * moving * valid)
                 ghost = patch_rms(np.maximum(0, ghost) * moving)
         else:
             dt = ds = None
         residuals = (residual,) if older is None else (residual, older)
         self.ring.append((temporal, spatial, window, residuals, (dt, ds, valid) if dt is not None else None))
         self.ring = self.ring[-3:]
-        return Measurements(flicker, spatial_change, ghost, switch, comparable, valid, reversals)
+        self.surface_age, self.spatial_variance = age, variance
+        return Measurements(flicker, spatial_change, ghost, switch, comparable, valid, reversals,
+                            age >= SURFACE_OBSERVATIONS, moving, np.sqrt(variance), corroborated_ghost)
 
 
 class ReferenceMetrics:
