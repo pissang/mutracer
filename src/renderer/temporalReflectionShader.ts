@@ -92,16 +92,16 @@ ${planarExperiment ? '  if (EXPERIMENTAL_PLANAR_REFLECTIONS) { return vec3f(plan
   let estimationError=length(adjusted*deltaU/denominator);
   let aperture=camera.lens.x*camera.lens.y*(1./max(depth,1e-4)-select(0.,1./(depth+distance),distance>0.));
   let residual=length(correction)*localTurns+estimationError+aperture*max(abs(u.x/denominator.x),abs(u.y/denominator.y));
-  // A nearest-texel tap adds up to half a pixel of rounding on each
-  // axis. This matters more for narrow projected lobes and as current-frame
-  // sample noise falls with 1/sqrt(spp). Keep the tangent-plane validation
-  // when the added alignment error outweighs the expected noise reduction.
+  // A nearest-texel tap adds up to half a pixel of rounding on each axis.
+  // This matters more for narrow projected lobes and as current-frame sample
+  // noise falls with 1/sqrt(spp). A virtual tap's weight is the square of
+  // this confidence, so scaling it by 1/sqrt(spp) once the rounding
+  // allowance reaches the lobe width keeps the history's effective sample
+  // count constant: more samples then never reduce the total.
   let lobeWidth = .5 + camera.lens.x*lobes.x*lobes.x/max(denominator.x,denominator.y);
-  let samplePrecision = sqrt(max(1.,${planarExperiment ? 'select(samples,EXPERIMENTAL_ALIGNMENT_SAMPLES,EXPERIMENTAL_ALIGNMENT_SAMPLES>0.)' : 'samples'}/3.))-1.;
-  let alignmentCost = samplePrecision*(.5+residual)/lobeWidth;
-  if (alignmentCost >= 1.) { return vec3f(planar,1.); }
-  let trust = (1.-smoothstep(.10,.45,residual))*smoothstep(.25,.48,cosine)*
-    (1.-smoothstep(.5,1.,alignmentCost));
+  let alignment = min(1.,(.5+residual)/lobeWidth);
+  let alignmentCost = sqrt(max(1.,${planarExperiment ? 'select(samples,EXPERIMENTAL_ALIGNMENT_SAMPLES,EXPERIMENTAL_ALIGNMENT_SAMPLES>0.)' : 'samples'}/3.))*alignment;
+  let trust = (1.-smoothstep(.10,.45,residual))*smoothstep(.25,.48,cosine)/max(1.,alignmentCost);
   // The smallest normal half-float keeps the model tag on devices that
   // flush subnormals when storing the confidence.
   let packedTrust = select(-2.,-trust,trust >= 0.00006103515625);

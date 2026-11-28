@@ -533,22 +533,35 @@ async function exerciseCurvedCapture(device: GPUDevice) {
       await history.upload(frame, {viewProjection: projection, projection, apertureRadius: 0, focusDistance: 2},
         {hdr, id, centerNormal: guide, roughness: guide, motion, albedo, centerRecords, reflected: hdr});
     }
-    const packedMotion = async (frame: number) => {
+    // Rows are padded to 256 bytes, 128 half words.
+    const read = async (texture: GPUTexture, frame: number) => {
       const encoder = device.createCommandEncoder();
-      encoder.copyTextureToBuffer({texture: history.history.reflections!.endpoint, origin: [0, 0, frame]},
-        {buffer: readback, bytesPerRow: width * 16}, [width, height, 1]);
+      encoder.copyTextureToBuffer({texture, origin: [0, 0, frame]},
+        {buffer: readback, bytesPerRow: 256}, [width, height, 1]);
       device.queue.submit([encoder.finish()]);
       await readback.mapAsync(GPUMapMode.READ);
-      const displacement = new Uint32Array(readback.getMappedRange())[(4*width + 8)*4 + 2];
+      const words = new Uint16Array(readback.getMappedRange().slice(0));
       readback.unmap();
-      return displacement & 0xffff;
+      return words;
     };
-    const curved = await packedMotion(0);
-    const planar = await packedMotion(1);
+    const halfToFloat = (h: number) => (h >> 15 ? -1 : 1)*((h >> 10) & 31 ?
+      2**(((h >> 10) & 31) - 15)*(1 + (h & 1023)/1024) : 2**-14*(h & 1023)/1024);
+    const sample = async (frame: number) => ({
+      motion: (await read(history.history.reflections!.endpoint, frame))[4*128 + 8*8 + 4],
+      model: halfToFloat((await read(history.history.reflections!.radiance, frame))[4*128 + 8*4 + 3]),
+    });
+    const low = await sample(0);
+    const high = await sample(1);
     // Half-float codes for one and four pixels. Convex curvature reduces
     // the virtual displacement toward the one-pixel surface displacement.
-    check(curved > 0x3c00 && curved < 0x4400, 'Curved motion did not reduce convex image parallax');
-    check(planar === 0x4400, 'Sharp high-sample reflections did not retain the planar fallback');
+    check(low.motion > 0x3c00 && low.motion < 0x4400, 'Curved motion did not reduce convex image parallax');
+    // A negative model stores the curved candidate's confidence. With more
+    // samples the sharp reflection keeps the candidate at reduced confidence,
+    // so the history's effective sample count does not fall.
+    check(high.motion === low.motion, 'Sharp high-sample reflections lost the curved candidate');
+    check(low.model < 0 && high.model < 0, 'Curved reflections did not store a curved confidence');
+    const ratio = high.model/low.model;
+    check(Math.abs(ratio - Math.sqrt(3/16)) < .01, `High-sample curved confidence ratio ${ratio}`);
   } finally { readback.destroy(); history.dispose(); }
 }
 
