@@ -40,6 +40,33 @@ enum AssetFormat {
     Exr,
 }
 
+/// Experimental supplemental sampling of pixels with weak history.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct Supplement {
+    /// Effective base-count frames each pixel should reach.
+    goal: f32,
+    /// Extra samples of one pixel at most.
+    cap: u32,
+    mode: SupplementMode,
+    /// Dispatch over a compact pixel list instead of image-sized passes.
+    #[serde(default)]
+    compact: bool,
+    /// Select by the mean support within this many pixels.
+    #[serde(default)]
+    radius: u32,
+}
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum SupplementMode {
+    /// Select from the frame's past half-window after it is pushed.
+    Past,
+    /// Use the payload's per-pixel extra samples, center only.
+    Center,
+    /// Render the payload's extra samples as ordinary history (control).
+    History,
+}
+
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Overrides {
@@ -60,6 +87,7 @@ struct Overrides {
     experimental_planar: bool,
     #[serde(default)]
     experimental_geometry: bool,
+    experimental_supplement: Option<Supplement>,
     render: Option<RenderOptions>,
     display: Option<shot::Display>,
     format: Option<Format>,
@@ -247,6 +275,8 @@ struct Stream {
     flushing: bool,
     planar: bool,
     sample_tiles: bool,
+    supplement: Option<Supplement>,
+    supplement_render: Option<mutracer_native::api::Render>,
 }
 fn temporal_reply(
     writer: &mut impl Write,
@@ -256,10 +286,14 @@ fn temporal_reply(
     done: bool,
     latency: u32,
     elapsed_ms: Option<f64>,
+    supplement: Option<Value>,
 ) -> Result<()> {
     let mut header = json!({"type":"frames","id":id,"done":done,"latency":latency,"frames":[]});
     if let Some(elapsed_ms) = elapsed_ms {
         header["elapsedMs"] = json!(elapsed_ms);
+    }
+    if let Some(supplement) = &supplement {
+        header["supplement"] = supplement.clone();
     }
     if let Some(frame) = frame {
         let bytes = crate::temporal::encode(&frame, format)?;
@@ -268,18 +302,76 @@ fn temporal_reply(
                 "Temporal frame exceeds the stdio payload limit",
             ));
         }
-        reply(
-            writer,
-            json!({"type":"frames","id":id,"done":done,"latency":latency,"frames":[{"frame":frame.index,"offset":0,"bytes":bytes.len(),"format":format}],"bytes":bytes.len()}),
-            Some(&bytes),
-        )
+        header["frames"] = json!([{"frame":frame.index,"offset":0,"bytes":bytes.len(),"format":format}]);
+        header["bytes"] = json!(bytes.len());
+        reply(writer, header, Some(&bytes))
     } else {
-        reply(
-            writer,
-            json!({"type":"frames","id":id,"frames":[],"latency":latency,"done":done}),
-            None,
-        )
+        reply(writer, header, None)
     }
+}
+
+/// Selects, traces and attaches the supplemental samples of the frame just pushed.
+fn supplement_frame(
+    stream: &mut Stream,
+    renderer: &crate::run::Renderer,
+    settings: Settings,
+    config: &crate::temporal::Config,
+    frame: u32,
+    need_map: Option<&[u8]>,
+    supplement: Supplement,
+) -> Result<Value> {
+    let started = Instant::now();
+    let (mut pixels, past_frames) = match need_map {
+        Some(map) => {
+            let width = settings.size[0] as usize;
+            let pixels = map
+                .iter()
+                .enumerate()
+                .filter(|&(_, &n)| n > 0)
+                .map(|(i, &n)| (i % width) as u32 | ((i / width) as u32) << 12 | u32::from(n) << 24)
+                .collect();
+            (pixels, None)
+        }
+        None => {
+            let need = crate::temporal::watched_gpu("supplement estimate", || {
+                stream.filter.experimental_supplement_need()
+            })?;
+            (need.pixels, Some(need.past_frames))
+        }
+    };
+    let need_ms = started.elapsed().as_secs_f64() * 1000.;
+    let listed = Instant::now();
+    // The GPU appends in arbitrary order. Sorting keeps the trace deterministic.
+    pixels.sort_unstable_by_key(|packed| (std::cmp::Reverse(packed >> 24), packed & 0xff_ffff));
+    let samples: u64 = pixels.iter().map(|p| u64::from(p >> 24)).sum();
+    let mut targets = Vec::new();
+    if !pixels.is_empty() {
+        let width = settings.size[0] as usize;
+        targets = vec![0; width * settings.size[1] as usize];
+        for p in &pixels {
+            targets[((p >> 12) & 4095) as usize * width + (p & 4095) as usize] = p >> 24;
+        }
+    }
+    let list_ms = listed.elapsed().as_secs_f64() * 1000.;
+    let traced = Instant::now();
+    if !pixels.is_empty() {
+        if stream.supplement_render.is_none() {
+            stream.supplement_render = Some(renderer.supplement_render(settings, config)?);
+        }
+        let render = stream.supplement_render.as_ref().unwrap();
+        renderer.converge_supplement(render, settings, frame, targets, supplement.compact)?;
+    }
+    let trace_ms = traced.elapsed().as_secs_f64() * 1000.;
+    let gathered = Instant::now();
+    if let Some(render) = stream.supplement_render.as_ref().filter(|_| !pixels.is_empty()) {
+        crate::temporal::watched_gpu("supplement gather", || {
+            stream.filter.experimental_supplement_attach(&pixels, render)
+        })?;
+    }
+    let gather_ms = gathered.elapsed().as_secs_f64() * 1000.;
+    Ok(json!({"pixels":pixels.len(),"samples":samples,"pastFrames":past_frames,
+        "needMs":need_ms,"listMs":list_ms,"traceMs":trace_ms,"gatherMs":gather_ms,
+        "maxSamples":pixels.first().map_or(0, |p| p >> 24),"mode":format!("{:?}", supplement.mode)}))
 }
 
 fn editable(pointer: &str) -> bool {
@@ -378,7 +470,7 @@ impl Session {
             }
             Request::Flush { id } => {
                 let Some(stream) = self.temporal.as_mut() else {
-                    return temporal_reply(writer, id, None, Format::Png, true, 0, None);
+                    return temporal_reply(writer, id, None, Format::Png, true, 0, None, None);
                 };
                 stream.flushing = true;
                 let latency = stream.filter.latency();
@@ -388,7 +480,7 @@ impl Session {
                 if done {
                     self.temporal = None;
                 }
-                temporal_reply(writer, id, frame, format, done, latency, None)
+                temporal_reply(writer, id, frame, format, done, latency, None, None)
             }
             Request::Hello { id, protocol } => {
                 if protocol != 1 || self.hello {
@@ -694,8 +786,41 @@ impl Session {
                         "Planar reflections require temporal reflection motion",
                     ));
                 }
-                let sample_tiles = bytes.is_some();
-                if sample_tiles
+                let supplement = overrides.experimental_supplement;
+                if let Some(s) = supplement {
+                    if !overrides.experimental_capture
+                        || overrides.experimental_geometry
+                        || settings.denoise != Denoise::Temporal
+                        || settings.tracer != Tracer::Hardware
+                        || config.options.accumulate_guides
+                        || !(s.goal.is_finite() && s.goal >= 1.)
+                        || !(1..=64).contains(&s.cap)
+                        || settings.sequence_stride.unwrap_or(settings.spp) < settings.spp + s.cap
+                        || !check_only && (s.mode == SupplementMode::Past) != bytes.is_none()
+                    {
+                        return Err(invalid(
+                            "/settings/experimentalSupplement",
+                            "Supplemental samples need hardware temporal capture, current-frame guides, a stride covering spp + cap and a need map unless selecting from the past",
+                        ));
+                    }
+                }
+                let need_map = if !check_only && supplement.is_some_and(|s| s.mode != SupplementMode::Past) {
+                    let cap = supplement.unwrap().cap;
+                    if payload.len() != (settings.size[0] * settings.size[1]) as usize
+                        || payload.iter().any(|&n| u32::from(n) > cap)
+                    {
+                        return Err(invalid(
+                            "/bytes",
+                            "Supplement maps hold one byte of at most cap samples per pixel",
+                        ));
+                    }
+                    Some(payload.clone())
+                } else {
+                    None
+                };
+                let sample_tiles = bytes.is_some() && supplement.is_none()
+                    || supplement.is_some_and(|s| s.mode == SupplementMode::History);
+                if bytes.is_some() && supplement.is_none()
                     && (check_only
                         || !overrides.experimental_capture
                         || overrides.experimental_geometry
@@ -709,7 +834,7 @@ impl Session {
                         "Sample tiles require experimental offline capture, current-frame guides and a stride covering every tile sample",
                     ));
                 }
-                let tiles = if sample_tiles {
+                let tiles = if bytes.is_some() && supplement.is_none() {
                     let [columns, rows] = settings.size.map(|n| n.div_ceil(4));
                     if payload.len() != (columns * rows) as usize * 4 {
                         return Err(invalid(
@@ -762,6 +887,7 @@ impl Session {
                             || s.config != config
                             || s.planar != overrides.experimental_planar
                             || s.sample_tiles != sample_tiles
+                            || s.supplement != supplement
                             || s.last.checked_add(1) != Some(frame)
                     })
                 {
@@ -843,6 +969,7 @@ impl Session {
                     json!({"type":"progress","id":id,"frame":frame,"samples":0,"targetSamples":settings.spp}),
                     None,
                 )?;
+                let prepare_started = Instant::now();
                 match scene {
                     Scene::Shot { input, .. } => {
                         renderer.prepare_shot(input, settings, t, display)?
@@ -881,14 +1008,27 @@ impl Session {
                         Some(&payload),
                     );
                 }
+                let prepare_ms = prepare_started.elapsed().as_secs_f64() * 1000.;
+                let mut supplement_report = None;
                 let image = if settings.denoise == Denoise::Temporal {
-                    renderer.converge_with_tiles(settings, frame, tiles)?;
+                    let base_started = Instant::now();
+                    match (supplement, &need_map) {
+                        (Some(s), Some(map)) if s.mode == SupplementMode::History => {
+                            let counts = map.iter().map(|&n| settings.spp + u32::from(n)).collect();
+                            renderer.converge_pixels(settings, frame, 0, settings.spp, counts)?
+                        }
+                        _ => renderer.converge_with_tiles(settings, frame, tiles)?,
+                    }
                     if self.temporal.is_none() {
+                        let mut filter = config
+                            .start_with_planar(&renderer.engine, overrides.experimental_planar)?;
+                        if let Some(s) = supplement.filter(|s| s.mode != SupplementMode::History) {
+                            filter
+                                .experimental_supplement(s.goal, s.cap, s.radius)
+                                .map_err(crate::temporal::gpu)?;
+                        }
                         self.temporal = Some(Stream {
-                            filter: config.start_with_planar(
-                                &renderer.engine,
-                                overrides.experimental_planar,
-                            )?,
+                            filter,
                             config: config.clone(),
                             settings,
                             last: frame,
@@ -896,13 +1036,37 @@ impl Session {
                             flushing: false,
                             planar: overrides.experimental_planar,
                             sample_tiles,
+                            supplement,
+                            supplement_render: None,
                         });
                     }
                     let stream = self.temporal.as_mut().unwrap();
                     if config.cuts_at(frame, stream.last_time, t) {
                         stream.filter.cut();
                     }
+                    let base_ms = base_started.elapsed().as_secs_f64() * 1000.;
+                    let push_started = Instant::now();
                     crate::temporal::push(&mut stream.filter, frame, &renderer.render)?;
+                    let push_ms = push_started.elapsed().as_secs_f64() * 1000.;
+                    if supplement.is_some() {
+                        supplement_report =
+                            Some(json!({"baseMs":base_ms,"pushMs":push_ms,"prepareMs":prepare_ms}));
+                    }
+                    if let Some(s) = supplement.filter(|s| s.mode != SupplementMode::History) {
+                        let mut report = supplement_frame(
+                            stream,
+                            renderer,
+                            settings,
+                            &config,
+                            frame,
+                            need_map.as_deref(),
+                            s,
+                        )?;
+                        report["baseMs"] = json!(base_ms);
+                        report["pushMs"] = json!(push_ms);
+                        report["prepareMs"] = json!(prepare_ms);
+                        supplement_report = Some(report);
+                    }
                     stream.last = frame;
                     stream.last_time = t;
                     None
@@ -930,6 +1094,7 @@ impl Session {
                         overrides
                             .experimental_capture
                             .then(|| tick.elapsed().as_secs_f64() * 1000.),
+                        supplement_report,
                     );
                 };
                 reply(

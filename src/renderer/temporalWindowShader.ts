@@ -508,7 +508,9 @@ fn loadNormal(at: vec2i, slot: u32) -> vec3f {
 }
 `;
 
-export const createMixedWindowWGSL = (guides: boolean, reflections = false, sampleTileSize?: number, diagnostics = false) => /* wgsl */ `${windowBindingsAndGeometry}
+// The native supplemental-sampling control can count the center at its actual
+// sample count regardless of coverage, matching a center-only supplement.
+export const createMixedWindowWGSL = (guides: boolean, reflections = false, sampleTileSize?: number, diagnostics = false, actualCenter = false) => /* wgsl */ `${windowBindingsAndGeometry}
 ${diagnostics ? windowDiagnosticsWGSL : ''}${guides ? windowGuidesWGSL : ''}${recoverHistoryWGSL(!!sampleTileSize)}${silhouetteConfidenceWGSL}
 ${sampleTileSize ? /* wgsl */ `
 @group(0) @binding(${11 + (guides ? 3 : 0) + (reflections ? 3 : 0)}) var<storage, read> sampleTiles: array<u32>;
@@ -528,7 +530,7 @@ fn sampleWeight(at: vec2i, slot: u32, fullMatch: bool) -> f32 {
 }
 // Coverage-dependent and recovered taps keep their base vote.
 fn centerSampleWeight(at: vec2i) -> f32 {
-  return sampleWeight(at,p.current,hitCoverage(at,p.current)>=1.);
+  return sampleWeight(at,p.current,${actualCenter ? 'true' : 'hitCoverage(at,p.current)>=1.'});
 }
 fn fullCoverage(x: vec2i, at: vec2i) -> bool {
   return hitCoverage(x,p.current)>=1. && hitCoverage(at,p.source)>=1.;

@@ -479,7 +479,7 @@ fn window_guides_match_web_packed_guides() {
         ..Default::default()
     };
     let plan = options.plan(size, 0, &gpu.device.limits()).unwrap();
-    let passes = Passes::new(gpu.clone(), size, plan, 0, false, true, false, false, false).unwrap();
+    let passes = Passes::new(gpu.clone(), size, plan, 0, false, true, false, false, 0, false).unwrap();
     let mut camera = [0.; 20];
     for i in [0, 5, 10, 15, 18] {
         camera[i] = 1.;
@@ -539,6 +539,95 @@ fn window_guides_match_web_packed_guides() {
     assert_eq!(checked[4 * 16 + 4][3], 1., "lighting step accepted a tap");
 }
 
+/// Center-only supplements raise the current frame's center weight by their
+/// count relative to the base count. History and its weights stay base-only.
+#[test]
+#[ignore = "requires a hardware ray-query GPU"]
+fn supplement_samples_join_only_their_own_center() {
+    let engine = super::super::aov_tests::aov_engine(crate::api::Backend::Hardware);
+    let gpu = engine.inner.gpu.clone();
+    let size = [16, 8];
+    let pixels = 128;
+    let options = TemporalOptions {
+        history_radius: HistoryRadius::Fixed(1),
+        post_radius: 0,
+        stabilize_sparkle: false,
+        ..Default::default()
+    };
+    let plan = options.plan(size, 0, &gpu.device.limits()).unwrap();
+    let passes = Passes::new(gpu.clone(), size, plan, 0, false, false, false, false, 0, true).unwrap();
+    let mut camera = [0.; 20];
+    for i in [0, 5, 10, 15, 18] {
+        camera[i] = 1.;
+    }
+    camera[16] = 4.;
+    let buffer = |values: &[[f32; 4]]| {
+        gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Supplement test input"),
+            contents: bytemuck::cast_slice(values),
+            usage: wgpu::BufferUsages::STORAGE,
+        })
+    };
+    // A static surface whose base radiance is 1, 2 and 1 in three frames.
+    for (frame, brightness) in [(0, 1.), (1, 2.), (2, 1.)] {
+        let data: [Vec<[f32; 4]>; 9] = std::array::from_fn(|kind| {
+            vec![
+                match kind {
+                    0 => [1., 0., 0., 1.],
+                    1 => [0., 0., 1., 1.],
+                    2 => [0.5, 0., 0., 1.],
+                    3 => [0.5, 0.5, 0.5, 1.],
+                    4 => [brightness, brightness, brightness, 1.],
+                    5 => [0., 0., 1., 3.],
+                    6 => [f32::from_bits(1), 0., f32::from_bits(1), 0.],
+                    7 => [0.5, 0.5, 1., 1.],
+                    _ => [0., 0., 0., 1.],
+                };
+                pixels
+            ]
+        });
+        passes.capture(frame, &data.map(|values| Resource::Buffer(buffer(&values))), &camera, &[], false);
+    }
+    // The past half of frame 2 sees one neighbor at weight 1/2. Mirrored, the
+    // pixel reaches two frames, so a goal of three frames at 3 spp needs 3 more.
+    passes.window(2, 2, 0, true, false);
+    passes.window(2, 1, 1, true, false);
+    let (list, info) = passes.supplement_need(2, 3, 16, 3., 2., 0, true).unwrap();
+    let info = info.unwrap();
+    assert_eq!(list.len(), pixels);
+    assert!(list.iter().all(|packed| packed >> 24 == 3));
+    assert_eq!(info[..4], [1.5, 1.5, 0., 3.]);
+    // Six supplemental samples with mean 4 at one pixel of frame 1 (base 3 spp).
+    let [x, y] = [5u32, 3u32];
+    let mut colors = vec![[0.; 4]; pixels];
+    let mut counts = vec![[0.; 4]; pixels];
+    let source = ((size[1] - 1 - y) * size[0] + x) as usize;
+    colors[source] = [24., 24., 24., 6.];
+    counts[source] = [0., 0., 0., 6.];
+    let raw = [buffer(&colors), buffer(&counts), buffer(&counts)];
+    let entries = passes.supplement_gather(&[x | y << 12 | 6 << 24], 3, &raw, None);
+    let window = |i: u32, neighbors: &[u32], supplement: bool| {
+        passes.clear("rejects", 0, 64);
+        passes.window(i, i, 0, true, false);
+        for &j in neighbors {
+            passes.window(i, j, 1, true, false);
+        }
+        if supplement {
+            passes.supplement_blend(&entries, 1);
+        }
+        passes.window(i, i, 2, true, false);
+        passes.read::<[f32; 4]>(&passes["window"]).unwrap()
+    };
+    let center = window(1, &[0, 2], true);
+    let at = (y * size[0] + x) as usize;
+    // (2 + ½ + ½ + 2·4) / (1 + ½ + ½ + 2): the supplement weighs 6/3.
+    assert!((center[at][0] - 2.75).abs() < 1e-5, "{:?}", center[at]);
+    assert!((center[0][0] - 1.5).abs() < 1e-5, "{:?}", center[0]);
+    // Frame 0 still reuses frame 1's base radiance at its base weight.
+    let neighbor = window(0, &[1], false);
+    assert!((neighbor[at][0] - 4. / 3.).abs() < 1e-5, "{:?}", neighbor[at]);
+}
+
 #[test]
 #[ignore = "requires real GPU"]
 fn reflection_window_accumulates_a_translating_highlight_in_both_directions() {
@@ -559,7 +648,7 @@ fn reflection_window_accumulates_a_translating_highlight_in_both_directions() {
         ..Default::default()
     };
     let plan = options.plan(size, 0, &gpu.device.limits()).unwrap();
-    let passes = Passes::new(gpu.clone(), size, plan, 0, false, false, true, false, false).unwrap();
+    let passes = Passes::new(gpu.clone(), size, plan, 0, false, false, true, false, 0, false).unwrap();
     let mut camera = [0.; 20];
     for i in [0, 5, 10, 15, 18] {
         camera[i] = 1.;
@@ -688,6 +777,7 @@ fn curved_mirror_window(
         false,
         reflection_motion,
         false,
+        0,
         false,
     )
     .unwrap();

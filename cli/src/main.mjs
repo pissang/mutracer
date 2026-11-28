@@ -42,6 +42,58 @@ const number = (value, label, min, max) => {
   return n;
 };
 
+// Experimental supplemental samples for pixels with weak temporal history.
+// Without a map, each frame selects pixels from the past half of its window.
+// A map directory replays per-frame extra samples, either into the center only
+// or as ordinary history counted at the actual sample count (control).
+function supplementOptions(values, denoise, tracer, temporal, sampleBudget) {
+  const keys = ['supplement-goal','supplement-cap','supplement-map','supplement-mode','supplement-dispatch','supplement-radius','supplement-region'];
+  if (keys.every(key => values[key] === undefined)) return;
+  if (denoise !== 'temporal' || tracer !== 'hardware' || temporal?.accumulateGuides || sampleBudget !== undefined) {
+    throw new Error('Supplemental samples need hardware temporal rendering with current-frame guides and no sample budget.');
+  }
+  const cap = number(values['supplement-cap'] ?? '16', 'supplement cap', 1, 64);
+  const map = values['supplement-map'];
+  const mode = values['supplement-mode'] ?? (map ? 'center' : 'past');
+  if (!['past','center','history'].includes(mode) || (mode === 'past') !== (map === undefined)) {
+    throw new Error('Use --supplement-mode center or history with --supplement-map DIR:KIND, and past without a map.');
+  }
+  const goal = Number(values['supplement-goal'] ?? (map ? '1' : '4'));
+  if (!Number.isFinite(goal) || goal < 1) throw new Error('Supplement goal must be at least 1.');
+  let parsed;
+  if (map) {
+    const split = map.lastIndexOf(':');
+    if (split <= 0) throw new Error('Use --supplement-map DIR:KIND, for example DIR:past.f32 or DIR:need.u8.');
+    parsed = {directory: resolve(map.slice(0, split)), kind: map.slice(split + 1)};
+    if (!/^[\w-]+\.(f32|u8)$/.test(parsed.kind)) throw new Error('Supplement map kinds end in .f32 or .u8.');
+  }
+  const dispatch = values['supplement-dispatch'] ?? 'list';
+  if (!['list','image'].includes(dispatch)) throw new Error('Use --supplement-dispatch list or image.');
+  const region = values['supplement-region'] ?? 'weakest';
+  if (!['weakest','mean'].includes(region)) throw new Error('Use --supplement-region weakest or mean.');
+  const radius = number(values['supplement-radius'] ?? '0', 'supplement radius', 0, 8) | (region === 'mean' ? 256 : 0);
+  return {goal, cap, mode, map: parsed, compact: dispatch === 'list', radius};
+}
+
+// A missing map file means no supplemental samples for that frame.
+async function supplementMap(map, index, [width, height], cap) {
+  const file = resolve(map.directory, `frame-${String(index).padStart(4,'0')}.${map.kind}`);
+  let bytes;
+  try { bytes = await readFile(file); }
+  catch (error) { if (error.code === 'ENOENT') return Buffer.alloc(width * height); throw error; }
+  const pixels = width * height;
+  if (map.kind.endsWith('.u8')) {
+    if (bytes.length !== pixels) throw new Error(`${file} must hold one byte per pixel.`);
+    return bytes;
+  }
+  // Need dumps hold four floats per pixel; the fourth is the extra sample count.
+  if (bytes.length !== pixels * 16) throw new Error(`${file} must hold four floats per pixel.`);
+  const info = new Float32Array(bytes.buffer, bytes.byteOffset, pixels * 4);
+  const counts = Buffer.alloc(pixels);
+  for (let i = 0; i < pixels; i++) counts[i] = Math.min(cap, Math.max(0, Math.round(info[4 * i + 3])));
+  return counts;
+}
+
 function args() {
   const {values, positionals} = parseArgs({
     allowPositionals: true,
@@ -57,6 +109,10 @@ function args() {
       'context': {type: 'string'}, 'sample-budget': {type: 'string'},
       'artifact-scan': {type: 'boolean'},
       'sample-floor': {type: 'string'}, 'save-geometry': {type: 'boolean'},
+      'supplement-goal': {type: 'string'}, 'supplement-cap': {type: 'string'},
+      'supplement-map': {type: 'string'}, 'supplement-mode': {type: 'string'},
+      'supplement-dispatch': {type: 'string'}, 'supplement-radius': {type: 'string'},
+      'supplement-region': {type: 'string'},
     },
   });
   if (values.help) return {};
@@ -136,7 +192,7 @@ function options(input, command, values) {
   if (denoise === 'temporal' && (preview || sampleSequence !== 'frame')) {
     throw new Error('Temporal rendering requires stride 1 and output.sampleSequence set to frame.');
   }
-  const experimentalKeys = ['seed-value','sample-stride','reflection-motion','history-radius','post-radius','timing-only','context','sample-budget','sample-floor','save-geometry','artifact-scan'];
+  const experimentalKeys = ['seed-value','sample-stride','reflection-motion','history-radius','post-radius','timing-only','context','sample-budget','sample-floor','save-geometry','artifact-scan','supplement-goal','supplement-cap','supplement-map','supplement-mode','supplement-dispatch','supplement-radius','supplement-region'];
   const experimental = command === 'capture';
   if (!experimental && experimentalKeys.some(key => values[key] !== undefined)) {
     throw new Error('Experimental options require the capture command.');
@@ -168,16 +224,20 @@ function options(input, command, values) {
     throw new Error('Specify a sample budget to configure or save the geometry pilot.');
   }
   if (!Number.isFinite(sampleFloor) || sampleFloor <= 0) throw new Error('Sample floor must be positive.');
-  const strideMinimum = sampleBudget === undefined ? spp : Math.max(spp, offlineSampleCap);
-  const sequenceStride = values['sample-stride'] === undefined ? (sampleBudget === undefined ? undefined : Math.max(32, strideMinimum)) :
+  const supplement = supplementOptions(values, denoise, tracer, temporal, sampleBudget);
+  const strideMinimum = supplement ? spp + supplement.cap :
+    sampleBudget === undefined ? spp : Math.max(spp, offlineSampleCap);
+  const sequenceStride = values['sample-stride'] === undefined ? (sampleBudget === undefined && !supplement ? undefined : Math.max(32, strideMinimum)) :
     number(values['sample-stride'], 'sample stride', strideMinimum, 0xffffffff);
   const format = values.format;
   if (format !== undefined && (command !== 'still' || !['png','exr'].includes(format))) {
     throw new Error('Use --format png or exr for a still.');
   }
   return {duration, fps, first, last, time, sampleBudget, sampleFloor, stride: preview ? 2 : 1,
+    supplementMap: supplement?.map,
     settings: {size:[w,h], spp, seed, denoise, seedValue, sampleSequenceOffset:offset, tracer,
       sampleSequence, ...(experimental && {experimentalCapture:true}),
+      ...(supplement && {experimentalSupplement: {goal:supplement.goal, cap:supplement.cap, mode:supplement.mode, compact:supplement.compact, radius:supplement.radius}}),
       ...(values['artifact-scan'] && {experimentalScan:true}),
       ...(sequenceStride !== undefined && {experimentalSequenceStride: sequenceStride}),
       ...(projection === 'planar' && {experimentalPlanar:true}), ...(temporal && {temporal}), display: canonicalDisplay(display, command === 'validate'), format,
@@ -387,7 +447,15 @@ async function captureShot(worker, shot, replayShot, opts, values, directory, de
       await atomic(prefix(index) + '.geometry.bin', bytes);
       await atomic(prefix(index) + '.geometry.json', JSON.stringify(header));
     } : undefined;
-    planning = await planSampling(worker, shot, settings, fps, begin, end, opts.sampleBudget, opts.sampleFloor, saveGeometry);
+    // MUTRACER_SAVE_SAMPLE_PLAN keeps the plan and its predicted support without the pilot packets.
+    const savePlan = !!saveGeometry || !!process.env.MUTRACER_SAVE_SAMPLE_PLAN;
+    const supports = [];
+    planning = await planSampling(worker, shot, settings, fps, begin, end, opts.sampleBudget, opts.sampleFloor, saveGeometry,
+      savePlan && ((index, support) => supports.push([index, Buffer.from(support.slice().buffer)])));
+    for (const [index, bytes] of supports) {
+      await atomic(prefix(index) + '.support.f32', bytes);
+      await atomic(prefix(index) + '.samples.u32', Buffer.from(planning.plans[index - begin].targets.buffer));
+    }
     Object.assign(timing, {
       pilotMs: performance.now() - started, geometryMs: planning.geometryMs, allocationMs: planning.allocationMs,
       beautySamples: planning.plans.map(plan => plan.average),
@@ -428,12 +496,15 @@ async function captureShot(worker, shot, replayShot, opts, values, directory, de
       const camera = cameraRange(descriptor);
       const words = new Float32Array(descriptor.buffer, descriptor.byteOffset + camera[0], C.WORDS);
       cameras[index] = {transform: [...words.slice(C.TRANSFORM)], fov: words[C.FOV], zoom: words[C.ZOOM]};
-      yield {frame:index,t,descriptor,camera,tiles:plan && Buffer.from(plan.targets.buffer)};
+      const map = opts.supplementMap &&
+        await supplementMap(opts.supplementMap, index, settings.size, settings.experimentalSupplement.cap);
+      yield {frame:index,t,descriptor,camera,tiles:map ?? (plan && Buffer.from(plan.targets.buffer))};
     }
   }
   async function submitted(index, header) {
     timing.renderMs.push(performance.now() - tick);
     timing.workerMs.push(header.elapsedMs);
+    if (header.supplement) (timing.supplement ??= []).push({frame:index, ...header.supplement});
     await saveInput(index);
   }
   if (settings.denoise === 'temporal') {

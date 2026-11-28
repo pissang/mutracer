@@ -167,6 +167,14 @@ pub fn push(filter: &mut api::TemporalDenoiser, index: u32, render: &api::Render
     .map_err(gpu)
 }
 
+/// Runs one temporal GPU operation under the same deadline as a push.
+pub fn watched_gpu<T, E: std::fmt::Display>(
+    stage: &str,
+    operation: impl FnOnce() -> std::result::Result<T, E>,
+) -> Result<T> {
+    watched(TEMPORAL_TIMEOUT, stage, operation).map_err(gpu)
+}
+
 pub fn flush(filter: &mut api::TemporalDenoiser) -> Result<Option<api::OfflineFrame>> {
     watched(TEMPORAL_TIMEOUT, "temporal flush", || filter.flush()).map_err(gpu)
 }

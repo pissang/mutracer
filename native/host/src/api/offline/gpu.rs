@@ -30,7 +30,9 @@ pub(super) struct Passes {
     pub material_capacity: u32,
     accumulate_guides: bool,
     reflection_motion: bool,
-    pub sample_tiles: bool,
+    /// Sample tile edge in pixels, or zero for uniform sampling.
+    pub sample_tile: u32,
+    supplement_dump: Option<std::path::PathBuf>,
     diagnostic: Option<std::path::PathBuf>,
     scan: Option<std::path::PathBuf>,
     pipelines: HashMap<String, wgpu::ComputePipeline>,
@@ -49,7 +51,8 @@ impl Passes {
         accumulate_guides: bool,
         reflection_motion: bool,
         planar_reflections: bool,
-        sample_tiles: bool,
+        sample_tile: u32,
+        supplement: bool,
     ) -> Result<Self> {
         let shaders = &crate::postprocess::sources()?.temporal;
         let pixels = u64::from(size[0]) * u64::from(size[1]);
@@ -69,7 +72,11 @@ impl Passes {
             material_capacity: materials.max(1) as u32,
             accumulate_guides,
             reflection_motion,
-            sample_tiles,
+            sample_tile,
+            supplement_dump: supplement
+                .then(|| std::env::var_os("MUTRACER_SUPPLEMENT_DUMP"))
+                .flatten()
+                .map(std::path::PathBuf::from),
             diagnostic,
             scan,
             pipelines: Default::default(),
@@ -137,18 +144,27 @@ impl Passes {
                 "windowReflections"
             });
         }
-        if sample_tiles {
-            let bytes = (u64::from(size[0].div_ceil(4)) * u64::from(size[1].div_ceil(4)) + 1)
+        if sample_tile > 0 {
+            let bytes = (u64::from(size[0].div_ceil(sample_tile))
+                * u64::from(size[1].div_ceil(sample_tile))
+                + 1)
                 * u64::from(slots)
                 * 4;
             if bytes > u64::from(pass.gpu.device.limits().max_storage_buffer_binding_size) {
                 return Err("Tile ring exceeds the GPU storage binding limit".into());
             }
             pass.buffer("sampleTiles", bytes);
-            names.push("windowTiles");
+            let (surface, reflected) = tile_kernels(sample_tile);
+            names.push(surface);
             if reflection_motion {
-                names.push("windowReflectionsTiles");
+                names.push(reflected);
             }
+        }
+        if supplement {
+            pass.buffer("supplementList", (pixels + 1) * 4);
+            pass.buffer("supplementInfo", pixels * 16);
+            pass.buffer("supplementUnused", 16);
+            names.extend(["supplementNeed", "supplementGather", "supplementBlend"]);
         }
         if accumulate_guides {
             pass.buffer("albedoSum", pass.bytes);
@@ -530,12 +546,13 @@ impl Passes {
                 &self["reflectedTotal"],
             ]);
         }
-        let kernel = if self.sample_tiles {
+        let kernel = if self.sample_tile > 0 {
             bindings.push(&self["sampleTiles"]);
+            let (surface, reflected) = tile_kernels(self.sample_tile);
             if reflections {
-                "windowReflectionsTiles"
+                reflected
             } else {
-                "windowTiles"
+                surface
             }
         } else {
             match (self.accumulate_guides, reflections) {
@@ -745,10 +762,174 @@ impl Passes {
         Ok(output)
     }
 }
+impl Passes {
+    fn read_range<T: bytemuck::Pod>(&self, name: &str, bytes: std::ops::Range<u64>) -> Result<Vec<T>> {
+        Ok(bytemuck::pod_collect_to_vec(
+            &self
+                .gpu
+                .queue
+                .read_buffer(&self.gpu.device, self[name].buffer().slice(bytes))?,
+        ))
+    }
+    fn linear_groups(count: u32) -> [u32; 2] {
+        let groups = count.div_ceil(64).max(1);
+        [groups.min(65535), groups.div_ceil(65535)]
+    }
+    /// Converts the current weight sums of slot `i` into a compact list of
+    /// pixels with extra sample counts. `mirror` extrapolates past-only sums to
+    /// a whole window; zero scores the sums as a complete window.
+    pub fn supplement_need(
+        &self,
+        i: u32,
+        base: u32,
+        cap: u32,
+        goal: f32,
+        mirror: f32,
+        radius: u32,
+        info: bool,
+    ) -> Result<(Vec<u32>, Option<Vec<f32>>)> {
+        let [w, h] = self.size;
+        self.clear("supplementList", 0, 4);
+        let reflected = if self.reflection_motion {
+            "reflectedTotal"
+        } else {
+            "sum"
+        };
+        self.image_pass(
+            "supplementNeed",
+            &[
+                w,
+                h,
+                i % self.plan.slots(),
+                u32::from(self.reflection_motion),
+                base,
+                cap,
+                goal.to_bits(),
+                mirror.to_bits(),
+                radius,
+            ],
+            &[
+                &self["sum"],
+                &self[reflected],
+                &self["surface"],
+                &self["material"],
+                &self["supplementList"],
+                &self["supplementInfo"],
+            ],
+        );
+        let count = self.read_range::<u32>("supplementList", 0..4)?[0];
+        let list = if count == 0 {
+            Vec::new()
+        } else {
+            self.read_range("supplementList", 4..4 + u64::from(count) * 4)?
+        };
+        let info = if info {
+            Some(self.read(&self["supplementInfo"])?)
+        } else {
+            None
+        };
+        Ok((list, info))
+    }
+    pub fn reflection_motion(&self) -> bool {
+        self.reflection_motion
+    }
+    pub fn supplement_dump(&self) -> Option<&std::path::Path> {
+        self.supplement_dump.as_deref()
+    }
+    /// Writes the requested extra samples as one byte per top-first pixel.
+    /// With `MUTRACER_SUPPLEMENT_DUMP_INFO`, also writes four floats per pixel:
+    /// surface and reflected weight sums, reflected share and extra samples.
+    pub fn write_supplement_dump(&self, frame: u32, kind: &str, info: &[f32]) -> Result<()> {
+        if let Some(path) = &self.supplement_dump {
+            std::fs::create_dir_all(path)?;
+            let need: Vec<u8> = info.chunks_exact(4).map(|v| v[3].clamp(0., 255.) as u8).collect();
+            std::fs::write(path.join(format!("frame-{frame:04}.{kind}.u8")), need)?;
+            if std::env::var_os("MUTRACER_SUPPLEMENT_DUMP_INFO").is_some() {
+                std::fs::write(
+                    path.join(format!("frame-{frame:04}.{kind}.f32")),
+                    bytemuck::cast_slice(info),
+                )?;
+            }
+        }
+        Ok(())
+    }
+    /// Records the whole base-only window of slot `i` for selection diagnostics.
+    pub fn dump_supplement(
+        &self,
+        frame: u32,
+        i: u32,
+        base: u32,
+        cap: u32,
+        goal: f32,
+        radius: u32,
+    ) -> Result<()> {
+        if self.supplement_dump.is_some() {
+            let (_, info) = self.supplement_need(i, base, cap, goal, 0., radius, true)?;
+            self.write_supplement_dump(frame, "full", &info.unwrap())?;
+        }
+        Ok(())
+    }
+    /// Reads a separate supplement accumulation at the listed pixels.
+    pub fn supplement_gather(
+        &self,
+        list: &[u32],
+        base: u32,
+        raw: &[wgpu::Buffer; 3],
+        radiance: Option<&wgpu::Buffer>,
+    ) -> Resource {
+        let count = list.len() as u32;
+        let mut words = Vec::with_capacity(list.len() + 1);
+        words.push(count);
+        words.extend_from_slice(list);
+        let upload = Resource::Buffer(self.gpu.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Supplement list"),
+                contents: bytemuck::cast_slice(&words),
+                usage: wgpu::BufferUsages::STORAGE,
+            },
+        ));
+        let entries = self.alloc("Supplement entries", u64::from(count.max(1)) * 32);
+        let [color, albedo, normal] = raw.clone().map(Resource::Buffer);
+        let reflected = Resource::Buffer(
+            radiance
+                .cloned()
+                .unwrap_or_else(|| self["supplementUnused"].buffer().clone()),
+        );
+        self.dispatch(
+            "supplementGather",
+            &[self.size[0], self.size[1], base, u32::from(radiance.is_some())],
+            &[&upload, &color, &albedo, &normal, &reflected, &entries],
+            Self::linear_groups(count),
+        );
+        entries
+    }
+    /// Adds gathered supplement samples to the current center before normalization.
+    pub fn supplement_blend(&self, entries: &Resource, count: u32) {
+        let reflected = if self.reflection_motion {
+            "reflectedTotal"
+        } else {
+            "supplementUnused"
+        };
+        self.dispatch(
+            "supplementBlend",
+            &[count, u32::from(self.reflection_motion)],
+            &[entries, &self["sum"], &self[reflected]],
+            Self::linear_groups(count),
+        );
+    }
+}
 impl std::ops::Index<&str> for Passes {
     type Output = Resource;
     fn index(&self, key: &str) -> &Resource {
         &self.resources[key]
+    }
+}
+
+fn tile_kernels(tile: u32) -> (&'static str, &'static str) {
+    if tile == 1 {
+        ("windowTiles1", "windowReflectionsTiles1")
+    } else {
+        ("windowTiles", "windowReflectionsTiles")
     }
 }
 

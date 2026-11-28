@@ -100,6 +100,16 @@ struct State {
     custom: Option<[Resource; 2]>,
     accumulated: Option<Resource>,
     spatial: Option<Resource>,
+    /// Center-only supplement entries and their count.
+    supplement: Option<(Resource, u32)>,
+}
+/// Pixels selected for supplemental samples in the newest pushed frame.
+#[doc(hidden)]
+pub struct SupplementNeed {
+    /// Packed `x | y << 12 | samples << 24`, in an order without meaning.
+    pub pixels: Vec<u32>,
+    /// Past frames of the same history epoch that the estimate used.
+    pub past_frames: u32,
 }
 /// Offline GPU history bound to one engine. Push converged frames, drain in order,
 /// then call flush until it returns None. Queue capacity is four finished frames.
@@ -108,6 +118,10 @@ pub struct TemporalDenoiser {
     options: TemporalOptions,
     spatial: TemporalSpatial,
     planar_reflections: bool,
+    supplement: bool,
+    supplement_goal: f32,
+    supplement_cap: u32,
+    supplement_radius: u32,
     passes: Option<Passes>,
     oidn: Option<crate::oidn_webgpu::Denoiser>,
     display: Option<crate::display::Display>,
@@ -139,6 +153,10 @@ impl TemporalDenoiser {
             options,
             spatial,
             planar_reflections: false,
+            supplement: false,
+            supplement_goal: 0.,
+            supplement_cap: 0,
+            supplement_radius: 0,
             passes: None,
             oidn: None,
             display: None,
@@ -165,6 +183,126 @@ impl TemporalDenoiser {
         self.planar_reflections = enabled;
         Ok(())
     }
+    /// Enables experimental center-only supplemental samples before the first
+    /// push. `goal` is the effective number of base-count frames each pixel
+    /// should reach and `cap` limits the extra samples of one pixel. Selection
+    /// uses the weakest support of hit pixels within `radius & 255` pixels, or
+    /// their mean when bit 8 is set.
+    #[doc(hidden)]
+    pub fn experimental_supplement(&mut self, goal: f32, cap: u32, radius: u32) -> Result<()> {
+        if self.passes.is_some() {
+            return Err("Configure supplemental sampling before pushing frames".into());
+        }
+        if !(goal.is_finite() && goal >= 1. && (1..=64).contains(&cap) && radius & 255 <= 8 && radius < 512) {
+            return Err("Supplement goal must be at least 1, the cap 1..64 and the radius 0..8".into());
+        }
+        self.supplement_radius = radius;
+        self.supplement = true;
+        self.supplement_goal = goal;
+        self.supplement_cap = cap;
+        Ok(())
+    }
+    /// Runs the past half of the newest frame's window and returns the pixels
+    /// whose extrapolated history falls short of the goal. Frames without past
+    /// history in their epoch request nothing.
+    #[doc(hidden)]
+    pub fn experimental_supplement_need(&mut self) -> Result<SupplementNeed> {
+        let Some(i) = self.count.checked_sub(1) else {
+            return Err("Push a frame before estimating supplemental samples".into());
+        };
+        let p = self.passes.as_ref().ok_or("Missing temporal passes")?;
+        if !self.supplement || p.plan.max == 0 {
+            return Err("Enable supplemental sampling with a temporal window".into());
+        }
+        let current = &self.frames[&i];
+        let past = (1..=p.plan.max)
+            .filter_map(|d| i.checked_sub(d))
+            .filter(|j| self.frames.get(j).is_some_and(|f| f.epoch == current.epoch))
+            .collect::<Vec<_>>();
+        let past_frames = past.len() as u32;
+        let gpu = p.gpu.clone();
+        let goal = self.supplement_goal;
+        let cap = self.supplement_cap;
+        let radius = self.supplement_radius;
+        let samples = current.samples;
+        let frame = current.frame;
+        super::checked_gpu(&gpu, "supplement estimate", || {
+            let p = self.passes.as_ref().unwrap();
+            let info = p.supplement_dump().is_some();
+            if past.is_empty() && !info {
+                return Ok(SupplementNeed {
+                    pixels: Vec::new(),
+                    past_frames,
+                });
+            }
+            p.window(i, i, 0, true, false);
+            for &j in &past {
+                p.window(
+                    i,
+                    j,
+                    1,
+                    true,
+                    self.frames[&i].lighting_revision != self.frames[&j].lighting_revision,
+                );
+            }
+            // Extrapolate with the in-focus radius. Without past frames the
+            // goal is unreachable, so the estimate leaves the frame unchanged.
+            let window = p.plan.min.max(1);
+            let mass = |k: u32| {
+                (1..=k.min(window))
+                    .map(|d| (window + 1 - d) as f32 / (window + 1) as f32)
+                    .sum::<f32>()
+            };
+            let (pixels, info) = if past.is_empty() {
+                let (_, info) = p.supplement_need(i, samples, cap, 0., 1., radius, true)?;
+                (Vec::new(), info)
+            } else {
+                let mirror = 1. + mass(window) / mass(past_frames);
+                p.supplement_need(i, samples, cap, goal, mirror, radius, info)?
+            };
+            if let Some(info) = info {
+                p.write_supplement_dump(frame, "past", &info)?;
+            }
+            Ok(SupplementNeed {
+                pixels,
+                past_frames,
+            })
+        })
+    }
+    /// Attaches the separate accumulation of `render` at `pixels` to the newest
+    /// frame's center. Neighboring frames continue to use its base samples.
+    #[doc(hidden)]
+    pub fn experimental_supplement_attach(&mut self, pixels: &[u32], render: &Render) -> Result<()> {
+        let Some(i) = self.count.checked_sub(1) else {
+            return Err("Push a frame before attaching supplemental samples".into());
+        };
+        if pixels.is_empty() {
+            return Ok(());
+        }
+        if i < self.window {
+            return Err("The frame's window already ran".into());
+        }
+        let (raw, radiance, size) = render.offline_supplement(&self.engine)?;
+        let p = self.passes.as_ref().ok_or("Missing temporal passes")?;
+        if size != p.size || radiance.is_some() != p.reflection_motion() {
+            return Err("Supplement render must match the temporal size and reflection capture".into());
+        }
+        let samples = self.frames[&i].samples;
+        let gpu = p.gpu.clone();
+        let entries = super::checked_gpu(&gpu, "supplement gather", || {
+            Result::Ok(self.passes.as_ref().unwrap().supplement_gather(
+                pixels,
+                samples,
+                &raw,
+                radiance.as_ref(),
+            ))
+        })?;
+        if std::env::var_os("MUTRACER_SUPPLEMENT_TIMING").is_some() {
+            GpuDevice::wait(&gpu.device)?;
+        }
+        self.frames.get_mut(&i).unwrap().supplement = Some((entries, pixels.len() as u32));
+        Ok(())
+    }
     /// Effective plan after the first push.
     pub fn plan(&self) -> Option<TemporalPlan> {
         self.passes.as_ref().map(|p| p.plan)
@@ -186,15 +324,19 @@ impl TemporalDenoiser {
     pub fn cut(&mut self) {
         self.epoch += 1;
     }
-    fn prepare(&mut self, size: [u32; 2], materials: usize, sample_tiles: bool) -> Result<()> {
+    fn prepare(&mut self, size: [u32; 2], materials: usize, sample_tile: u32) -> Result<()> {
         let mut options = self.options;
-        if sample_tiles {
+        if sample_tile > 0 {
+            if self.supplement {
+                return Err("Supplemental samples use uniform base sampling".into());
+            }
             if options.accumulate_guides {
                 return Err("Experimental tile sampling requires current-frame OIDN guides".into());
             }
             if let Some(budget) = options.memory_budget.as_mut() {
                 // Reserve the largest possible ring of tile counts before choosing a plan.
-                let tiles = u64::from(size[0].div_ceil(4)) * u64::from(size[1].div_ceil(4));
+                let tiles = u64::from(size[0].div_ceil(sample_tile))
+                    * u64::from(size[1].div_ceil(sample_tile));
                 let slots = 2 * u64::from(self.latency()) + 1;
                 *budget = budget
                     .checked_sub((tiles + 1) * slots * 4)
@@ -203,7 +345,7 @@ impl TemporalDenoiser {
         }
 
         if let Some(p) = &mut self.passes {
-            if p.sample_tiles != sample_tiles {
+            if p.sample_tile != sample_tile {
                 return Err("Keep the sampling mode fixed throughout a temporal shot".into());
             }
             if p.size != size {
@@ -248,7 +390,8 @@ impl TemporalDenoiser {
                     self.options.guide_window(cost, plan.max),
                     self.options.reflection_motion,
                     self.planar_reflections,
-                    sample_tiles,
+                    sample_tile,
+                    self.supplement,
                 )?;
                 let spatial = match &self.spatial {
                     TemporalSpatial::Oidn(weights) => Some((
@@ -325,7 +468,7 @@ impl TemporalDenoiser {
         self.prepare(
             capture.size,
             capture.revisions.len(),
-            capture.sample_tiles.is_some(),
+            capture.sample_tiles.as_ref().map_or(0, |plan| plan.tile),
         )?;
         self.failed = true;
         let p = self.passes.as_ref().unwrap();
@@ -407,6 +550,7 @@ impl TemporalDenoiser {
                 custom,
                 accumulated: None,
                 spatial: None,
+                supplement: None,
             },
         );
         self.count += 1;
@@ -450,6 +594,19 @@ impl TemporalDenoiser {
                     true,
                     self.frames[&i].lighting_revision != self.frames[&j].lighting_revision,
                 );
+            }
+            if self.supplement {
+                p.dump_supplement(
+                    self.frames[&i].frame,
+                    i,
+                    self.frames[&i].samples,
+                    self.supplement_cap,
+                    self.supplement_goal,
+                    self.supplement_radius,
+                )?;
+            }
+            if let Some((entries, count)) = self.frames.get_mut(&i).unwrap().supplement.take() {
+                p.supplement_blend(&entries, count);
             }
             p.window(i, i, 2, true, false);
             if profile {

@@ -558,6 +558,60 @@ impl Renderer {
         Ok(())
     }
 
+    /// Converges the main render to per-pixel targets, top row first. `extra`
+    /// shifts the sample sequence past samples traced elsewhere for this frame.
+    pub fn converge_pixels(
+        &self,
+        settings: Settings,
+        frame: u32,
+        extra: u32,
+        base: u32,
+        targets: Vec<u32>,
+    ) -> Result<()> {
+        converge_pixels(&self.render, settings, frame, extra, base, targets, false)
+    }
+
+    /// A render on this engine for experimental supplemental samples. It keeps
+    /// its own accumulation and traces no AOVs.
+    pub fn supplement_render(
+        &self,
+        settings: Settings,
+        config: &crate::temporal::Config,
+    ) -> Result<api::Render> {
+        let [width, height] = settings.size;
+        let render = api::Render::new(
+            &self.engine,
+            settings.render.apply(api::RenderSettings {
+                size: api::RenderSize::Fixed { width, height },
+                max_samples: 64,
+                aovs: 0,
+                seed: settings.seed_value,
+                ..Default::default()
+            }),
+        )
+        .map_err(|e| Error::gpu(e.to_string()))?;
+        if settings.render.direct_light_candidates() == render_settings::DirectLightCandidates::Auto
+        {
+            render
+                .set_auto_direct_light_candidates(true)
+                .map_err(|e| Error::gpu(e.to_string()))?;
+        }
+        config.configure_capture(&render, settings.denoise)?;
+        Ok(render)
+    }
+
+    /// Traces supplemental samples after the frame's base samples in its sequence.
+    pub fn converge_supplement(
+        &self,
+        render: &api::Render,
+        settings: Settings,
+        frame: u32,
+        targets: Vec<u32>,
+        compact: bool,
+    ) -> Result<()> {
+        converge_pixels(render, settings, frame, settings.spp, settings.spp, targets, compact)
+    }
+
     pub(crate) fn graph_warnings(&self, targets: &[MaterialGraphTarget]) -> Vec<Warning> {
         let diagnostics = self.engine.diagnostics();
         let all = diagnostics
@@ -575,6 +629,34 @@ impl Renderer {
             .encode_png(&self.render)
             .map_err(|e| Error::gpu(e.to_string()))
     }
+}
+
+fn converge_pixels(
+    render: &api::Render,
+    settings: Settings,
+    frame: u32,
+    extra: u32,
+    base: u32,
+    targets: Vec<u32>,
+    compact: bool,
+) -> Result<()> {
+    let mut options = render.settings().map_err(|e| Error::gpu(e.to_string()))?;
+    let seed = settings.seed(frame);
+    if options.seed != seed {
+        options.seed = seed;
+        render
+            .set_settings(options)
+            .map_err(|e| Error::gpu(e.to_string()))?;
+    }
+    let mut converge = api::ConvergeOptions::new(base);
+    converge.sample_sequence_offset = settings
+        .offset(frame, "/output")?
+        .checked_add(extra)
+        .ok_or_else(|| Error::validation("/output", "Sample sequence offset overflows", ""))?;
+    render
+        .experimental_converge_pixels(converge, base, targets, compact)
+        .map_err(|e| Error::gpu(e.to_string()))?;
+    Ok(())
 }
 
 pub fn still(args: Still, worker: bool) -> Result<()> {

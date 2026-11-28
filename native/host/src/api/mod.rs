@@ -17,7 +17,7 @@
 pub(crate) mod abi;
 mod custom_denoise;
 mod offline;
-pub use offline::{HistoryInvalidation,HistoryRadius,OfflineFrame,OfflineSpatialFilter,TemporalDenoiser,TemporalOptions,TemporalPlan,TemporalSpatial};
+pub use offline::{HistoryInvalidation,HistoryRadius,OfflineFrame,OfflineSpatialFilter,SupplementNeed,TemporalDenoiser,TemporalOptions,TemporalPlan,TemporalSpatial};
 #[doc(hidden)]
 pub struct OfflineGeometry {
     pub records: Vec<u8>,

@@ -111,7 +111,9 @@ export class OfflineGeometryHistory {
     this.last = frame;
   }
 
-  samplePlans(width: number, height: number, base: number, average: number, radius: number, minEffectiveSamples: number) {
+  /** `observeSupport` receives each frame's predicted effective history per tile, for diagnostics. */
+  samplePlans(width: number, height: number, base: number, average: number, radius: number, minEffectiveSamples: number,
+    observeSupport?: (frame: number, support: Float32Array) => void) {
     const {width: columns, height: rows} = this;
     const step = offlineSampleTileSize;
     if (columns !== Math.ceil(width / step) || rows !== Math.ceil(height / step)) throw new Error('Geometry does not match the final tile grid.');
@@ -146,6 +148,7 @@ export class OfflineGeometryHistory {
         }
         support[i] = Math.min(sum * sum / squared, reflectedSum * reflectedSum / reflectedSquared);
       }
+      observeSupport?.(frame, support);
       const increments: {pixels: number[]; samples: number; benefit: number}[] = [];
       for (let y = 0; y < rows; y += groupStep) {
         for (let x = 0; x < columns; x += groupStep) {

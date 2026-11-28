@@ -223,6 +223,7 @@ import {createVetoShader, vetoShader} from '../../src/renderer/temporalSparkleSh
 import {composePackWGSL, createComposePackWGSL, motionCoverageWGSL} from '../../src/renderer/temporalComposeShader.js';
 import {idSnapshot, snapshot, reproject, accumulate, blur} from '../../src/renderer/temporalKernels.js';
 import {combine, match, pyramid} from '../../src/renderer/temporalFlow.js';
+import {supplementBlendWGSL, supplementGatherWGSL, supplementNeedWGSL} from './offline-supplement.js';
 export function postprocessParameters(): Uint8Array {
   return new TextEncoder().encode(JSON.stringify({
     temporal: {capture:captureWGSL, window:mixedWindowWGSL, sparkle:vetoShader, pack:composePackWGSL, coverage:motionCoverageWGSL,
@@ -230,6 +231,9 @@ export function postprocessParameters(): Uint8Array {
       windowReflections: createMixedWindowWGSL(false, true),
       windowTiles: createMixedWindowWGSL(false, false, 4),
       windowReflectionsTiles: createMixedWindowWGSL(false, true, 4),
+      windowTiles1: createMixedWindowWGSL(false, false, 1, false, true),
+      windowReflectionsTiles1: createMixedWindowWGSL(false, true, 1, false, true),
+      supplementNeed: supplementNeedWGSL, supplementGather: supplementGatherWGSL, supplementBlend: supplementBlendWGSL,
       windowGuidesReflections: createMixedWindowWGSL(true, true),
       windowGuides: createMixedWindowWGSL(true), packGuides: createComposePackWGSL(true),
       windowScan: createMixedWindowWGSL(false, false, undefined, true),

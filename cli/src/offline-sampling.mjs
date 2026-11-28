@@ -21,7 +21,7 @@ export function decodeOfflineGeometry(header, bytes, size, reflections) {
   };
 }
 
-export async function planSampling(worker, shot, settings, fps, begin, end, average, floor, save) {
+export async function planSampling(worker, shot, settings, fps, begin, end, average, floor, save, observeSupport) {
   if (!worker.info.capabilities.includes('experimental-sample-tiles')) {
     throw new Error('Build the native worker with experimental sample tiles.');
   }
@@ -50,6 +50,7 @@ export async function planSampling(worker, shot, settings, fps, begin, end, aver
   const radius = settings.temporal?.historyRadius;
   const started = performance.now();
   const plans = history.samplePlans(...settings.size, settings.spp, average,
-    typeof radius === 'number' ? radius : radius?.min ?? 8, floor);
+    typeof radius === 'number' ? radius : radius?.min ?? 8, floor,
+    observeSupport && ((frame, support) => observeSupport(begin + frame, support)));
   return {plans, sources, geometryMs, allocationMs:performance.now() - started};
 }
