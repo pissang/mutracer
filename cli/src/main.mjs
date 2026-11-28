@@ -71,7 +71,7 @@ function supplementOptions(values, denoise, tracer, temporal, sampleBudget) {
   if (!['list','image'].includes(dispatch)) throw new Error('Use --supplement-dispatch list or image.');
   const region = values['supplement-region'] ?? 'weakest';
   if (!['weakest','mean'].includes(region)) throw new Error('Use --supplement-region weakest or mean.');
-  const radius = number(values['supplement-radius'] ?? '0', 'supplement radius', 0, 8) | (region === 'mean' ? 256 : 0);
+  const radius = number(values['supplement-radius'] ?? '2', 'supplement radius', 0, 8) | (region === 'mean' ? 256 : 0);
   return {goal, cap, mode, map: parsed, compact: dispatch === 'list', radius};
 }
 
