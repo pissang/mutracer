@@ -55,6 +55,12 @@ struct Supplement {
     /// Select by the mean support within this many pixels.
     #[serde(default)]
     radius: u32,
+    /// Fraction of the previous frame's extra samples that a surface keeps.
+    #[serde(default)]
+    hold: f32,
+    /// Estimate the past half on every second pixel in each direction.
+    #[serde(default)]
+    sparse: bool,
 }
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -319,6 +325,7 @@ fn supplement_frame(
     frame: u32,
     need_map: Option<&[u8]>,
     supplement: Supplement,
+    base_max: u32,
 ) -> Result<Value> {
     let started = Instant::now();
     let (mut pixels, past_frames) = match need_map {
@@ -359,7 +366,14 @@ fn supplement_frame(
             stream.supplement_render = Some(renderer.supplement_render(settings, config)?);
         }
         let render = stream.supplement_render.as_ref().unwrap();
-        renderer.converge_supplement(render, settings, frame, targets, supplement.compact)?;
+        renderer.converge_supplement(
+            render,
+            settings,
+            frame,
+            base_max,
+            targets,
+            supplement.compact,
+        )?;
     }
     let trace_ms = traced.elapsed().as_secs_f64() * 1000.;
     let gathered = Instant::now();
@@ -787,6 +801,14 @@ impl Session {
                     ));
                 }
                 let supplement = overrides.experimental_supplement;
+                // Geometry-planned base tiles may precede past-half selection.
+                let tiled_base =
+                    bytes.is_some() && supplement.is_none_or(|s| s.mode == SupplementMode::Past);
+                let base_max = if tiled_base {
+                    settings.spp.max(8)
+                } else {
+                    settings.spp
+                };
                 if let Some(s) = supplement {
                     if !overrides.experimental_capture
                         || overrides.experimental_geometry
@@ -795,12 +817,13 @@ impl Session {
                         || config.options.accumulate_guides
                         || !(s.goal.is_finite() && s.goal >= 1.)
                         || !(1..=64).contains(&s.cap)
-                        || settings.sequence_stride.unwrap_or(settings.spp) < settings.spp + s.cap
-                        || !check_only && (s.mode == SupplementMode::Past) != bytes.is_none()
+                        || !(0. ..1.).contains(&s.hold)
+                        || settings.sequence_stride.unwrap_or(settings.spp) < base_max + s.cap
+                        || !check_only && s.mode != SupplementMode::Past && bytes.is_none()
                     {
                         return Err(invalid(
                             "/settings/experimentalSupplement",
-                            "Supplemental samples need hardware temporal capture, current-frame guides, a stride covering spp + cap and a need map unless selecting from the past",
+                            "Supplemental samples need hardware temporal capture, current-frame guides, a hold in [0, 1), a stride covering the base samples plus cap and a need map unless selecting from the past",
                         ));
                     }
                 }
@@ -818,9 +841,9 @@ impl Session {
                 } else {
                     None
                 };
-                let sample_tiles = bytes.is_some() && supplement.is_none()
-                    || supplement.is_some_and(|s| s.mode == SupplementMode::History);
-                if bytes.is_some() && supplement.is_none()
+                let sample_tiles =
+                    tiled_base || supplement.is_some_and(|s| s.mode == SupplementMode::History);
+                if tiled_base
                     && (check_only
                         || !overrides.experimental_capture
                         || overrides.experimental_geometry
@@ -834,7 +857,7 @@ impl Session {
                         "Sample tiles require experimental offline capture, current-frame guides and a stride covering every tile sample",
                     ));
                 }
-                let tiles = if bytes.is_some() && supplement.is_none() {
+                let tiles = if tiled_base {
                     let [columns, rows] = settings.size.map(|n| n.div_ceil(4));
                     if payload.len() != (columns * rows) as usize * 4 {
                         return Err(invalid(
@@ -1026,6 +1049,10 @@ impl Session {
                             filter
                                 .experimental_supplement(s.goal, s.cap, s.radius)
                                 .map_err(crate::temporal::gpu)?;
+                            filter
+                                .experimental_supplement_hold(s.hold)
+                                .map_err(crate::temporal::gpu)?;
+                            filter.experimental_supplement_sparse(s.sparse);
                         }
                         self.temporal = Some(Stream {
                             filter,
@@ -1061,6 +1088,7 @@ impl Session {
                             frame,
                             need_map.as_deref(),
                             s,
+                            base_max,
                         )?;
                         report["baseMs"] = json!(base_ms);
                         report["pushMs"] = json!(push_ms);

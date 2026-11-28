@@ -45,12 +45,13 @@ const number = (value, label, min, max) => {
 // Experimental supplemental samples for pixels with weak temporal history.
 // Without a map, each frame selects pixels from the past half of its window.
 // A map directory replays per-frame extra samples, either into the center only
-// or as ordinary history counted at the actual sample count (control).
+// or as ordinary history counted at the actual sample count (control). Past
+// selection may follow geometry-planned base tiles from a sample budget.
 function supplementOptions(values, denoise, tracer, temporal, sampleBudget) {
-  const keys = ['supplement-goal','supplement-cap','supplement-map','supplement-mode','supplement-dispatch','supplement-radius','supplement-region'];
+  const keys = ['supplement-goal','supplement-cap','supplement-map','supplement-mode','supplement-dispatch','supplement-radius','supplement-region','supplement-hold','supplement-estimate','supplement-feather'];
   if (keys.every(key => values[key] === undefined)) return;
-  if (denoise !== 'temporal' || tracer !== 'hardware' || temporal?.accumulateGuides || sampleBudget !== undefined) {
-    throw new Error('Supplemental samples need hardware temporal rendering with current-frame guides and no sample budget.');
+  if (denoise !== 'temporal' || tracer !== 'hardware' || temporal?.accumulateGuides) {
+    throw new Error('Supplemental samples need hardware temporal rendering with current-frame guides.');
   }
   const cap = number(values['supplement-cap'] ?? '16', 'supplement cap', 1, 64);
   const map = values['supplement-map'];
@@ -58,6 +59,7 @@ function supplementOptions(values, denoise, tracer, temporal, sampleBudget) {
   if (!['past','center','history'].includes(mode) || (mode === 'past') !== (map === undefined)) {
     throw new Error('Use --supplement-mode center or history with --supplement-map DIR:KIND, and past without a map.');
   }
+  if (sampleBudget !== undefined && map) throw new Error('A sample budget combines only with past selection.');
   const goal = Number(values['supplement-goal'] ?? (map ? '1' : '4'));
   if (!Number.isFinite(goal) || goal < 1) throw new Error('Supplement goal must be at least 1.');
   let parsed;
@@ -71,8 +73,16 @@ function supplementOptions(values, denoise, tracer, temporal, sampleBudget) {
   if (!['list','image'].includes(dispatch)) throw new Error('Use --supplement-dispatch list or image.');
   const region = values['supplement-region'] ?? 'weakest';
   if (!['weakest','mean'].includes(region)) throw new Error('Use --supplement-region weakest or mean.');
-  const radius = number(values['supplement-radius'] ?? '2', 'supplement radius', 0, 8) | (region === 'mean' ? 256 : 0);
-  return {goal, cap, mode, map: parsed, compact: dispatch === 'list', radius};
+  const feather = number(values['supplement-feather'] ?? '0', 'supplement feather', 0, 8);
+  if (feather && region === 'mean') throw new Error('A supplement feather needs the weakest region.');
+  const radius = number(values['supplement-radius'] ?? '2', 'supplement radius', 0, 8) | (region === 'mean' ? 256 : 0) | feather << 16;
+  const hold = Number(values['supplement-hold'] ?? '0');
+  if (!(hold >= 0 && hold < 1) || map && hold) throw new Error('Supplement hold must lie in [0, 1) and needs past selection.');
+  const estimate = values['supplement-estimate'] ?? 'full';
+  if (!['full','sparse'].includes(estimate) || map && estimate !== 'full') {
+    throw new Error('Use --supplement-estimate full or sparse with past selection.');
+  }
+  return {goal, cap, mode, map: parsed, compact: dispatch === 'list', radius, hold, sparse: estimate === 'sparse'};
 }
 
 // A missing map file means no supplemental samples for that frame.
@@ -112,7 +122,8 @@ function args() {
       'supplement-goal': {type: 'string'}, 'supplement-cap': {type: 'string'},
       'supplement-map': {type: 'string'}, 'supplement-mode': {type: 'string'},
       'supplement-dispatch': {type: 'string'}, 'supplement-radius': {type: 'string'},
-      'supplement-region': {type: 'string'},
+      'supplement-region': {type: 'string'}, 'supplement-hold': {type: 'string'},
+      'supplement-estimate': {type: 'string'}, 'supplement-feather': {type: 'string'},
     },
   });
   if (values.help) return {};
@@ -192,7 +203,7 @@ function options(input, command, values) {
   if (denoise === 'temporal' && (preview || sampleSequence !== 'frame')) {
     throw new Error('Temporal rendering requires stride 1 and output.sampleSequence set to frame.');
   }
-  const experimentalKeys = ['seed-value','sample-stride','reflection-motion','history-radius','post-radius','timing-only','context','sample-budget','sample-floor','save-geometry','artifact-scan','supplement-goal','supplement-cap','supplement-map','supplement-mode','supplement-dispatch','supplement-radius','supplement-region'];
+  const experimentalKeys = ['seed-value','sample-stride','reflection-motion','history-radius','post-radius','timing-only','context','sample-budget','sample-floor','save-geometry','artifact-scan','supplement-goal','supplement-cap','supplement-map','supplement-mode','supplement-dispatch','supplement-radius','supplement-region','supplement-hold','supplement-estimate','supplement-feather'];
   const experimental = command === 'capture';
   if (!experimental && experimentalKeys.some(key => values[key] !== undefined)) {
     throw new Error('Experimental options require the capture command.');
@@ -225,7 +236,7 @@ function options(input, command, values) {
   }
   if (!Number.isFinite(sampleFloor) || sampleFloor <= 0) throw new Error('Sample floor must be positive.');
   const supplement = supplementOptions(values, denoise, tracer, temporal, sampleBudget);
-  const strideMinimum = supplement ? spp + supplement.cap :
+  const strideMinimum = supplement ? (sampleBudget === undefined ? spp : Math.max(spp, offlineSampleCap)) + supplement.cap :
     sampleBudget === undefined ? spp : Math.max(spp, offlineSampleCap);
   const sequenceStride = values['sample-stride'] === undefined ? (sampleBudget === undefined && !supplement ? undefined : Math.max(32, strideMinimum)) :
     number(values['sample-stride'], 'sample stride', strideMinimum, 0xffffffff);
@@ -237,7 +248,7 @@ function options(input, command, values) {
     supplementMap: supplement?.map,
     settings: {size:[w,h], spp, seed, denoise, seedValue, sampleSequenceOffset:offset, tracer,
       sampleSequence, ...(experimental && {experimentalCapture:true}),
-      ...(supplement && {experimentalSupplement: {goal:supplement.goal, cap:supplement.cap, mode:supplement.mode, compact:supplement.compact, radius:supplement.radius}}),
+      ...(supplement && {experimentalSupplement: {goal:supplement.goal, cap:supplement.cap, mode:supplement.mode, compact:supplement.compact, radius:supplement.radius, hold:supplement.hold, sparse:supplement.sparse}}),
       ...(values['artifact-scan'] && {experimentalScan:true}),
       ...(sequenceStride !== undefined && {experimentalSequenceStride: sequenceStride}),
       ...(projection === 'planar' && {experimentalPlanar:true}), ...(temporal && {temporal}), display: canonicalDisplay(display, command === 'validate'), format,

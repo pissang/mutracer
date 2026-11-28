@@ -29,7 +29,8 @@ export async function planSampling(worker, shot, settings, fps, begin, end, aver
   const size = settings.size.map(edge => Math.ceil(edge / step));
   const history = new OfflineGeometryHistory(...size);
   const reflections = settings.temporal?.reflectionMotion === true;
-  const pilot = {...settings, size, spp:1, experimentalGeometry:true};
+  const {experimentalSupplement, ...beauty} = settings;
+  const pilot = {...beauty, size, spp:1, experimentalGeometry:true};
   const geometryMs = [], sources = [];
   let lastSceneKey;
   for (let index = begin; index <= end; index++) {

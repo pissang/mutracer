@@ -164,7 +164,18 @@ impl Passes {
             pass.buffer("supplementList", (pixels + 1) * 4);
             pass.buffer("supplementInfo", pixels * 16);
             pass.buffer("supplementUnused", 16);
+            pass.buffer("supplementHold0", pixels * 4);
+            pass.buffer("supplementHold1", pixels * 4);
             names.extend(["supplementNeed", "supplementGather", "supplementBlend"]);
+            let window = if sample_tile > 0 {
+                tile_kernels(sample_tile)
+            } else {
+                ("window", "windowReflections")
+            };
+            names.push(sparse_kernel(window.0));
+            if reflection_motion {
+                names.push(sparse_kernel(window.1));
+            }
         }
         if accumulate_guides {
             pass.buffer("albedoSum", pass.bytes);
@@ -512,6 +523,22 @@ impl Passes {
     }
 
     pub fn window(&self, i: u32, j: u32, stage: u32, revisions: bool, check_lighting: bool) {
+        self.window_pass(i, j, stage, revisions, check_lighting, false);
+    }
+    /// One tap of the supplement's past-half estimate, optionally on every
+    /// second pixel in each direction.
+    pub fn window_estimate(&self, i: u32, j: u32, stage: u32, check_lighting: bool, sparse: bool) {
+        self.window_pass(i, j, stage, true, check_lighting, sparse);
+    }
+    fn window_pass(
+        &self,
+        i: u32,
+        j: u32,
+        stage: u32,
+        revisions: bool,
+        check_lighting: bool,
+        sparse: bool,
+    ) {
         let [w, h] = self.size;
         let p = self.plan;
         // Camera-cut validation skips material revisions and guide accumulation.
@@ -562,12 +589,19 @@ impl Passes {
                 (false, false) => "window",
             }
         };
-        let kernel = if self.scan.is_some() && revisions {
+        let kernel = if sparse {
+            sparse_kernel(kernel)
+        } else if self.scan.is_some() && revisions {
             scan_kernel(kernel).unwrap_or(kernel)
         } else {
             kernel
         };
-        self.image_pass(
+        let groups = if sparse {
+            self.size.map(|v| v.div_ceil(16))
+        } else {
+            self.size.map(|v| v.div_ceil(8))
+        };
+        self.dispatch(
             kernel,
             &[
                 w,
@@ -582,6 +616,7 @@ impl Passes {
                 p.max,
             ],
             &bindings,
+            groups,
         );
     }
     pub fn pack(&self, index: u32, samples: u32, accumulated: &Resource, output: &[Resource; 3]) {
@@ -777,7 +812,11 @@ impl Passes {
     }
     /// Converts the current weight sums of slot `i` into a compact list of
     /// pixels with extra sample counts. `mirror` extrapolates past-only sums to
-    /// a whole window; zero scores the sums as a complete window.
+    /// a whole window; zero scores the sums as a complete window. With `hold`
+    /// set to `(fraction, previous)`, pixels keep `floor(fraction · n)` of the
+    /// counts that frame `i − 1` gave the surface they show when `previous`
+    /// is true, and the counts of `i` are stored for frame `i + 1`.
+    #[allow(clippy::too_many_arguments)]
     pub fn supplement_need(
         &self,
         i: u32,
@@ -786,6 +825,8 @@ impl Passes {
         goal: f32,
         mirror: f32,
         radius: u32,
+        hold: Option<(f32, bool)>,
+        sparse: bool,
         info: bool,
     ) -> Result<(Vec<u32>, Option<Vec<f32>>)> {
         let [w, h] = self.size;
@@ -794,6 +835,23 @@ impl Passes {
             "reflectedTotal"
         } else {
             "sum"
+        };
+        let (fraction, mut flags) = match hold {
+            Some((fraction, previous)) => (fraction, u32::from(previous) | 2),
+            None => (0., 0),
+        };
+        if sparse {
+            flags |= 4;
+        }
+        let (previous, next) = if i % 2 == 0 {
+            ("supplementHold1", "supplementHold0")
+        } else {
+            ("supplementHold0", "supplementHold1")
+        };
+        let tiles = if self.sample_tile > 0 {
+            "sampleTiles"
+        } else {
+            "supplementUnused"
         };
         self.image_pass(
             "supplementNeed",
@@ -807,6 +865,9 @@ impl Passes {
                 goal.to_bits(),
                 mirror.to_bits(),
                 radius,
+                fraction.to_bits(),
+                flags,
+                self.sample_tile,
             ],
             &[
                 &self["sum"],
@@ -815,6 +876,10 @@ impl Passes {
                 &self["material"],
                 &self["supplementList"],
                 &self["supplementInfo"],
+                &self["motion"],
+                &self[previous],
+                &self[next],
+                &self[tiles],
             ],
         );
         let count = self.read_range::<u32>("supplementList", 0..4)?[0];
@@ -864,7 +929,7 @@ impl Passes {
         radius: u32,
     ) -> Result<()> {
         if self.supplement_dump.is_some() {
-            let (_, info) = self.supplement_need(i, base, cap, goal, 0., radius, true)?;
+            let (_, info) = self.supplement_need(i, base, cap, goal, 0., radius, None, false, true)?;
             self.write_supplement_dump(frame, "full", &info.unwrap())?;
         }
         Ok(())
@@ -930,6 +995,16 @@ fn tile_kernels(tile: u32) -> (&'static str, &'static str) {
         ("windowTiles1", "windowReflectionsTiles1")
     } else {
         ("windowTiles", "windowReflectionsTiles")
+    }
+}
+
+fn sparse_kernel(name: &str) -> &'static str {
+    match name {
+        "window" => "windowSparse",
+        "windowReflections" => "windowReflectionsSparse",
+        "windowTiles" => "windowTilesSparse",
+        "windowReflectionsTiles" => "windowReflectionsTilesSparse",
+        _ => unreachable!("no sparse estimate for {name}"),
     }
 }
 

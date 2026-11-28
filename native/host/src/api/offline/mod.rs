@@ -95,6 +95,8 @@ struct State {
     epoch: u64,
     lighting_revision: u64,
     samples: u32,
+    /// Base count that sample tiles and supplements are relative to.
+    base: u32,
     display: DisplaySettings,
     revisions: Vec<[u32; 2]>,
     custom: Option<[Resource; 2]>,
@@ -122,6 +124,12 @@ pub struct TemporalDenoiser {
     supplement_goal: f32,
     supplement_cap: u32,
     supplement_radius: u32,
+    /// Fraction of the previous frame's counts that a surface keeps.
+    supplement_hold: f32,
+    /// Newest frame whose counts the hold buffers store.
+    supplement_held: Option<u32>,
+    /// Estimate the past half on every second pixel in each direction.
+    supplement_sparse: bool,
     passes: Option<Passes>,
     oidn: Option<crate::oidn_webgpu::Denoiser>,
     display: Option<crate::display::Display>,
@@ -157,6 +165,9 @@ impl TemporalDenoiser {
             supplement_goal: 0.,
             supplement_cap: 0,
             supplement_radius: 0,
+            supplement_hold: 0.,
+            supplement_held: None,
+            supplement_sparse: false,
             passes: None,
             oidn: None,
             display: None,
@@ -187,13 +198,14 @@ impl TemporalDenoiser {
     /// push. `goal` is the effective number of base-count frames each pixel
     /// should reach and `cap` limits the extra samples of one pixel. Selection
     /// uses the weakest support of hit pixels within `radius & 255` pixels, or
-    /// their mean when bit 8 is set.
+    /// their mean when bit 8 is set. Bits 16 to 19 feather the weakest
+    /// selection over that many more pixels.
     #[doc(hidden)]
     pub fn experimental_supplement(&mut self, goal: f32, cap: u32, radius: u32) -> Result<()> {
         if self.passes.is_some() {
             return Err("Configure supplemental sampling before pushing frames".into());
         }
-        if !(goal.is_finite() && goal >= 1. && (1..=64).contains(&cap) && radius & 255 <= 8 && radius < 512) {
+        if !(goal.is_finite() && goal >= 1. && (1..=64).contains(&cap) && radius & 255 <= 8 && radius & !0xf_01ff == 0 && radius >> 16 <= 8) {
             return Err("Supplement goal must be at least 1, the cap 1..64 and the radius 0..8".into());
         }
         self.supplement_radius = radius;
@@ -201,6 +213,24 @@ impl TemporalDenoiser {
         self.supplement_goal = goal;
         self.supplement_cap = cap;
         Ok(())
+    }
+    /// Lets each surface keep `floor(fraction · n)` of the `n` extra samples
+    /// that the previous frame gave it, following the frame's motion. Zero
+    /// selects every frame independently.
+    #[doc(hidden)]
+    pub fn experimental_supplement_hold(&mut self, fraction: f32) -> Result<()> {
+        if !(0. ..1.).contains(&fraction) {
+            return Err("Supplement hold must lie in [0, 1)".into());
+        }
+        self.supplement_hold = fraction;
+        Ok(())
+    }
+    /// Runs the past-half estimate on every second pixel in each direction.
+    /// Selection then takes the weakest visited pixel within the radius, or
+    /// within one pixel when the radius is zero.
+    #[doc(hidden)]
+    pub fn experimental_supplement_sparse(&mut self, sparse: bool) {
+        self.supplement_sparse = sparse;
     }
     /// Runs the past half of the newest frame's window and returns the pixels
     /// whose extrapolated history falls short of the goal. Frames without past
@@ -224,8 +254,18 @@ impl TemporalDenoiser {
         let goal = self.supplement_goal;
         let cap = self.supplement_cap;
         let radius = self.supplement_radius;
-        let samples = current.samples;
+        let samples = current.base;
         let frame = current.frame;
+        let hold = (self.supplement_hold > 0. && !past.is_empty()).then(|| {
+            let previous = self.supplement_held == i.checked_sub(1)
+                && i.checked_sub(1)
+                    .and_then(|j| self.frames.get(&j))
+                    .is_some_and(|f| f.epoch == current.epoch);
+            (self.supplement_hold, previous)
+        });
+        if hold.is_some() {
+            self.supplement_held = Some(i);
+        }
         super::checked_gpu(&gpu, "supplement estimate", || {
             let p = self.passes.as_ref().unwrap();
             let info = p.supplement_dump().is_some();
@@ -235,14 +275,15 @@ impl TemporalDenoiser {
                     past_frames,
                 });
             }
-            p.window(i, i, 0, true, false);
+            let sparse = self.supplement_sparse;
+            p.window_estimate(i, i, 0, false, sparse);
             for &j in &past {
-                p.window(
+                p.window_estimate(
                     i,
                     j,
                     1,
-                    true,
                     self.frames[&i].lighting_revision != self.frames[&j].lighting_revision,
+                    sparse,
                 );
             }
             // Extrapolate with the in-focus radius. Without past frames the
@@ -254,11 +295,11 @@ impl TemporalDenoiser {
                     .sum::<f32>()
             };
             let (pixels, info) = if past.is_empty() {
-                let (_, info) = p.supplement_need(i, samples, cap, 0., 1., radius, true)?;
+                let (_, info) = p.supplement_need(i, samples, cap, 0., 1., radius, None, sparse, true)?;
                 (Vec::new(), info)
             } else {
                 let mirror = 1. + mass(window) / mass(past_frames);
-                p.supplement_need(i, samples, cap, goal, mirror, radius, info)?
+                p.supplement_need(i, samples, cap, goal, mirror, radius, hold, sparse, info)?
             };
             if let Some(info) = info {
                 p.write_supplement_dump(frame, "past", &info)?;
@@ -287,7 +328,7 @@ impl TemporalDenoiser {
         if size != p.size || radiance.is_some() != p.reflection_motion() {
             return Err("Supplement render must match the temporal size and reflection capture".into());
         }
-        let samples = self.frames[&i].samples;
+        let samples = self.frames[&i].base;
         let gpu = p.gpu.clone();
         let entries = super::checked_gpu(&gpu, "supplement gather", || {
             Result::Ok(self.passes.as_ref().unwrap().supplement_gather(
@@ -327,9 +368,6 @@ impl TemporalDenoiser {
     fn prepare(&mut self, size: [u32; 2], materials: usize, sample_tile: u32) -> Result<()> {
         let mut options = self.options;
         if sample_tile > 0 {
-            if self.supplement {
-                return Err("Supplemental samples use uniform base sampling".into());
-            }
             if options.accumulate_guides {
                 return Err("Experimental tile sampling requires current-frame OIDN guides".into());
             }
@@ -473,6 +511,10 @@ impl TemporalDenoiser {
         self.failed = true;
         let p = self.passes.as_ref().unwrap();
         let i = self.count;
+        let base = capture
+            .sample_tiles
+            .as_ref()
+            .map_or(capture.samples, |plan| plan.base);
         if let Some(plan) = capture.sample_tiles {
             p.store_sample_tiles(i, plan.base, &plan.counts);
         }
@@ -545,6 +587,7 @@ impl TemporalDenoiser {
                 epoch: self.epoch,
                 lighting_revision: self.lighting_revision,
                 samples: capture.samples,
+                base,
                 display: capture.display,
                 revisions,
                 custom,
@@ -599,7 +642,7 @@ impl TemporalDenoiser {
                 p.dump_supplement(
                     self.frames[&i].frame,
                     i,
-                    self.frames[&i].samples,
+                    self.frames[&i].base,
                     self.supplement_cap,
                     self.supplement_goal,
                     self.supplement_radius,

@@ -592,11 +592,30 @@ fn supplement_samples_join_only_their_own_center() {
     // pixel reaches two frames, so a goal of three frames at 3 spp needs 3 more.
     passes.window(2, 2, 0, true, false);
     passes.window(2, 1, 1, true, false);
-    let (list, info) = passes.supplement_need(2, 3, 16, 3., 2., 0, true).unwrap();
+    let (list, info) = passes.supplement_need(2, 3, 16, 3., 2., 0, None, false, true).unwrap();
     let info = info.unwrap();
     assert_eq!(list.len(), pixels);
     assert!(list.iter().all(|packed| packed >> 24 == 3));
     assert_eq!(info[..4], [1.5, 1.5, 0., 3.]);
+    // Held counts follow the static motion: the next frame keeps floor(0.7 · 3)
+    // samples on each surface although its own support meets a goal of one.
+    passes.supplement_need(2, 3, 16, 3., 2., 0, Some((0.7, false)), false, false).unwrap();
+    let (held, _) = passes.supplement_need(1, 3, 16, 1., 2., 0, Some((0.7, true)), false, false).unwrap();
+    assert_eq!(held.len(), pixels);
+    assert!(held.iter().all(|packed| packed >> 24 == 2));
+    let (fresh, _) = passes.supplement_need(1, 3, 16, 1., 2., 0, Some((0.7, false)), false, false).unwrap();
+    assert!(fresh.is_empty());
+    // The sparse estimate visits even pixels only. Every pixel still finds a
+    // visited neighbor and requests the same samples.
+    passes.window_estimate(2, 2, 0, false, true);
+    passes.window_estimate(2, 1, 1, false, true);
+    let (sparse, _) = passes.supplement_need(2, 3, 16, 3., 2., 0, None, true, false).unwrap();
+    assert_eq!(sparse.len(), pixels);
+    assert!(sparse.iter().all(|packed| packed >> 24 == 3));
+    // Uniform support has no edge, so a feather changes nothing.
+    let (feathered, _) = passes.supplement_need(2, 3, 16, 3., 2., 2 << 16, None, false, false).unwrap();
+    assert_eq!(feathered.len(), pixels);
+    assert!(feathered.iter().all(|packed| packed >> 24 == 3));
     // Six supplemental samples with mean 4 at one pixel of frame 1 (base 3 spp).
     let [x, y] = [5u32, 3u32];
     let mut colors = vec![[0.; 4]; pixels];

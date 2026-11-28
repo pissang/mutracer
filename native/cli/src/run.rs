@@ -600,16 +600,18 @@ impl Renderer {
         Ok(render)
     }
 
-    /// Traces supplemental samples after the frame's base samples in its sequence.
+    /// Traces supplemental samples in the frame's sequence after `offset`, the
+    /// largest base count of any pixel.
     pub fn converge_supplement(
         &self,
         render: &api::Render,
         settings: Settings,
         frame: u32,
+        offset: u32,
         targets: Vec<u32>,
         compact: bool,
     ) -> Result<()> {
-        converge_pixels(render, settings, frame, settings.spp, settings.spp, targets, compact)
+        converge_pixels(render, settings, frame, offset, settings.spp, targets, compact)
     }
 
     pub(crate) fn graph_warnings(&self, targets: &[MaterialGraphTarget]) -> Vec<Warning> {

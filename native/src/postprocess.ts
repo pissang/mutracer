@@ -224,6 +224,13 @@ import {composePackWGSL, createComposePackWGSL, motionCoverageWGSL} from '../../
 import {idSnapshot, snapshot, reproject, accumulate, blur} from '../../src/renderer/temporalKernels.js';
 import {combine, match, pyramid} from '../../src/renderer/temporalFlow.js';
 import {supplementBlendWGSL, supplementGatherWGSL, supplementNeedWGSL} from './offline-supplement.js';
+// The supplement's past-half estimate may run on every second pixel in each
+// direction. Tests and sums are unchanged at the pixels it visits.
+function sparseWindow(source: string): string {
+  const entry = 'if(any(g.xy>=p.size)){return;}\n  let x=vec2i(g.xy); let index=g.y*p.size.x+g.x;';
+  if (source.split(entry).length !== 2) throw new Error('Window entry changed; update the sparse supplement estimate.');
+  return source.replace(entry, 'let gs=g.xy*2u; if(any(gs>=p.size)){return;}\n  let x=vec2i(gs); let index=gs.y*p.size.x+gs.x;');
+}
 export function postprocessParameters(): Uint8Array {
   return new TextEncoder().encode(JSON.stringify({
     temporal: {capture:captureWGSL, window:mixedWindowWGSL, sparkle:vetoShader, pack:composePackWGSL, coverage:motionCoverageWGSL,
@@ -234,6 +241,9 @@ export function postprocessParameters(): Uint8Array {
       windowTiles1: createMixedWindowWGSL(false, false, 1, false, true),
       windowReflectionsTiles1: createMixedWindowWGSL(false, true, 1, false, true),
       supplementNeed: supplementNeedWGSL, supplementGather: supplementGatherWGSL, supplementBlend: supplementBlendWGSL,
+      windowSparse: sparseWindow(mixedWindowWGSL), windowReflectionsSparse: sparseWindow(createMixedWindowWGSL(false, true)),
+      windowTilesSparse: sparseWindow(createMixedWindowWGSL(false, false, 4)),
+      windowReflectionsTilesSparse: sparseWindow(createMixedWindowWGSL(false, true, 4)),
       windowGuidesReflections: createMixedWindowWGSL(true, true),
       windowGuides: createMixedWindowWGSL(true), packGuides: createComposePackWGSL(true),
       windowScan: createMixedWindowWGSL(false, false, undefined, true),

@@ -5,11 +5,16 @@
 import {temporalMaterialWGSL} from '../../src/renderer/temporalKernels.js';
 
 // Turn one window's weight sums into extra sample counts and append each
-// pixel that needs samples to a compact list: [count, x | y << 16 | n << 24...].
+// pixel that needs samples to a compact list: [count, x | y << 12 | n << 24...].
 // `mirror` extrapolates the past history weight to the whole window. A zero
-// mirror (unused) treats the sums as a complete window.
+// mirror (unused) treats the sums as a complete window. With `hold`, a pixel
+// keeps at least `floor(hold · n)` of the samples that the previous frame gave
+// the surface it shows, found through the frame's motion. `flags` bit 0 reads
+// the previous frame's counts, bit 1 stores this frame's, bit 2 reads sums
+// that the window wrote only at even coordinates. `tile` is the base sampling
+// tile edge, or zero for uniform base sampling.
 export const supplementNeedWGSL = /* wgsl */ `
-struct Params { size: vec2u, slot: u32, reflections: u32, base: u32, cap: u32, goal: f32, mirror: f32, radius: u32 }
+struct Params { size: vec2u, slot: u32, reflections: u32, base: u32, cap: u32, goal: f32, mirror: f32, radius: u32, hold: f32, flags: u32, tile: u32 }
 @group(0) @binding(0) var<uniform> p: Params;
 @group(0) @binding(1) var<storage, read> surfaceSum: array<vec4f>;
 @group(0) @binding(2) var<storage, read> reflectedSum: array<vec4f>;
@@ -17,11 +22,25 @@ struct Params { size: vec2u, slot: u32, reflections: u32, base: u32, cap: u32, g
 @group(0) @binding(4) var materials: texture_2d_array<u32>;
 @group(0) @binding(5) var<storage, read_write> list: array<atomic<u32>>;
 @group(0) @binding(6) var<storage, read_write> info: array<vec4f>;
+@group(0) @binding(7) var motions: texture_2d_array<f32>;
+@group(0) @binding(8) var<storage, read> previousNeed: array<u32>;
+@group(0) @binding(9) var<storage, read_write> nextNeed: array<u32>;
+@group(0) @binding(10) var<storage, read> sampleTiles: array<u32>;
 ${temporalMaterialWGSL}
-fn effective(sum: f32) -> f32 {
-  // The center has weight one. History weight on the unseen side is assumed
-  // to match the observed side.
-  return select(sum, 1. + max(sum - 1., 0.)*p.mirror, p.mirror > 0.);
+// Weight of the center tap in base-count units. Tiled base sampling weighs a
+// fully covered center by its tile count, as the window does.
+fn centerWeight(at: vec2i) -> f32 {
+  if (p.tile == 0u) { return 1.; }
+  let coverage = f32((u32(textureLoad(motions, at, i32(p.slot), 0).w) >> 2u) & 255u)/255.;
+  if (coverage < 1.) { return 1.; }
+  let grid = (p.size + p.tile - 1u)/p.tile;
+  let offset = p.slot*(grid.x*grid.y + 1u);
+  let tile = vec2u(at)/p.tile;
+  return f32(sampleTiles[offset + 1u + tile.y*grid.x + tile.x])/f32(max(sampleTiles[offset], 1u));
+}
+fn effective(sum: f32, center: f32) -> f32 {
+  // History weight on the unseen side is assumed to match the observed side.
+  return select(sum, center + max(sum - center, 0.)*p.mirror, p.mirror > 0.);
 }
 fn hit(at: vec2i) -> bool {
   return textureLoad(surfaces, at, i32(2u*p.slot), 0).w > .0001;
@@ -40,8 +59,9 @@ fn share(at: vec2i, index: u32) -> f32 {
 }
 fn support(at: vec2i) -> f32 {
   let index = u32(at.y)*p.size.x + u32(at.x);
-  let es = max(effective(surfaceSum[index].a), 1.);
-  let er = select(es, max(effective(reflectedSum[index].a), 1.), p.reflections != 0u);
+  let center = centerWeight(at);
+  let es = max(effective(surfaceSum[index].a, center), 1.);
+  let er = select(es, max(effective(reflectedSum[index].a, center), 1.), p.reflections != 0u);
   return 1./mix(1./es, 1./er, share(at, index));
 }
 @compute @workgroup_size(8,8) fn main(@builtin(global_invocation_id) g: vec3u) {
@@ -53,27 +73,54 @@ fn support(at: vec2i) -> f32 {
   // neighborhood keeps the extra samples from targeting only the pixels whose
   // base samples were outliers. The low bits of radius give the reach; bit 8
   // averages the support of nearby hit pixels, otherwise the weakest counts.
-  let r = i32(p.radius & 255u);
+  // Bits 16-19 give a feather F: beyond the reach, a pixel takes a neighbor's
+  // deficit scaled by 1 - d/(F + 1) at d more pixels, so counts fall off
+  // over F pixels instead of stopping at the selection's edge.
+  let sparse = (p.flags & 4u) != 0u;
+  // A sparse estimate reaches at least the nearest visited pixels.
+  let r = max(i32(p.radius & 255u), select(0, 1, sparse));
   let average = (p.radius & 256u) != 0u;
+  let feather = select(i32((p.radius >> 16u) & 15u), 0, average);
   var total = 0.;
   var weakest = 1e30;
   var count = 0.;
-  for (var dy = -r; dy <= r; dy++) {
-    for (var dx = -r; dx <= r; dx++) {
+  var fringe = 0.;
+  let reach = r + feather;
+  for (var dy = -reach; dy <= reach; dy++) {
+    for (var dx = -reach; dx <= reach; dx++) {
       let q = at + vec2i(dx, dy);
+      if (sparse && any((q & vec2i(1)) != vec2i(0))) { continue; }
       if (any(q < vec2i(0)) || any(q >= vec2i(p.size)) || !hit(q)) { continue; }
       let value = support(q);
+      let beyond = max(abs(dx), abs(dy)) - r;
+      if (beyond > 0) {
+        fringe = max(fringe, (p.goal - value)*(1. - f32(beyond)/f32(feather + 1)));
+        continue;
+      }
       total += value;
       weakest = min(weakest, value);
       count += 1.;
     }
   }
   let estimate = select(weakest, total/max(count, 1.), average);
-  let deficit = f32(p.base)*(p.goal - estimate);
+  let deficit = f32(p.base)*max(p.goal - estimate, fringe);
   var need = 0u;
   if (hit(at) && deficit > .5) { need = min(u32(round(deficit)), p.cap); }
-  let surface = surfaceSum[index].a;
-  info[index] = vec4f(surface, select(surface, reflectedSum[index].a, p.reflections != 0u), share(at, index), f32(need));
+  // Hold part of the previous frame's samples on the same surface, so a pixel
+  // near the selection threshold does not switch its noise level every frame.
+  if ((p.flags & 1u) != 0u && hit(at)) {
+    let motion = textureLoad(motions, at, i32(p.slot), 0);
+    let prior = vec2i(round(vec2f(at) + motion.xy));
+    if ((u32(motion.w) & 3u) == 3u && all(prior >= vec2i(0)) && all(prior < vec2i(p.size))) {
+      let held = u32(floor(p.hold*f32(previousNeed[u32(prior.y)*p.size.x + u32(prior.x)])));
+      need = max(need, min(held, p.cap));
+    }
+  }
+  if ((p.flags & 2u) != 0u) { nextNeed[index] = need; }
+  let visited = select(at, at & vec2i(~1), sparse);
+  let source = u32(visited.y)*p.size.x + u32(visited.x);
+  let surface = surfaceSum[source].a;
+  info[index] = vec4f(surface, select(surface, reflectedSum[source].a, p.reflections != 0u), share(visited, source), f32(need));
   if (need > 0u) {
     let k = atomicAdd(&list[0], 1u);
     atomicStore(&list[1u + k], g.x | (g.y << 12u) | (need << 24u));
