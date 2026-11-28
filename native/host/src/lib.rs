@@ -781,6 +781,33 @@ fn build_pipeline(
 /// accumulation outputs 10..13, the FRAME/OUTPUT groups binding them, and the
 /// pipeline of its pattern/bevel-sample variant when it differs from the scene's.
 const REFLECTED_RADIANCE_BINDING: u32 = 14;
+/// Experimental compact pixel list of a per-pixel supplement target.
+const PIXEL_LIST_BINDING: u32 = 16;
+/// Maps each workgroup to consecutive entries of the compact pixel list,
+/// leaving the image-sized dispatch and the per-pixel target test unchanged.
+fn compact_dispatch_shader(source: &str, workgroup: u32) -> Result<String> {
+    let anchor = "  let coord = globalId.xy * vec2u(scaleOffset.xy) + vec2u(scaleOffset.zw);";
+    let entry = source
+        .find(anchor)
+        .filter(|_| source.matches(anchor).count() == 1)
+        .and_then(|at| source[..at].rfind("\n@compute"));
+    let Some(entry) = entry else {
+        return Err("Shared shader changed; update compact dispatch anchors".into());
+    };
+    let lanes = workgroup * workgroup;
+    let lookup = format!(
+        "  let mtGroups = (u32(outputSize.x) + {workgroup}u - 1u) / {workgroup}u;\n  let mtEntry = ((globalId.y / {workgroup}u) * mtGroups + globalId.x / {workgroup}u) * {lanes}u + (globalId.y % {workgroup}u) * {workgroup}u + globalId.x % {workgroup}u;\n  if (mtEntry >= mtPixelList[0]) {{ return; }}\n  let mtPixel = mtPixelList[1u + mtEntry];\n  let coord = vec2u(mtPixel & 65535u, mtPixel >> 16u);"
+    );
+    let declaration = format!(
+        "\n@group({}) @binding({PIXEL_LIST_BINDING}) var<storage, read> mtPixelList: array<u32>;\n",
+        layout::group::OUTPUT
+    );
+    let mut patched = String::with_capacity(source.len() + 512);
+    patched.push_str(&source[..entry]);
+    patched.push_str(&declaration);
+    patched.push_str(&source[entry..]);
+    Ok(patched.replace(anchor, &lookup))
+}
 
 struct SampleTargets {
     texture: wgpu::Texture,
@@ -812,6 +839,9 @@ impl SampleTargets {
 
 struct Target {
     sample_targets: Option<SampleTargets>,
+    /// `[count, x | y << 16 ...]`, bottom row first, when the target dispatches
+    /// its threads over a compact list instead of the image.
+    pixel_list: Option<wgpu::Buffer>,
     reflected_radiance: Option<wgpu::Buffer>,
     query_guard: Option<query_guard::Guard>,
     workgroup_size: u32,
@@ -1322,6 +1352,7 @@ impl GpuScene {
                 .collect();
             Some(Target {
                 sample_targets: None,
+                pixel_list: None,
                 query_guard: query_guard.clone(),
                 workgroup_size: 8,
                 caustic_sequence_offset: 0,
@@ -1498,9 +1529,20 @@ impl GpuScene {
         size: [u32; 2],
         previous: Option<Target>,
     ) -> Result<Target> {
+        self.target_with_list(packet, size, previous, false)
+    }
+    /// With `pixel_list`, threads trace the entries of a compact list that
+    /// [`Self::set_sample_tiles`] fills from per-pixel targets.
+    fn target_with_list(
+        &self,
+        packet: scene::TargetPacket,
+        size: [u32; 2],
+        previous: Option<Target>,
+        pixel_list: bool,
+    ) -> Result<Target> {
         with_error_scopes(
             &self.gpu.device,
-            || self.build_target(packet, size, previous),
+            || self.build_target(packet, size, previous, pixel_list),
             |error| error.to_string().into(),
         )
     }
@@ -1509,6 +1551,7 @@ impl GpuScene {
         packet: scene::TargetPacket,
         size: [u32; 2],
         previous: Option<Target>,
+        compact: bool,
     ) -> Result<Target> {
         use layout::resource as res;
         crate::image_limits::validate_target(size, &self.gpu.device.limits())?;
@@ -1537,6 +1580,23 @@ impl GpuScene {
                     false,
                 ));
         }
+        if compact {
+            if packet.shader.is_none() || caustic_packet.is_some() {
+                return Err("Compact pixel dispatch needs a target shader without caustics".into());
+            }
+            target_scene.bind_groups[layout::group::OUTPUT].layout.push(
+                wgpu::BindGroupLayoutEntry {
+                    binding: PIXEL_LIST_BINDING,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            );
+        }
         if packet.capture_reflections {
             target_scene.bind_groups[layout::group::OUTPUT].layout.push(
                 wgpu::BindGroupLayoutEntry {
@@ -1558,6 +1618,8 @@ impl GpuScene {
                     &target_scene,
                     if caustic_guard.is_some() {
                         query_guard::instrument_caustic(&source, false)?
+                    } else if compact {
+                        compact_dispatch_shader(&source, workgroup_size)?
                     } else {
                         source
                     },
@@ -1660,6 +1722,14 @@ impl GpuScene {
                 .finish()
                 .verify_stage(&self.gpu, "caustic target initialization")?;
         }
+        let pixel_list = compact.then(|| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Compact pixel list"),
+                size: (pixels + 1) * 4,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        });
         let reflected_radiance = packet.capture_reflections.then(|| {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Reflected radiance accumulation"),
@@ -1682,6 +1752,12 @@ impl GpuScene {
                 if let Some(buffer) = &reflected_radiance {
                     entries.push(wgpu::BindGroupEntry {
                         binding: REFLECTED_RADIANCE_BINDING,
+                        resource: buffer.as_entire_binding(),
+                    });
+                }
+                if let Some(buffer) = &pixel_list {
+                    entries.push(wgpu::BindGroupEntry {
+                        binding: PIXEL_LIST_BINDING,
                         resource: buffer.as_entire_binding(),
                     });
                 }
@@ -1740,6 +1816,7 @@ impl GpuScene {
         );
         Ok(Target {
             sample_targets: None,
+            pixel_list,
             reflected_radiance,
             query_guard,
             workgroup_size,
@@ -1762,7 +1839,7 @@ impl GpuScene {
             .then(|| DispatchAudit::new(device)),
         })
     }
-    fn set_sample_tiles(&self, target: &mut Target, tiles: &[u32]) -> Result<()> {
+    fn set_sample_tiles(&self, target: &mut Target, tiles: &[u32], tile: u32) -> Result<()> {
         use layout::{group::TEXTURES, ray_uniform::ADAPTIVE_SAMPLING, resource};
         with_error_scopes(
             &self.gpu.device,
@@ -1782,13 +1859,32 @@ impl GpuScene {
                     view_formats: &[],
                 });
                 let group = self.texture_group(TEXTURES, Some((resource::DISPLACEMENT, &texture)));
-                let columns = target.width.div_ceil(4) as usize;
+                let tile = tile.max(1) as usize;
+                let columns = (target.width as usize).div_ceil(tile);
                 let mut pixels = Vec::with_capacity((target.width * target.height) as usize);
                 for y in (0..target.height).rev() {
-                    let row = y as usize / 4 * columns;
+                    let row = y as usize / tile * columns;
                     for x in 0..target.width {
-                        pixels.push(tiles[row + x as usize / 4] as f32);
+                        pixels.push(tiles[row + x as usize / tile] as f32);
                     }
+                }
+                if let Some(list) = &target.pixel_list {
+                    // Order by descending target, so each pass's remaining
+                    // pixels form a prefix and fill whole SIMD groups.
+                    let mut entries = pixels
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, n)| **n > 0.)
+                        .map(|(i, n)| {
+                            let (x, y) = (i as u32 % target.width, i as u32 / target.width);
+                            (std::cmp::Reverse(*n as u32), x | y << 16)
+                        })
+                        .collect::<Vec<_>>();
+                    entries.sort_unstable();
+                    let mut words = Vec::with_capacity(entries.len() + 1);
+                    words.push(entries.len() as u32);
+                    words.extend(entries.into_iter().map(|(_, packed)| packed));
+                    self.gpu.queue.write_buffer(list, 0, bytemuck::cast_slice(&words));
                 }
                 let targets = SampleTargets {
                     texture,

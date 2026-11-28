@@ -532,6 +532,12 @@ impl Checkpoint {
                 resource: buffer.as_entire_binding(),
             });
         }
+        if let Some(buffer) = &target.pixel_list {
+            entries.push(wgpu::BindGroupEntry {
+                binding: PIXEL_LIST_BINDING,
+                resource: buffer.as_entire_binding(),
+            });
+        }
         entries.extend(resources.entries(&flag));
         let pipeline = target.pipeline.as_ref().unwrap_or(&scene.pipeline);
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {

@@ -388,7 +388,9 @@ fn retire_targets(registry: &mut Registry, owner: u64) -> Result<()> {
 }
 #[derive(Default)]
 pub(crate) struct OfflineTarget<'a> {
-    pub(crate) sample_tiles: Option<&'a [u32]>,
+    /// Per-tile sample targets and the tile edge in pixels (4, or 1 for per-pixel targets).
+    pub(crate) sample_tiles: Option<(&'a [u32], u32)>,
+    pub(crate) pixel_list: bool,
     pub(crate) center_material: bool,
 }
 /// Links context `handle` to the scene of context `owner` as a render target
@@ -469,9 +471,9 @@ pub(crate) fn set_target(
         let previous = current.target.take();
         current.job = None;
         current.failed = true;
-        let mut target = scene.target(packet, size, previous)?;
-        if let Some(tiles) = offline.sample_tiles {
-            scene.set_sample_tiles(&mut target, tiles)?;
+        let mut target = scene.target_with_list(packet, size, previous, offline.pixel_list)?;
+        if let Some((tiles, tile)) = offline.sample_tiles {
+            scene.set_sample_tiles(&mut target, tiles, tile)?;
         }
         current.target = Some(target);
         current.link = Some(Link {

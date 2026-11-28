@@ -605,6 +605,10 @@ pub struct ConvergeResult {
 pub(super) struct OfflineSampleTiles {
     pub base: u32,
     pub counts: Arc<[u32]>,
+    /// Tile edge in pixels: 4 for the geometry plan, 1 for per-pixel targets.
+    pub tile: u32,
+    /// Dispatch threads over a compact list of the pixels with nonzero targets.
+    pub compact: bool,
 }
 
 /// What a render's L0 context must hold to be current.
@@ -1489,7 +1493,11 @@ fn target_step(
         &camera,
         key.capture_reflections,
         context::OfflineTarget {
-            sample_tiles: key.sample_tiles.as_ref().map(|plan| plan.counts.as_ref()),
+            sample_tiles: key
+                .sample_tiles
+                .as_ref()
+                .map(|plan| (plan.counts.as_ref(), plan.tile)),
+            pixel_list: key.sample_tiles.as_ref().is_some_and(|plan| plan.compact),
             center_material: key.center_material,
         },
     ));
@@ -3002,6 +3010,31 @@ impl Render {
         let plan = OfflineSampleTiles {
             base: options.samples,
             counts: tiles.into(),
+            tile: 4,
+            compact: false,
+        };
+        options.samples = plan.counts.iter().copied().max().unwrap_or(0);
+        self.converge_inner(options, Some(plan))
+    }
+
+    /// Experimental per-pixel sample targets, top row first. `base` is the
+    /// count a temporal window treats as one vote. Targets may be zero, so a
+    /// separate render can trace only the listed pixels of a supplement.
+    /// `compact` dispatches threads over a list of those pixels instead of the
+    /// image, so sparse targets fill whole SIMD groups.
+    #[doc(hidden)]
+    pub fn experimental_converge_pixels(
+        &self,
+        mut options: ConvergeOptions,
+        base: u32,
+        targets: Vec<u32>,
+        compact: bool,
+    ) -> Result<ConvergeResult> {
+        let plan = OfflineSampleTiles {
+            base,
+            counts: targets.into(),
+            tile: 1,
+            compact,
         };
         options.samples = plan.counts.iter().copied().max().unwrap_or(0);
         self.converge_inner(options, Some(plan))
@@ -3043,10 +3076,18 @@ impl Render {
             })?;
             let render = state.renders.get_mut(&id).unwrap();
             if let Some(plan) = &sample_tiles {
-                let [columns, rows] = key.size.map(|edge| edge.div_ceil(4));
+                let [columns, rows] = key.size.map(|edge| edge.div_ceil(plan.tile));
+                // Per-pixel targets are an experimental supplement and allow
+                // zero, up to 64 samples. Tiles keep the geometry plan range.
+                let range = if plan.tile == 1 {
+                    0..=64
+                } else {
+                    plan.base..=plan.base.max(8)
+                };
                 if plan.base == 0
+                    || !matches!(plan.tile, 1 | 4)
                     || plan.counts.len() != (columns * rows) as usize
-                    || plan.counts.iter().any(|n| !(plan.base..=plan.base.max(8)).contains(n))
+                    || plan.counts.iter().any(|n| !range.contains(n))
                     || render.denoise.options.is_some()
                     || render.settings.caustics != CausticSettings::default()
                 {
@@ -3420,6 +3461,36 @@ impl Render {
         })
     }
 
+    /// Raw color, albedo and normal sums of a converged supplement render and,
+    /// when it captures reflections, the reflected radiance sum. Bottom row first.
+    pub(super) fn offline_supplement(
+        &self,
+        engine: &Engine,
+    ) -> crate::Result<([wgpu::Buffer; 3], Option<wgpu::Buffer>, [u32; 2])> {
+        if !Arc::ptr_eq(&engine.inner, &self.engine.inner) {
+            return Err("Supplemental samples need a render on the temporal engine".into());
+        }
+        Ok(self.with(|state, id| {
+            let r = state.renders.get_mut(&id).unwrap();
+            if state.device_failed
+                || r.busy
+                || r.error
+                || !r.current(state.scene_revision, state.camera_revision)
+            {
+                return Err(error(
+                    Status::InvalidState,
+                    "Supplemental samples require a finished render of the current scene",
+                ));
+            }
+            let (raw, size, _) = context_result(context::denoise_buffers(r.context))?;
+            let radiance = if r.settings.capture_reflections {
+                Some(context_result(context::reflected_radiance(r.context))?)
+            } else {
+                None
+            };
+            Ok((raw, radiance, size))
+        })?)
+    }
     pub(super) fn offline_capture(
         &self,
         engine: &Engine,
