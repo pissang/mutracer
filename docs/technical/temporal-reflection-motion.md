@@ -104,24 +104,28 @@ falls from full weight at 0.10 pixels of estimated residual to zero at
 propagates confidence through the chain and checks it at the radiance tap.
 Endpoint identity and all visibility checks still apply.
 
-Nearest-texel sampling contributes a half-pixel rounding allowance to the
-residual used for sample-count adaptation. The allowance and optical residual
-are compared with the projected lobe width. As the pixel sample count rises
-above three, the expected reduction in current-frame noise decreases with
-the inverse square root of the sample count. The filter reduces confidence
-in the curvature candidate and can return to the tangent-plane candidate
-when the estimated alignment cost dominates. This comparison approximates
-sampling noise using the sample count already stored with the render.
+Nearest-texel sampling adds up to half a pixel of rounding to each tap. On a
+sharp, nearly noise-free reflection this blur can outweigh the noise that
+history removes once the pixel has many samples. The filter compares the
+half-pixel allowance plus the optical residual with the projected lobe
+width, capped at one. Above three samples, it divides the curvature
+candidate's confidence by `sqrt(spp/3)` times that ratio whenever the
+product exceeds one. The candidate itself is kept: the tangent-plane
+candidate fails on a curved mirror, so returning to it would remove the
+reflected history entirely.
 
-On a smooth curved metal the lobe width is about half a pixel, so the cost
-reaches one near 12 spp even without optical residual. Every tap then
-returns to the tangent-plane candidate, which a curved mirror rejects, and
-the reflected history collapses to the current frame. Error at 12 spp can
-exceed error at 9 spp, and confidence is already reduced at 9 spp. Pinning
-the cost's sample count to three restores error that falls with the sample
-count on such surfaces. For comparisons between runs whose per-pixel counts
-differ, the native capture reads `MUTRACER_ALIGNMENT_SAMPLES` to pin that
-count; the default uses the actual count.
+A virtual tap's weight is the product of the landing confidence and the
+pixel's own confidence, so it falls with the square of this factor, that is
+with `1/spp`. The history's contribution in effective samples therefore
+stays constant as the sample count grows, and the total keeps increasing.
+At three samples or fewer the confidence is unchanged. The rounding
+allowance is the same for every history tap, including the surface window,
+and the cost does not measure the noise of the reflected signal. A smooth
+mirror that reflects a sharp emitter keeps more history at high sample
+counts than its low noise warrants, and a noisy glossy reflection keeps
+less. For comparisons between runs whose per-pixel counts differ, the
+native capture reads `MUTRACER_ALIGNMENT_SAMPLES` to pin the count used in
+the cost; the default uses the actual count.
 
 ## Allocation and diagnosis
 
