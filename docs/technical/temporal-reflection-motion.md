@@ -113,6 +113,16 @@ in the curvature candidate and can return to the tangent-plane candidate
 when the estimated alignment cost dominates. This comparison approximates
 sampling noise using the sample count already stored with the render.
 
+On a smooth curved metal the lobe width is about half a pixel, so the cost
+reaches one near 12 spp even without optical residual. Every tap then
+returns to the tangent-plane candidate, which a curved mirror rejects, and
+the reflected history collapses to the current frame. Error at 12 spp can
+exceed error at 9 spp, and confidence is already reduced at 9 spp. Pinning
+the cost's sample count to three restores error that falls with the sample
+count on such surfaces. For comparisons between runs whose per-pixel counts
+differ, the native capture reads `MUTRACER_ALIGNMENT_SAMPLES` to pin that
+count; the default uses the actual count.
+
 ## Allocation and diagnosis
 
 Each extra history slot uses 24 bytes per pixel. Reflected RGB is stored in

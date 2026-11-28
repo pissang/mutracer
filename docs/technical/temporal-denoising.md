@@ -100,9 +100,9 @@ The native capture can instead select pixels after each frame's base pass.
 1. **Select from the past half.** After frame `t` is pushed, and while the
    scene is still at `t`, the window runs its center and past taps
    `t−R … t−1` with the usual rejection tests. Let `S` be a pixel's surface
-   or reflected weight sum, with the center counted as one. Assuming the
-   future half matches the past, the whole window reaches
-   `E = 1 + m (S − 1)`. With all `R` past frames available, `m = 2`. With
+   or reflected weight sum and `c` the center's weight, one with uniform base
+   sampling. Assuming the future half matches the past, the whole window
+   reaches `E = c + m (S − c)`. With all `R` past frames available, `m = 2`. With
    `k < R` past frames, `m = 1 + M(R) / M(k)`, where `M(k)` is the tent mass
    of `k` past taps at the in-focus radius. A frame without past history in
    its epoch, such as the first frame after a cut, requests nothing and
@@ -147,6 +147,24 @@ The native capture can instead select pixels after each frame's base pass.
    the same count rule as `Σ(aⱼ nⱼ X̄ⱼ) / Σ(aⱼ nⱼ)`. History taps keep their
    base counts.
 
+**Geometry-planned base tiles.** The supplement can follow the geometry
+predictor. Its 4×4 tile counts are the frame's base samples: the window weighs
+each tap by its tile count relative to the base count, and neighbors reuse
+them as history. The estimate takes the center's tile weight as `c`, so the
+deficit is still measured in base-count frames and counts the tile samples.
+The geometry floor is in samples times frames, so a floor of `F` covers
+`F / n_b` of the goal where its prediction holds. With `F / n_b` below `G`,
+the plan gives predictable shortfalls their samples first, and the
+supplement requests only what remains, including pixels whose history the
+pilot does not foresee. The supplement's sequence starts after the largest
+tile count, so the stride must cover `8 + cap`. On smooth curved metals the
+combination lowers error clearly below window selection alone at the same
+total samples, since the plan's samples also serve as history. Where the
+pilot predicts adequate history, as on glossy dielectrics, the plan adds
+little and quality follows window selection alone at that total. The pilot
+adds its own per-frame cost, and the tile samples carry the count-weighting
+risk below; trails stayed at the level of window selection alone.
+
 When frame `t` is history for its neighbors, they read its base samples at
 its base count. Its supplement never raises `nⱼ` on a tap that a neighbor
 may mismatch. The selection is fixed before the supplement exists, so extra
@@ -155,9 +173,21 @@ display-space stabilization after the spatial filter still sees each frame's
 own supplemented output.
 
 The cost per frame is the past half-window, a short readback of the list,
-the supplemental trace and a sparse blend. The trace dominates. The past
-half-window costs less than half of a complete window. The list and the blend are
-small. With supplements disabled, captures run the unchanged kernels.
+the supplemental trace and a sparse blend. The trace dominates. Per extra
+sample it costs about as much as the base pass, plus a fixed cost that grows
+with the number of one-sample passes, that is, with the largest per-pixel
+count. The past half-window costs less than half of a
+complete window. The list and the blend are small. With supplements disabled,
+captures run the unchanged kernels.
+
+The past half can also run on every second pixel in each direction. The
+deficit then takes the weakest visited pixel within the radius, which is at
+least one pixel. This roughly halves the estimate's cost and selects fewer
+pixels: the weakest visited pixel is never weaker than the weakest pixel, so
+it never adds a pixel the full estimate skips, and a narrow region can fall
+between the visited pixels. At the same total samples it matches the full
+estimate on smooth metals and loses on glossy dielectrics. It is an
+experimental option.
 
 The past half cannot see history that only the future half provides, such
 as surfaces that the camera reveals. It therefore requests more samples
@@ -236,17 +266,32 @@ removed, so each entry records enough to rebuild it.
 - **Neighborhood mean.** The deficit uses the mean `E` of hit pixels within
   `r = 2` or `4`. The bias disappears, but narrow virtual images fall below
   the goal and lose most of their samples.
+- **Held selection.** Each surface keeps `floor(h · n)` of the `n` extra
+  samples the previous frame gave it, found through the frame's motion, so
+  counts decay over a few frames instead of switching off. With `h = 0.5` or
+  `0.75` the artifact scan found as many flicker groups as without the hold,
+  and the trace grew with the held samples. The option remains.
+- **Feathered selection.** Beyond the radius, a pixel takes a neighbor's
+  deficit scaled by `1 − d / (F + 1)` at `d` more pixels, so counts fall off
+  over `F` pixels. With `F = 2` the flicker groups did not decrease and the
+  trace grew. The option remains.
 - **Supplements as history.** The same selection is rendered into the frame's
   own accumulation. Neighbors reuse the frame at its actual per-pixel count,
   with one-pixel sample tiles, and its center also counts at the actual
   count. Mask error was close to the center-only supplement. The artifact
   scan found more trail groups with higher severity, and frame-to-frame
   error rose on pixels with strong history. This confirms the count-weighting
-  risk above.
+  risk above. The supplemented pixels also reach higher per-pixel counts, which
+  raise the [curved-reflection alignment cost](temporal-reflection-motion.md);
+  pinning that cost to the base count left the extra trails unchanged.
 
-The center-only supplement adds some flicker groups in the artifact scan.
-Its selection changes from frame to frame, so a pixel's noise level can
-change between consecutive frames.
+The center-only supplement adds small flicker groups in the artifact scan,
+while the flickering area falls. Frame-to-frame error against a converged
+reference falls on every pixel class, whether its selection changed, stayed
+or never applied. Holding counts along the motion field or feathering them
+around the selection leaves the added groups unchanged. They come from
+regions that the supplement only partly cleans, which the scan then splits
+into several smaller groups.
 
 More samples lower the ghosting scores mostly through the sampled radiance
 itself, not through stricter rejection decisions.
