@@ -462,7 +462,7 @@ async function captureShot(worker, shot, replayShot, opts, values, directory, de
     const savePlan = !!saveGeometry || !!process.env.MUTRACER_SAVE_SAMPLE_PLAN;
     const supports = [];
     planning = await planSampling(worker, shot, settings, fps, begin, end, opts.sampleBudget, opts.sampleFloor, saveGeometry,
-      savePlan && ((index, support) => supports.push([index, Buffer.from(support.slice().buffer)])));
+      savePlan ? (index, support) => supports.push([index, Buffer.from(support.slice().buffer)]) : undefined);
     for (const [index, bytes] of supports) {
       await atomic(prefix(index) + '.support.f32', bytes);
       await atomic(prefix(index) + '.samples.u32', Buffer.from(planning.plans[index - begin].targets.buffer));
