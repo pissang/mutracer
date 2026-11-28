@@ -91,6 +91,88 @@ uses its requested count everywhere. Tune supplemental sampling and
 offline temporal quality on native before synchronizing stable results to
 WebGPU.
 
+### Center-only supplemental samples
+
+The native capture can instead select pixels after each frame's base pass.
+[The selection kernels](../../native/src/offline-supplement.ts) and
+[the native window](../../native/host/src/api/offline/mod.rs) implement it.
+
+1. **Select from the past half.** After frame `t` is pushed, and while the
+   scene is still at `t`, the window runs its center and past taps
+   `t−R … t−1` with the usual rejection tests. Let `S` be a pixel's surface
+   or reflected weight sum, with the center counted as one. Assuming the
+   future half matches the past, the whole window reaches
+   `E = 1 + m (S − 1)`. With all `R` past frames available, `m = 2`. With
+   `k < R` past frames, `m = 1 + M(R) / M(k)`, where `M(k)` is the tent mass
+   of `k` past taps at the in-focus radius. A frame without past history in
+   its epoch, such as the first frame after a cut, requests nothing and
+   relies on its future half. The surface and reflected estimates are
+   combined harmonically, weighted by the share of windowed luminance that
+   the reflected signal carries. On smooth metals the reflected estimate
+   therefore dominates.
+2. **Count the deficit over a neighborhood.** Let `E_min` be the smallest
+   `E` among hit pixels within radius `r` (default 2). With base count `n_b`
+   and a goal of `G` base-count frames, the pixel receives
+   `n_s = min(cap, round(n_b (G − E_min)))` extra samples when
+   `n_b (G − E_min)` exceeds one half. Pixels without a center hit receive
+   none. The GPU appends the selected pixels to a compact list.
+
+   Some rejection decisions depend on the pixel's own base samples. On a
+   glossy dielectric, a sampled reflection endpoint decides whether virtual
+   taps match. The pixels that lose history are then those with outlying
+   base samples, and the neighbors that keep history are biased the other
+   way. Without supplements the two biases cancel under the spatial filter.
+   Resampling only the selected pixels removes one side and shifts the
+   filtered result. Taking the weakest support in the neighborhood also
+   resamples the neighbors and keeps the local mean. Thin structures whose
+   rejection is geometric, such as a mirror's virtual image, keep their
+   selection. Averaging the support over the neighborhood instead also
+   removes the bias, but it dilutes narrow regions below the goal.
+3. **Trace separately.** A second render on the same engine traces the list
+   with per-pixel targets. Its sample indices continue the frame's sequence
+   after the base samples, so they never repeat a base sample. The sequence
+   stride must cover `n_b + cap`. Its threads walk the list in order of
+   descending target. Each pass's remaining pixels are then a prefix of the
+   list and fill whole SIMD groups. The image-sized dispatch traces the same
+   samples. It leaves most lanes idle when the selected pixels are
+   scattered. The neighborhood selection keeps regions compact enough that
+   both dispatches perform about equally.
+4. **Blend into the center only.** When frame `t`'s window runs, `R` frames
+   later, the rejection tests and history weights are computed exactly as
+   without the supplement. Before normalization the supplement adds
+   `(n_s / n_b) X̄_s` with weight `n_s / n_b` to the surface sum and, with
+   reflection motion, to the reflected sum. `X̄_s` is the supplement's mean,
+   split into surface and reflected parts like the center. The center then
+   carries the mean of all `n_b + n_s` samples at weight `(n_b + n_s) / n_b`,
+   the same count rule as `Σ(aⱼ nⱼ X̄ⱼ) / Σ(aⱼ nⱼ)`. History taps keep their
+   base counts.
+
+When frame `t` is history for its neighbors, they read its base samples at
+its base count. Its supplement never raises `nⱼ` on a tap that a neighbor
+may mismatch. The selection is fixed before the supplement exists, so extra
+samples cannot change the rejection decisions that requested them. The
+display-space stabilization after the spatial filter still sees each frame's
+own supplemented output.
+
+The cost per frame is the past half-window, a short readback of the list,
+the supplemental trace and a sparse blend. The trace dominates. The past
+half-window costs less than half of a complete window. The list and the blend are
+small. With supplements disabled, captures run the unchanged kernels.
+
+The past half cannot see history that only the future half provides, such
+as surfaces that the camera reveals. It therefore requests more samples
+than the complete window would. Selecting from the complete window instead
+needs the scene at `t` again after `t + R` is pushed. That means preparing
+the scene twice more per frame and rebuilding animated acceleration
+structures. The native capture can replay complete-window selections in a
+second pass for comparison. Quality is close at a lower sample count, but
+the two-pass or rollback cost has not been justified.
+
+Uniform sampling with the same per-pixel count in the selected regions
+matches the supplement's quality there. The gain comes from the extra
+samples themselves. The selection only decides where they are spent. The
+mode remains an experimental capture option.
+
 ### Status and rejected allocators
 
 Development is paused with the geometry predictor, a 4×4 pilot and 4×4
@@ -146,6 +228,25 @@ removed, so each entry records enough to rebuild it.
   gap. A sampled frame is also history for its neighbors, so its extra samples
   raise `nⱼ` on taps that may be mismatched there. Revisit the count weighting
   before an allocator targets pixels that neighboring frames reuse as history.
+- **Own-pixel selection.** The center-only supplement with `r = 0`: each
+  pixel compares its own extrapolated support `E` with the goal. Frame-to-frame
+  error fell, but on glossy dielectrics the filtered result darkened. The
+  supplemented pixels became unbiased while their neighbors kept the
+  opposite selection bias.
+- **Neighborhood mean.** The deficit uses the mean `E` of hit pixels within
+  `r = 2` or `4`. The bias disappears, but narrow virtual images fall below
+  the goal and lose most of their samples.
+- **Supplements as history.** The same selection is rendered into the frame's
+  own accumulation. Neighbors reuse the frame at its actual per-pixel count,
+  with one-pixel sample tiles, and its center also counts at the actual
+  count. Mask error was close to the center-only supplement. The artifact
+  scan found more trail groups with higher severity, and frame-to-frame
+  error rose on pixels with strong history. This confirms the count-weighting
+  risk above.
+
+The center-only supplement adds some flicker groups in the artifact scan.
+Its selection changes from frame to frame, so a pixel's noise level can
+change between consecutive frames.
 
 More samples lower the ghosting scores mostly through the sampled radiance
 itself, not through stricter rejection decisions.
