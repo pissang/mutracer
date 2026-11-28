@@ -1,7 +1,7 @@
 // The native trace outputs are bottom-first. Store the reflection data on the
 // same top-first capture grid as the A2 window and its motion field.
 export const createCaptureReflectionsWGSL = (planarExperiment = false) => /* wgsl */ `
-${planarExperiment ? 'override EXPERIMENTAL_PLANAR_REFLECTIONS: bool = false;\n' : ''}struct Params { size: vec2u, slot: u32, samples: u32 }
+${planarExperiment ? 'override EXPERIMENTAL_PLANAR_REFLECTIONS: bool = false;\n// Diagnostic: a positive value replaces the sample count of the alignment cost.\noverride EXPERIMENTAL_ALIGNMENT_SAMPLES: f32 = 0.;\n' : ''}struct Params { size: vec2u, slot: u32, samples: u32 }
 struct Record { endpoint: vec4u, motion: vec4f }
 @group(0) @binding(0) var<uniform> p: Params;
 @group(0) @binding(1) var<storage, read> radianceSum: array<vec4f>;
@@ -97,7 +97,7 @@ ${planarExperiment ? '  if (EXPERIMENTAL_PLANAR_REFLECTIONS) { return vec3f(plan
   // sample noise falls with 1/sqrt(spp). Keep the tangent-plane validation
   // when the added alignment error outweighs the expected noise reduction.
   let lobeWidth = .5 + camera.lens.x*lobes.x*lobes.x/max(denominator.x,denominator.y);
-  let samplePrecision = sqrt(max(1.,samples/3.))-1.;
+  let samplePrecision = sqrt(max(1.,${planarExperiment ? 'select(samples,EXPERIMENTAL_ALIGNMENT_SAMPLES,EXPERIMENTAL_ALIGNMENT_SAMPLES>0.)' : 'samples'}/3.))-1.;
   let alignmentCost = samplePrecision*(.5+residual)/lobeWidth;
   if (alignmentCost >= 1.) { return vec3f(planar,1.); }
   let trust = (1.-smoothstep(.10,.45,residual))*smoothstep(.25,.48,cosine)*

@@ -253,18 +253,28 @@ impl Passes {
             // Several shared post kernels keep optional statistics bindings even when
             // the entry point does not read them. Match the explicit browser layouts.
             let explicit = post_layout(device, name);
-            let constants: &[(&str, f64)] = if planar_reflections && name == "captureReflections" {
-                &[("EXPERIMENTAL_PLANAR_REFLECTIONS", 1.0)]
-            } else {
-                &[]
-            };
+            let mut constants = Vec::new();
+            if name == "captureReflections" {
+                if planar_reflections {
+                    constants.push(("EXPERIMENTAL_PLANAR_REFLECTIONS", 1.0));
+                }
+                // Diagnostic: fix the sample count of the curved-reflection
+                // alignment cost, for comparisons across sample counts.
+                if let Some(samples) = std::env::var("MUTRACER_ALIGNMENT_SAMPLES")
+                    .ok()
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .filter(|v| *v > 0.)
+                {
+                    constants.push(("EXPERIMENTAL_ALIGNMENT_SAMPLES", samples));
+                }
+            }
             let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some(name),
                 layout: explicit.as_ref(),
                 module: &module,
                 entry_point: Some("main"),
                 compilation_options: wgpu::PipelineCompilationOptions {
-                    constants,
+                    constants: &constants,
                     ..Default::default()
                 },
                 cache: None,
